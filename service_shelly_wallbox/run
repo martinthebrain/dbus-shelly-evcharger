@@ -1,0 +1,13 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# runit entrypoint for the wallbox Python service.
+# runit restarts this command automatically if it exits unexpectedly.
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" >/dev/null 2>&1 && pwd)
+SCRIPT_DIR=$(realpath "$SCRIPT_DIR/..")
+exec 2>&1
+
+# Always resolve the script path relative to the deployed service directory so
+# symlinked /service setups behave the same as direct launches.
+python3 "$(realpath "$SCRIPT_DIR/dbus_shelly_wallbox.py")"

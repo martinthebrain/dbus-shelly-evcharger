@@ -1,0 +1,18 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Dedicated runit logger for the wallbox service.
+# Logs are written to tmpfs on Venus OS so they survive service restarts but do
+# not wear flash storage indefinitely.
+
+exec 2>&1
+LOG_DIR=/var/volatile/log/dbus-shelly-wallbox
+
+# Keep the log directory available even on fresh boots.
+mkdir -p "$LOG_DIR"
+
+# multilog settings:
+# - timestamp each line
+# - keep log files reasonably small
+# - rotate and keep a small history
+exec multilog t s153600 n2 "$LOG_DIR"
