@@ -1,0 +1,192 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+from collections import deque
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+from dbus_shelly_wallbox_auto_policy import AutoPolicy, AutoStopEwmaPolicy, AutoThresholdProfile
+
+
+def make_auto_metrics(**overrides):
+    metrics = {
+        "surplus": 850.0,
+        "grid": -900.0,
+        "soc": 55.0,
+        "profile": "normal",
+        "start_threshold": 1850.0,
+        "stop_threshold": 1350.0,
+    }
+    metrics.update(overrides)
+    return metrics
+
+
+def make_auto_policy(**overrides):
+    policy = AutoPolicy(
+        normal_profile=AutoThresholdProfile(1850.0, 1350.0),
+        high_soc_profile=AutoThresholdProfile(1650.0, 800.0),
+        high_soc_threshold=50.0,
+        high_soc_release_threshold=45.0,
+        min_soc=40.0,
+        resume_soc=50.0,
+        start_max_grid_import_watts=50.0,
+        stop_grid_import_watts=300.0,
+        grid_recovery_start_seconds=10.0,
+        stop_surplus_delay_seconds=90.0,
+        ewma=AutoStopEwmaPolicy(
+            base_alpha=0.25,
+            stable_alpha=0.55,
+            volatile_alpha=0.15,
+            volatility_low_watts=150.0,
+            volatility_high_watts=400.0,
+        ),
+    )
+    for name, value in overrides.items():
+        setattr(policy, name, value)
+    return policy
+
+
+def make_auto_controller_service(**overrides):
+    data = {
+        "auto_samples": deque(),
+        "auto_average_window_seconds": 30.0,
+        "relay_last_changed_at": None,
+        "relay_last_off_at": None,
+        "auto_min_runtime_seconds": 300.0,
+        "auto_min_offtime_seconds": 120.0,
+        "auto_allow_without_battery_soc": False,
+        "auto_battery_scan_interval_seconds": 60.0,
+        "auto_grid_recovery_start_seconds": 10.0,
+        "auto_resume_soc": 50.0,
+        "auto_min_soc": 40.0,
+        "auto_high_soc_threshold": 50.0,
+        "auto_high_soc_release_threshold": 45.0,
+        "auto_high_soc_start_surplus_watts": 1650.0,
+        "auto_high_soc_stop_surplus_watts": 800.0,
+        "auto_night_lock_stop": False,
+        "auto_stop_grid_import_watts": 300.0,
+        "auto_stop_delay_seconds": 30.0,
+        "auto_stop_surplus_delay_seconds": 90.0,
+        "auto_stop_ewma_alpha": 0.25,
+        "auto_stop_ewma_alpha_stable": 0.55,
+        "auto_stop_ewma_alpha_volatile": 0.15,
+        "auto_stop_surplus_volatility_low_watts": 150.0,
+        "auto_stop_surplus_volatility_high_watts": 400.0,
+        "auto_start_delay_seconds": 10.0,
+        "auto_start_surplus_watts": 2000.0,
+        "auto_stop_surplus_watts": 1600.0,
+        "auto_start_max_grid_import_watts": 50.0,
+        "virtual_autostart": 1,
+        "virtual_enable": 1,
+        "virtual_mode": 1,
+        "started_at": 0.0,
+        "auto_startup_warmup_seconds": 0.0,
+        "manual_override_until": 0.0,
+        "auto_daytime_only": False,
+        "auto_month_windows": {},
+        "_last_auto_metrics": {},
+        "_last_health_reason": "init",
+        "_last_health_code": 0,
+        "_last_battery_allow_warning": None,
+        "_grid_recovery_required": False,
+        "_grid_recovery_since": None,
+        "_auto_high_soc_profile_active": None,
+        "_stop_smoothed_surplus_power": None,
+        "_stop_smoothed_grid_power": None,
+        "_auto_mode_cutover_pending": False,
+        "_ignore_min_offtime_once": False,
+        "auto_start_condition_since": None,
+        "auto_stop_condition_since": None,
+        "auto_stop_condition_reason": None,
+        "auto_audit_log": False,
+        "_write_auto_audit_event": MagicMock(),
+        "_save_runtime_state": MagicMock(),
+        "_peek_pending_relay_command": MagicMock(return_value=(None, None)),
+    }
+    data.update(overrides)
+    return SimpleNamespace(**data)
+
+
+def make_runtime_support_service(**overrides):
+    data = {
+        "poll_interval_ms": 1000,
+        "deviceinstance": 60,
+        "_time_now": lambda: 1000.0,
+        "_state_summary": lambda: "state",
+        "_reset_system_bus": MagicMock(),
+        "_invalidate_auto_pv_services": MagicMock(),
+        "_invalidate_auto_battery_service": MagicMock(),
+        "_ensure_observability_state": MagicMock(),
+        "auto_audit_log": True,
+        "auto_audit_log_path": "",
+        "auto_audit_log_max_age_hours": 168.0,
+        "auto_audit_log_repeat_seconds": 30.0,
+        "_last_auto_audit_key": None,
+        "_last_auto_audit_event_at": None,
+        "_last_auto_audit_cleanup_at": 0.0,
+        "_last_pm_status": {"output": False},
+        "virtual_startstop": 0,
+        "virtual_mode": 1,
+        "virtual_enable": 1,
+        "virtual_autostart": 1,
+        "_last_auto_metrics": make_auto_metrics(),
+        "auto_watchdog_stale_seconds": 10.0,
+        "started_at": 0.0,
+        "_last_successful_update_at": None,
+        "auto_watchdog_recovery_seconds": 60.0,
+        "_last_recovery_attempt_at": None,
+        "_recovery_attempts": 0,
+    }
+    data.update(overrides)
+    return SimpleNamespace(**data)
+
+
+def make_state_validation_service(**overrides):
+    data = {
+        "poll_interval_ms": 200,
+        "sign_of_life_minutes": 2,
+        "auto_pv_max_services": 2,
+        "auto_pv_scan_interval_seconds": 1.0,
+        "auto_battery_scan_interval_seconds": 1.0,
+        "auto_dbus_backoff_base_seconds": 1.0,
+        "auto_dbus_backoff_max_seconds": 1.0,
+        "auto_grid_missing_stop_seconds": 1.0,
+        "auto_average_window_seconds": 1.0,
+        "auto_min_runtime_seconds": 1.0,
+        "auto_min_offtime_seconds": 1.0,
+        "auto_start_delay_seconds": 1.0,
+        "auto_stop_delay_seconds": 1.0,
+        "auto_input_cache_seconds": 1.0,
+        "auto_input_helper_restart_seconds": 1.0,
+        "auto_input_helper_stale_seconds": 1.0,
+        "auto_shelly_soft_fail_seconds": 1.0,
+        "auto_watchdog_stale_seconds": 1.0,
+        "auto_watchdog_recovery_seconds": 1.0,
+        "auto_startup_warmup_seconds": 1.0,
+        "auto_manual_override_seconds": 1.0,
+        "startup_device_info_retry_seconds": 1.0,
+        "startup_device_info_retries": 1,
+        "shelly_request_timeout_seconds": 1.0,
+        "dbus_method_timeout_seconds": 1.0,
+    }
+    data.update(overrides)
+    return SimpleNamespace(**data)
+
+
+def make_runtime_state_service(**overrides):
+    data = {
+        "runtime_state_path": "",
+        "virtual_mode": 1,
+        "virtual_autostart": 1,
+        "virtual_enable": 1,
+        "virtual_startstop": 0,
+        "manual_override_until": 0.0,
+        "_auto_mode_cutover_pending": False,
+        "_ignore_min_offtime_once": False,
+        "relay_last_changed_at": None,
+        "relay_last_off_at": None,
+        "_runtime_state_serialized": None,
+        "_last_health_reason": "init",
+    }
+    data.update(overrides)
+    return SimpleNamespace(**data)
