@@ -298,3 +298,10 @@ deployment on the Cerbo.
 - The service uses runtime state in RAM to avoid unnecessary flash wear.
 - The example config is sanitized for GitHub. Replace all example addresses and
   identifiers before real deployment.
+
+## Disclaimer
+
+This project is provided as-is for personal and experimental use.
+It is not a certified electrical installation product. 
+Always ensure your setup complies with local regulations and 
+has been reviewed by a qualified electrician.
