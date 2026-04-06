@@ -160,6 +160,34 @@ Before deploying, replace at least:
 - any explicit battery or PV service names if you pin them manually
 - optional generic Shelly disable helper values
 
+### Before First Start, Change These Settings
+
+For most users, these are the important settings to review before the first
+real deployment:
+
+- `Host`
+  Set this to the real IP address or hostname of your Shelly device.
+- `DeviceInstance`
+  Choose a free Victron device instance so the EV charger tile does not collide
+  with another service on the GX device.
+- `Phase`
+  Set this to `L1`, `L2`, `L3`, or `3P` so the displayed power/current mapping
+  matches your electrical installation.
+- `DigestAuth`, `Username`, `Password`
+  Only needed if your Shelly is protected by authentication.
+- `AutoBatteryService`
+  Replace the example value with your real battery DBus service if you pin it
+  explicitly. If you prefer discovery, use the documented discovery settings
+  instead.
+
+Optional, depending on your setup:
+- `DisableGenericShellyDevice`, `GenericShellyDisableIp`, `GenericShellyDisableMac`, `GenericShellyDisableChannel`
+  Review these if another generic `dbus-shelly` integration on the Cerbo could
+  otherwise fight for the same Shelly device.
+- Auto-mode thresholds and SOC settings
+  The example values are sensible defaults, but you should tune them to your
+  charger power, PV size, and battery strategy.
+
 The comments in the config explain each group of settings:
 - service identity
 - Shelly access
