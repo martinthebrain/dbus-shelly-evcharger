@@ -29,6 +29,7 @@ The codebase supports:
 - Helper-process based DBus input polling for better runtime stability
 - Audit logging for Auto-mode decisions
 - Watchdog and recovery behavior for stale helper snapshots or Shelly faults
+- Works out-of-the-box with Home Assistant via the Venus OS MQTT bridge. Allparameters can be monitored and controlled remotely by subscribing/publishing to the corresponding MQTT topics.
 
 ## Quick Start
 
