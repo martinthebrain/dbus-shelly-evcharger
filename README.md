@@ -285,6 +285,7 @@ deployment on the Cerbo.
 - The service uses runtime state in RAM to avoid unnecessary flash wear.
 - The example config is sanitized for GitHub. Replace all example addresses and
   identifiers before real deployment.
+- This script is specifically designed for Shelly Gen4 models. Older generations (Gen1-3) are not compatible due to different API paths and lower relay power ratings (10A vs 16A).
 
 ## Disclaimer
 
