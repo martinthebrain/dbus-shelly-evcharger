@@ -20,7 +20,7 @@ python3 -m py_compile \
     dbus_shelly_wallbox_update_cycle.py
 
 echo "[2/3] Unit tests"
-python3 -m unittest
+python3 -m unittest discover -s tests -p 'test_*.py'
 
 echo "[3/3] Type check"
 "$SCRIPT_DIR/run_typecheck.sh"
