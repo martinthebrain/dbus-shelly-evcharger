@@ -179,6 +179,26 @@ class TestServiceStateController(unittest.TestCase):
         self.assertEqual(service.auto_start_surplus_watts, 1850.0)
         self.assertEqual(service.auto_high_soc_stop_surplus_watts, 1650.0)
 
+    def test_validate_runtime_config_legacy_auto_thresholds_clamp_release_and_volatility_order(self):
+        service = make_state_validation_service(
+            auto_min_soc=35.0,
+            auto_resume_soc=40.0,
+            auto_high_soc_threshold=55.0,
+            auto_high_soc_release_threshold=60.0,
+            auto_start_surplus_watts=1850.0,
+            auto_stop_surplus_watts=1350.0,
+            auto_high_soc_start_surplus_watts=1650.0,
+            auto_high_soc_stop_surplus_watts=800.0,
+            auto_stop_surplus_volatility_low_watts=200.0,
+            auto_stop_surplus_volatility_high_watts=100.0,
+        )
+
+        controller = ServiceStateController(service, int)
+        controller.validate_runtime_config()
+
+        self.assertEqual(service.auto_high_soc_release_threshold, 55.0)
+        self.assertEqual(service.auto_stop_surplus_volatility_high_watts, 200.0)
+
     def test_runtime_state_roundtrip_restores_ram_values(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/state.json"

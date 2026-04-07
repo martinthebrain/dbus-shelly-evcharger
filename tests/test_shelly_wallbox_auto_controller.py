@@ -351,3 +351,30 @@ class TestAutoDecisionController(unittest.TestCase):
         self.assertEqual(battery_soc, 55.0)
         self.assertTrue(service._grid_recovery_required)
         self.assertEqual(service._grid_recovery_since, 101.0)
+
+    def test_auto_policy_synthesis_tolerates_read_only_service_attributes(self):
+        class LockedAutoPolicyService(SimpleNamespace):
+            def __setattr__(self, name, value):
+                if name == "auto_policy":
+                    raise AttributeError("read-only")
+                super().__setattr__(name, value)
+
+        service = LockedAutoPolicyService(**vars(make_auto_controller_service()))
+        controller = AutoDecisionController(service, _health_code, _mode_uses_auto_logic)
+
+        policy = controller._auto_policy()
+
+        self.assertEqual(policy.normal_profile.start_surplus_watts, 2000.0)
+        self.assertFalse(hasattr(service, "auto_policy"))
+
+    def test_grid_recovery_gate_clears_immediately_when_delay_is_zero(self):
+        controller, service = self._make_controller()
+        service.auto_grid_recovery_start_seconds = 0.0
+        service._grid_recovery_required = True
+        service._grid_recovery_since = None
+
+        decision = controller._handle_grid_recovery_start_gate(False, 123.0, False)
+
+        self.assertIs(decision, controller._NO_DECISION)
+        self.assertFalse(service._grid_recovery_required)
+        self.assertEqual(service._grid_recovery_since, 123.0)

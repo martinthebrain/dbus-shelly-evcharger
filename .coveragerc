@@ -1,0 +1,12 @@
+[run]
+source = .
+omit =
+    tests/*
+    .github/*
+
+[report]
+omit =
+    tests/*
+    .github/*
+    */__pycache__/*
+

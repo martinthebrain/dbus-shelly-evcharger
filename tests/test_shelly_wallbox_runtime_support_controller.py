@@ -258,7 +258,6 @@ class TestRuntimeSupportController(unittest.TestCase):
                     surplus_volatility=520.0,
                 ),
             )
-
             controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
             controller.write_auto_audit_event("auto-stop", cached=False)
 
@@ -273,6 +272,11 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertIn("stop_alpha=0.15", payload)
         self.assertIn("stop_alpha_stage=volatile", payload)
         self.assertIn("surplus_volatility=520W", payload)
+
+    def test_auto_audit_reason_detail_ignores_non_string_stop_reasons(self):
+        service = make_runtime_support_service(auto_stop_condition_reason=1)
+
+        self.assertIsNone(RuntimeSupportController._auto_audit_reason_detail(service, "auto-stop"))
 
     def test_write_auto_audit_event_deduplicates_by_stop_reason_detail(self):
         with tempfile.TemporaryDirectory() as temp_dir:
