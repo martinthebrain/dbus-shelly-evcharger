@@ -14,6 +14,11 @@ import logging
 from typing import Any
 
 
+def _config_value(defaults: SectionProxy, key: str, fallback: Any) -> str:
+    """Return a config value while keeping SectionProxy.get() mypy-friendly."""
+    return defaults.get(key, str(fallback))
+
+
 @dataclass
 class AutoThresholdProfile:
     """Start/stop surplus thresholds for one Auto charging profile."""
@@ -111,35 +116,35 @@ class AutoPolicy:
     @classmethod
     def from_config(cls, defaults: SectionProxy) -> AutoPolicy:
         """Build an AutoPolicy from config defaults."""
-        normal_start = float(defaults.get("AutoStartSurplusWatts", 1500))
-        normal_stop = float(defaults.get("AutoStopSurplusWatts", normal_start - 400))
-        min_soc = float(defaults.get("AutoMinSoc", 30))
+        normal_start = float(_config_value(defaults, "AutoStartSurplusWatts", 1500))
+        normal_stop = float(_config_value(defaults, "AutoStopSurplusWatts", normal_start - 400))
+        min_soc = float(_config_value(defaults, "AutoMinSoc", 30))
         return cls(
             normal_profile=AutoThresholdProfile(normal_start, normal_stop),
             high_soc_profile=AutoThresholdProfile(
-                float(defaults.get("AutoHighSocStartSurplusWatts", normal_start)),
-                float(defaults.get("AutoHighSocStopSurplusWatts", normal_stop)),
+                float(_config_value(defaults, "AutoHighSocStartSurplusWatts", normal_start)),
+                float(_config_value(defaults, "AutoHighSocStopSurplusWatts", normal_stop)),
             ),
-            high_soc_threshold=float(defaults.get("AutoHighSocThreshold", 50)),
+            high_soc_threshold=float(_config_value(defaults, "AutoHighSocThreshold", 50)),
             high_soc_release_threshold=float(
-                defaults.get("AutoHighSocReleaseThreshold", defaults.get("AutoHighSocThreshold", 50))
+                _config_value(defaults, "AutoHighSocReleaseThreshold", _config_value(defaults, "AutoHighSocThreshold", 50))
             ),
             min_soc=min_soc,
-            resume_soc=float(defaults.get("AutoResumeSoc", min_soc + 3)),
-            start_max_grid_import_watts=float(defaults.get("AutoStartMaxGridImportWatts", 50)),
-            stop_grid_import_watts=float(defaults.get("AutoStopGridImportWatts", 300)),
+            resume_soc=float(_config_value(defaults, "AutoResumeSoc", min_soc + 3)),
+            start_max_grid_import_watts=float(_config_value(defaults, "AutoStartMaxGridImportWatts", 50)),
+            stop_grid_import_watts=float(_config_value(defaults, "AutoStopGridImportWatts", 300)),
             grid_recovery_start_seconds=float(
-                defaults.get("AutoGridRecoveryStartSeconds", defaults.get("AutoStartDelaySeconds", 10))
+                _config_value(defaults, "AutoGridRecoveryStartSeconds", _config_value(defaults, "AutoStartDelaySeconds", 10))
             ),
             stop_surplus_delay_seconds=float(
-                defaults.get("AutoStopSurplusDelaySeconds", defaults.get("AutoStopDelaySeconds", 10))
+                _config_value(defaults, "AutoStopSurplusDelaySeconds", _config_value(defaults, "AutoStopDelaySeconds", 10))
             ),
             ewma=AutoStopEwmaPolicy(
-                base_alpha=float(defaults.get("AutoStopEwmaAlpha", 0.35)),
-                stable_alpha=float(defaults.get("AutoStopEwmaAlphaStable", 0.55)),
-                volatile_alpha=float(defaults.get("AutoStopEwmaAlphaVolatile", 0.15)),
-                volatility_low_watts=float(defaults.get("AutoStopSurplusVolatilityLowWatts", 150)),
-                volatility_high_watts=float(defaults.get("AutoStopSurplusVolatilityHighWatts", 400)),
+                base_alpha=float(_config_value(defaults, "AutoStopEwmaAlpha", 0.35)),
+                stable_alpha=float(_config_value(defaults, "AutoStopEwmaAlphaStable", 0.55)),
+                volatile_alpha=float(_config_value(defaults, "AutoStopEwmaAlphaVolatile", 0.15)),
+                volatility_low_watts=float(_config_value(defaults, "AutoStopSurplusVolatilityLowWatts", 150)),
+                volatility_high_watts=float(_config_value(defaults, "AutoStopSurplusVolatilityHighWatts", 400)),
             ),
         )
 

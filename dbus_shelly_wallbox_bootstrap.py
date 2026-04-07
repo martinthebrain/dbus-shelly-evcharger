@@ -56,6 +56,11 @@ MONTH_WINDOW_DEFAULTS: dict[int, tuple[str, str]] = {
 }
 
 
+def _config_value(defaults: configparser.SectionProxy, key: str, fallback: Any) -> str:
+    """Return a config value while keeping SectionProxy.get() mypy-friendly."""
+    return defaults.get(key, str(fallback))
+
+
 def _seasonal_month_windows(
     config: configparser.ConfigParser,
     month_window_func: Callable[[configparser.ConfigParser, int, str, str], Any],
@@ -204,16 +209,16 @@ class ServiceBootstrapController:
     def _load_identity_config(self, defaults: configparser.SectionProxy) -> None:
         """Load generic device, HTTP, and EV charger presentation settings."""
         svc = self.service
-        svc.deviceinstance = int(defaults.get("DeviceInstance", 60))
+        svc.deviceinstance = int(_config_value(defaults, "DeviceInstance", 60))
         svc.host = defaults["Host"].strip()
         svc.phase = self._normalize_phase(defaults.get("Phase", "L1"))
-        svc.position = int(defaults.get("Position", 1))
-        svc.poll_interval_ms = int(defaults.get("PollIntervalMs", 1000))
-        svc.sign_of_life_minutes = int(defaults.get("SignOfLifeLog", 10))
-        svc.max_current = float(defaults.get("MaxCurrent", 16))
-        svc.min_current = float(defaults.get("MinCurrent", 6))
-        svc.charging_threshold_watts = float(defaults.get("ChargingThresholdWatts", 100))
-        svc.idle_status = int(defaults.get("IdleStatus", 6))
+        svc.position = int(_config_value(defaults, "Position", 1))
+        svc.poll_interval_ms = int(_config_value(defaults, "PollIntervalMs", 1000))
+        svc.sign_of_life_minutes = int(_config_value(defaults, "SignOfLifeLog", 10))
+        svc.max_current = float(_config_value(defaults, "MaxCurrent", 16))
+        svc.min_current = float(_config_value(defaults, "MinCurrent", 6))
+        svc.charging_threshold_watts = float(_config_value(defaults, "ChargingThresholdWatts", 100))
+        svc.idle_status = int(_config_value(defaults, "IdleStatus", 6))
         svc.voltage_mode = defaults.get("ThreePhaseVoltageMode", "phase").strip().lower()
         svc.username = defaults.get("Username", "").strip()
         svc.password = defaults.get("Password", "").strip()
@@ -224,7 +229,7 @@ class ServiceBootstrapController:
             "on",
         )
         svc.pm_component = defaults.get("ShellyComponent", "Switch").strip()
-        svc.pm_id = int(defaults.get("ShellyId", 0))
+        svc.pm_id = int(_config_value(defaults, "ShellyId", 0))
         svc.custom_name_override = defaults.get("Name", "").strip()
         svc.service_name = defaults.get("ServiceName", "com.victronenergy.evcharger").strip()
         svc.connection_name = defaults.get("Connection", "Shelly 1PM Gen4 RPC").strip()
@@ -242,8 +247,8 @@ class ServiceBootstrapController:
             "com.victronenergy.pvinverter",
         ).strip()
         svc.auto_pv_path = defaults.get("AutoPvPath", "/Ac/Power").strip()
-        svc.auto_pv_max_services = int(defaults.get("AutoPvMaxServices", 10))
-        svc.auto_pv_scan_interval_seconds = float(defaults.get("AutoPvScanIntervalSeconds", 60))
+        svc.auto_pv_max_services = int(_config_value(defaults, "AutoPvMaxServices", 10))
+        svc.auto_pv_scan_interval_seconds = float(_config_value(defaults, "AutoPvScanIntervalSeconds", 60))
         svc.auto_use_dc_pv = defaults.get("AutoUseDcPv", "1").strip().lower() in ("1", "true", "yes", "on")
         svc.auto_dc_pv_service = defaults.get("AutoDcPvService", "com.victronenergy.system").strip()
         svc.auto_dc_pv_path = defaults.get("AutoDcPvPath", "/Dc/Pv/Power").strip()
@@ -256,13 +261,13 @@ class ServiceBootstrapController:
             "AutoBatteryServicePrefix",
             "com.victronenergy.battery",
         ).strip()
-        svc.auto_battery_scan_interval_seconds = float(defaults.get("AutoBatteryScanIntervalSeconds", 60))
+        svc.auto_battery_scan_interval_seconds = float(_config_value(defaults, "AutoBatteryScanIntervalSeconds", 60))
         svc.auto_allow_without_battery_soc = defaults.get(
             "AutoAllowWithoutBatterySoc",
             "1",
         ).strip().lower() in ("1", "true", "yes", "on")
-        svc.auto_dbus_backoff_base_seconds = float(defaults.get("AutoDbusBackoffBaseSeconds", 5))
-        svc.auto_dbus_backoff_max_seconds = float(defaults.get("AutoDbusBackoffMaxSeconds", 60))
+        svc.auto_dbus_backoff_base_seconds = float(_config_value(defaults, "AutoDbusBackoffBaseSeconds", 5))
+        svc.auto_dbus_backoff_max_seconds = float(_config_value(defaults, "AutoDbusBackoffMaxSeconds", 60))
         svc.auto_grid_service = defaults.get("AutoGridService", "com.victronenergy.system").strip()
         svc.auto_grid_l1_path = defaults.get("AutoGridL1Path", "/Ac/Grid/L1/Power").strip()
         svc.auto_grid_l2_path = defaults.get("AutoGridL2Path", "/Ac/Grid/L2/Power").strip()
@@ -271,9 +276,9 @@ class ServiceBootstrapController:
             "AutoGridRequireAllPhases",
             "1",
         ).strip().lower() in ("1", "true", "yes", "on")
-        svc.auto_grid_missing_stop_seconds = float(defaults.get("AutoGridMissingStopSeconds", 60))
+        svc.auto_grid_missing_stop_seconds = float(_config_value(defaults, "AutoGridMissingStopSeconds", 60))
         svc.auto_grid_recovery_start_seconds = float(
-            defaults.get("AutoGridRecoveryStartSeconds", defaults.get("AutoStartDelaySeconds", 10))
+            _config_value(defaults, "AutoGridRecoveryStartSeconds", _config_value(defaults, "AutoStartDelaySeconds", 10))
         )
 
     def _load_auto_policy_config(self, defaults: configparser.SectionProxy) -> None:
@@ -291,19 +296,19 @@ class ServiceBootstrapController:
     def _load_auto_timing_policy(self, defaults: configparser.SectionProxy) -> None:
         """Load averaging, runtime, and delay settings for Auto mode."""
         svc = self.service
-        svc.auto_average_window_seconds = float(defaults.get("AutoAverageWindowSeconds", 30))
-        svc.auto_min_runtime_seconds = float(defaults.get("AutoMinRuntimeSeconds", 300))
-        svc.auto_min_offtime_seconds = float(defaults.get("AutoMinOfftimeSeconds", 120))
-        svc.auto_start_delay_seconds = float(defaults.get("AutoStartDelaySeconds", 10))
-        svc.auto_stop_delay_seconds = float(defaults.get("AutoStopDelaySeconds", 10))
-        svc.auto_input_cache_seconds = float(defaults.get("AutoInputCacheSeconds", 120))
+        svc.auto_average_window_seconds = float(_config_value(defaults, "AutoAverageWindowSeconds", 30))
+        svc.auto_min_runtime_seconds = float(_config_value(defaults, "AutoMinRuntimeSeconds", 300))
+        svc.auto_min_offtime_seconds = float(_config_value(defaults, "AutoMinOfftimeSeconds", 120))
+        svc.auto_start_delay_seconds = float(_config_value(defaults, "AutoStartDelaySeconds", 10))
+        svc.auto_stop_delay_seconds = float(_config_value(defaults, "AutoStopDelaySeconds", 10))
+        svc.auto_input_cache_seconds = float(_config_value(defaults, "AutoInputCacheSeconds", 120))
         svc.auto_audit_log = defaults.get("AutoAuditLog", "1").strip().lower() in ("1", "true", "yes", "on")
         svc.auto_audit_log_path = defaults.get(
             "AutoAuditLogPath",
             "/var/volatile/log/dbus-shelly-wallbox/auto-reasons.log",
         ).strip()
-        svc.auto_audit_log_max_age_hours = float(defaults.get("AutoAuditLogMaxAgeHours", 168))
-        svc.auto_audit_log_repeat_seconds = float(defaults.get("AutoAuditLogRepeatSeconds", 30))
+        svc.auto_audit_log_max_age_hours = float(_config_value(defaults, "AutoAuditLogMaxAgeHours", 168))
+        svc.auto_audit_log_repeat_seconds = float(_config_value(defaults, "AutoAuditLogRepeatSeconds", 30))
 
     def _load_auto_daytime_policy(self, defaults: configparser.SectionProxy) -> None:
         """Load seasonal day-window behavior for Auto mode."""
@@ -329,17 +334,17 @@ class ServiceBootstrapController:
             "AutoInputSnapshotPath",
             f"/run/dbus-shelly-wallbox-auto-{svc.deviceinstance}.json",
         ).strip()
-        svc.auto_input_helper_restart_seconds = float(defaults.get("AutoInputHelperRestartSeconds", 5))
-        svc.auto_input_helper_stale_seconds = float(defaults.get("AutoInputHelperStaleSeconds", 15))
-        svc.auto_shelly_soft_fail_seconds = float(defaults.get("AutoShellySoftFailSeconds", 10))
-        svc.auto_watchdog_stale_seconds = float(defaults.get("AutoWatchdogStaleSeconds", 180))
-        svc.auto_watchdog_recovery_seconds = float(defaults.get("AutoWatchdogRecoverySeconds", 60))
-        svc.auto_startup_warmup_seconds = float(defaults.get("AutoStartupWarmupSeconds", 15))
-        svc.auto_manual_override_seconds = float(defaults.get("AutoManualOverrideSeconds", 300))
-        svc.startup_device_info_retries = int(defaults.get("StartupDeviceInfoRetries", 3))
-        svc.startup_device_info_retry_seconds = float(defaults.get("StartupDeviceInfoRetrySeconds", 2))
-        svc.shelly_request_timeout_seconds = float(defaults.get("ShellyRequestTimeoutSeconds", 2.0))
-        svc.dbus_method_timeout_seconds = float(defaults.get("DbusMethodTimeoutSeconds", 1.0))
+        svc.auto_input_helper_restart_seconds = float(_config_value(defaults, "AutoInputHelperRestartSeconds", 5))
+        svc.auto_input_helper_stale_seconds = float(_config_value(defaults, "AutoInputHelperStaleSeconds", 15))
+        svc.auto_shelly_soft_fail_seconds = float(_config_value(defaults, "AutoShellySoftFailSeconds", 10))
+        svc.auto_watchdog_stale_seconds = float(_config_value(defaults, "AutoWatchdogStaleSeconds", 180))
+        svc.auto_watchdog_recovery_seconds = float(_config_value(defaults, "AutoWatchdogRecoverySeconds", 60))
+        svc.auto_startup_warmup_seconds = float(_config_value(defaults, "AutoStartupWarmupSeconds", 15))
+        svc.auto_manual_override_seconds = float(_config_value(defaults, "AutoManualOverrideSeconds", 300))
+        svc.startup_device_info_retries = int(_config_value(defaults, "StartupDeviceInfoRetries", 3))
+        svc.startup_device_info_retry_seconds = float(_config_value(defaults, "StartupDeviceInfoRetrySeconds", 2))
+        svc.shelly_request_timeout_seconds = float(_config_value(defaults, "ShellyRequestTimeoutSeconds", 2.0))
+        svc.dbus_method_timeout_seconds = float(_config_value(defaults, "DbusMethodTimeoutSeconds", 1.0))
 
     def initialize_controllers(self) -> None:
         """Create the controller objects used by the service runtime."""
