@@ -32,8 +32,8 @@ jobs:
 
       - name: Generate coverage XML
         run: |
-          coverage run -m unittest discover -s tests -p 'test_*.py'
-          coverage xml
+          python3 -m coverage run -m unittest discover -s tests -p 'test_*.py'
+          python3 -m coverage xml
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
