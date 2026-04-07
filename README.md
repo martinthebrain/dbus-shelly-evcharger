@@ -32,7 +32,9 @@ The codebase supports:
 - Helper-process based DBus input polling for better runtime stability
 - Audit logging for Auto-mode decisions
 - Watchdog and recovery behavior for stale helper snapshots or Shelly faults
-- Works out-of-the-box with Home Assistant via the Venus OS MQTT bridge. All parameters can be monitored and controlled remotely by subscribing/publishing to the corresponding MQTT topics.
+- Works out-of-the-box with Home Assistant via the Venus OS MQTT bridge. All
+  parameters can be monitored and controlled remotely by
+  subscribing/publishing to the corresponding MQTT topics.
 
 ## Quick Start
 
@@ -65,10 +67,7 @@ The codebase supports:
    tail -f /var/volatile/log/dbus-shelly-wallbox/auto-reasons.log
    ```
 
-## What This Repository Contains
-
-This repository is intended to be published and deployed as a wallbox-only
-codebase.
+## File Overview
 
 The important runtime files are:
 - `dbus_shelly_wallbox.py`: main service entry point
@@ -207,53 +206,9 @@ The comments in the config explain each group of settings:
 
 ### Required Files on the Cerbo
 
-For a real deployment on Venus OS / Cerbo GX, these files and folders are the
-important ones to copy:
-
-- `dbus_shelly_wallbox.py`
-- `dbus_shelly_wallbox_auto_controller.py`
-- `dbus_shelly_wallbox_auto_input_supervisor.py`
-- `dbus_shelly_wallbox_auto_logic.py`
-- `dbus_shelly_wallbox_auto_policy.py`
-- `dbus_shelly_wallbox_bootstrap.py`
-- `dbus_shelly_wallbox_common.py`
-- `dbus_shelly_wallbox_dbus_inputs.py`
-- `dbus_shelly_wallbox_ports.py`
-- `dbus_shelly_wallbox_publisher.py`
-- `dbus_shelly_wallbox_runtime_support.py`
-- `dbus_shelly_wallbox_service_auto.py`
-- `dbus_shelly_wallbox_service_bindings.py`
-- `dbus_shelly_wallbox_service_factory.py`
-- `dbus_shelly_wallbox_service_runtime.py`
-- `dbus_shelly_wallbox_service_state_publish.py`
-- `dbus_shelly_wallbox_service_update.py`
-- `dbus_shelly_wallbox_shared.py`
-- `dbus_shelly_wallbox_shelly_io.py`
-- `dbus_shelly_wallbox_state.py`
-- `dbus_shelly_wallbox_update_cycle.py`
-- `dbus_shelly_wallbox_write_controller.py`
-- `shelly_wallbox_auto_input_helper.py`
-- `disable_generic_shelly_once.py`
-- `config.shelly_wallbox.ini`
-- `version.txt`
-- `boot_shelly_wallbox.sh`
-- `install_shelly_wallbox.sh`
-- `restart_shelly_wallbox.sh`
-- `uninstall_shelly_wallbox.sh`
-- `service_shelly_wallbox/`
-
-Optional but useful on the Cerbo:
-- `cerbo_soak_check.sh`
-
-Not required on the Cerbo for runtime operation:
-- `tests/`
-- `mypy.ini`
-- `run_typecheck.sh`
-- `run_stress_tests.sh`
-- `check_all.sh`
-- `Makefile`
-
-Copy the wallbox runtime files to a directory on the Cerbo, for example:
+Copy the entire repository content to the Cerbo, except for the
+`tests/` directory and development helpers (`mypy.ini`, `check_all.sh`,
+`Makefile`, `run_*.sh`). Use as directory for example:
 
 ```bash
 /data/shellyWB
@@ -295,7 +250,7 @@ tail -f /var/volatile/log/dbus-shelly-wallbox/auto-reasons.log
 
 ## Project Structure
 
-The codebase is split into small modules on purpose:
+The codebase is split into small modules:
 
 - `dbus_shelly_wallbox_*controller.py`: controller entry points for a single responsibility
 - `dbus_shelly_wallbox_service_*.py`: mixins used by the service class
@@ -334,6 +289,6 @@ deployment on the Cerbo.
 ## Disclaimer
 
 This project is provided as-is for personal and experimental use.
-It is not a certified electrical installation product. 
-Always ensure your setup complies with local regulations and 
+It is not a certified electrical installation product.
+Always ensure your setup complies with local regulations and
 has been reviewed by a qualified electrician.
