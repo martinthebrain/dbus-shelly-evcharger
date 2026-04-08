@@ -25,16 +25,21 @@ class TestShellyWallboxShared(unittest.TestCase):
         self.assertIsNone(_iter_numeric_container_items("abc"))
         self.assertEqual(_iter_numeric_container_items((1, 2)), [1, 2])
         self.assertIsNone(_coerce_scalar_numeric(None))
+        self.assertIsNone(_coerce_scalar_numeric(True))
         self.assertEqual(_coerce_scalar_numeric("4.5"), 4.5)
         self.assertIsNone(_coerce_scalar_numeric("bad"))
 
         self.assertEqual(coerce_dbus_numeric(5), 5.0)
+        self.assertIsNone(coerce_dbus_numeric(True))
         self.assertEqual(coerce_dbus_numeric([7]), 7.0)
+        self.assertEqual(coerce_dbus_numeric([True]), [True])
         self.assertEqual(coerce_dbus_numeric([1, 2]), [1, 2])
         self.assertEqual(coerce_dbus_numeric(["x"]), ["x"])
 
         self.assertEqual(sum_dbus_numeric(5), 5.0)
+        self.assertIsNone(sum_dbus_numeric(True))
         self.assertEqual(sum_dbus_numeric([1, 2, 3]), 6.0)
+        self.assertIsNone(sum_dbus_numeric([True]))
         self.assertEqual(sum_dbus_numeric([[1, 2], [3]]), 6.0)
         self.assertEqual(sum_dbus_numeric(["bad", None]), None)
 

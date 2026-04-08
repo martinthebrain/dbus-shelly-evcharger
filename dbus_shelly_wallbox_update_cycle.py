@@ -10,196 +10,222 @@ state back to Venus OS.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 
-class UpdateCycleController:
+from dbus_shelly_wallbox_contracts import (
+    normalize_learning_phase,
+    normalize_learning_state,
+    normalized_worker_snapshot,
+    timestamp_age_within,
+    timestamp_not_future,
+)
+from dbus_shelly_wallbox_update_cycle_learning import _UpdateCycleLearningMixin
+from dbus_shelly_wallbox_update_cycle_relay import _UpdateCycleRelayMixin
+from dbus_shelly_wallbox_update_cycle_state import _UpdateCycleStateMixin
+
+
+class UpdateCycleController(
+    _UpdateCycleStateMixin,
+    _UpdateCycleRelayMixin,
+    _UpdateCycleLearningMixin,
+):
     """Encapsulate the periodic Shelly/Auto update pipeline."""
 
+    LEARNED_POWER_STABLE_MIN_SAMPLES = 3
+    LEARNED_POWER_STABLE_MIN_SECONDS = 15.0
+    LEARNED_POWER_STABLE_TOLERANCE_WATTS = 150.0
+    LEARNED_POWER_STABLE_TOLERANCE_RATIO = 0.08
+    LEARNED_POWER_SIGNATURE_MISMATCH_SESSIONS = 2
+    LEARNED_POWER_VOLTAGE_TOLERANCE_VOLTS = 10.0
+    FUTURE_INPUT_TIMESTAMP_TOLERANCE_SECONDS = 1.0
     def __init__(self, service: Any, phase_values_func: Any, health_code_func: Any) -> None:
         self.service = service
         self._phase_values = phase_values_func
         self._health_code = health_code_func
 
-    def apply_startup_manual_target(self, pm_status: dict[str, Any], now: float) -> dict[str, Any]:
-        """Synchronize the configured manual on/off state once after startup."""
-        svc = self.service
-        if not hasattr(svc, "_startup_manual_target"):
-            svc._startup_manual_target = None
-        if svc._startup_manual_target is None or svc._mode_uses_auto_logic(svc.virtual_mode):
-            return pm_status
-
-        target_on = bool(svc._startup_manual_target)
-        svc._startup_manual_target = None
-        relay_on = bool(pm_status.get("output", False))
-        if relay_on == target_on:
-            return pm_status
-
-        try:
-            # Startup manual state is best-effort. If Shelly access is currently
-            # unavailable, we keep the live status and let the normal update loop
-            # retry on the next cycle instead of failing startup.
-            svc._queue_relay_command(target_on, now)
-        except Exception as error:  # pylint: disable=broad-except
-            svc._mark_failure("shelly")
-            svc._warning_throttled(
-                "startup-manual-target-failed",
-                svc.auto_shelly_soft_fail_seconds,
-                "Failed to queue startup manual relay state %s: %s",
-                target_on,
-                error,
-                exc_info=error,
-            )
-            return pm_status
-
+    @staticmethod
+    def _worker_pm_snapshot_data(
+        worker_snapshot: dict[str, Any],
+        now: float,
+    ) -> tuple[dict[str, Any] | None, bool, float]:
+        """Return normalized worker PM data plus confirmation and timestamp."""
+        normalized_snapshot = normalized_worker_snapshot(worker_snapshot, now=now, clamp_future_timestamps=False)
+        pm_status = normalized_snapshot.get("pm_status")
+        if pm_status is None:
+            return None, False, float(now)
         pm_status = dict(pm_status)
-        pm_status["output"] = target_on
-        if not target_on:
-            pm_status["apower"] = 0.0
-            pm_status["current"] = 0.0
+        pm_confirmed = bool(normalized_snapshot.get("pm_confirmed", False))
+        snapshot_at = normalized_snapshot.get("pm_captured_at", normalized_snapshot.get("captured_at", now))
+        return pm_status, pm_confirmed, float(now if snapshot_at is None else snapshot_at)
+
+    @staticmethod
+    def _remember_pm_snapshot(svc: Any, pm_status: dict[str, Any], snapshot_at: float, pm_confirmed: bool) -> None:
+        """Persist the freshest known PM status for short read-soft-fail reuse."""
+        remembered = dict(pm_status)
+        remembered["_pm_confirmed"] = pm_confirmed
+        svc._last_pm_status = remembered
+        svc._last_pm_status_at = snapshot_at
+        svc._last_pm_status_confirmed = pm_confirmed
+        if pm_confirmed:
+            svc._last_confirmed_pm_status = dict(remembered)
+            svc._last_confirmed_pm_status_at = snapshot_at
+
+    @staticmethod
+    def _cached_pm_status_for_soft_fail(svc: Any, now: float, soft_fail_seconds: float) -> dict[str, Any] | None:
+        """Return the last remembered PM status when it is still inside soft-fail budget."""
+        if (
+            svc._last_pm_status is None
+            or svc._last_pm_status_at is None
+            or not timestamp_age_within(
+                svc._last_pm_status_at,
+                now,
+                soft_fail_seconds,
+                future_tolerance_seconds=UpdateCycleController.FUTURE_INPUT_TIMESTAMP_TOLERANCE_SECONDS,
+            )
+        ):
+            return None
+        pm_status = dict(svc._last_pm_status)
+        pm_status["_pm_confirmed"] = bool(getattr(svc, "_last_pm_status_confirmed", False))
         return pm_status
 
-    def ensure_virtual_state_defaults(self) -> None:
-        """Populate defaults used by virtual session and health publishing."""
-        svc = self.service
-        svc._ensure_observability_state()
-        if not hasattr(svc, "_last_health_reason"):
-            svc._last_health_reason = "init"
-        if not hasattr(svc, "_last_health_code"):
-            svc._last_health_code = self._health_code(svc._last_health_reason)
-
     @staticmethod
-    def session_state_from_status(
-        svc: Any,
-        status: int,
-        current_total_energy: float,
-        relay_on: bool,
-        now: float,
-    ) -> tuple[int, float]:
-        """Compute current session timing and energy values."""
-        session_active = status == 2 or (relay_on and svc.charging_started_at is not None)
-        if session_active:
-            if svc.charging_started_at is None:
-                svc.charging_started_at = now
-                svc.energy_at_start = current_total_energy
-            charging_time = int(now - svc.charging_started_at)
-            session_energy = round(max(0.0, current_total_energy - svc.energy_at_start), 3)
-            return charging_time, session_energy
-        if not relay_on:
-            svc.charging_started_at = None
-            svc.energy_at_start = current_total_energy
-            return 0, 0.0
-        session_energy = round(max(0.0, current_total_energy - svc.energy_at_start), 3)
-        return 0, session_energy
-
-    @staticmethod
-    def startstop_display_for_state(svc: Any, relay_on: bool) -> int:
-        """Return the GUI start/stop indicator for the current mode."""
-        svc.virtual_startstop = 1 if relay_on else 0
-        if svc._mode_uses_auto_logic(svc.virtual_mode):
-            return int(relay_on or svc.virtual_enable)
-        return int(svc.virtual_startstop)
-
-    @staticmethod
-    def phase_energies_for_total(svc: Any, current_total_energy: float) -> dict[str, float]:
-        """Split total energy across phases according to configured wiring."""
-        phase = getattr(svc, "phase", "L1")
-        if phase == "3P":
-            per_phase = current_total_energy / 3.0
-            return {"L1": per_phase, "L2": per_phase, "L3": per_phase}
-        return {
-            "L1": current_total_energy if phase == "L1" else 0.0,
-            "L2": current_total_energy if phase == "L2" else 0.0,
-            "L3": current_total_energy if phase == "L3" else 0.0,
-        }
-
-    def publish_virtual_state_paths(
-        self,
-        current_total_energy: float,
-        charging_time: int,
-        session_energy: float,
-        startstop_display: int,
-        now: float,
-    ) -> bool:
-        """Publish session, config, and diagnostic values derived from the live state."""
-        svc = self.service
-        phase_energies = self.phase_energies_for_total(svc, current_total_energy)
-        changed = svc._publish_energy_time_measurements(
-            current_total_energy,
-            phase_energies,
-            charging_time,
-            session_energy,
-            now,
-        )
-        changed |= svc._publish_config_paths(startstop_display, now)
-        changed |= svc._publish_diagnostic_paths(now)
-        return changed
-
-    @staticmethod
-    def _total_phase_current(phase_data: dict[str, dict[str, float]]) -> float:
-        """Return the summed AC current across all published phases."""
-        return sum(phase_data[phase_name]["current"] for phase_name in ("L1", "L2", "L3"))
-
-    def update_virtual_state(self, status: int, current_total_energy: float, relay_on: bool) -> bool:
-        """Update DBus state that is derived from relay state and energy."""
-        svc = self.service
-        status = int(status)
-        current_total_energy = float(current_total_energy)
-        relay_on = bool(relay_on)
-        self.ensure_virtual_state_defaults()
-        now = svc._time_now()
-        charging_time, session_energy = self.session_state_from_status(
-            svc,
-            status,
-            current_total_energy,
-            relay_on,
-            now,
-        )
-        startstop_display = self.startstop_display_for_state(svc, relay_on)
-        svc.last_status = status
-        changed = self.publish_virtual_state_paths(
-            current_total_energy,
-            charging_time,
-            session_energy,
-            startstop_display,
-            now,
-        )
-        svc._save_runtime_state()
-        return changed
-
-    @staticmethod
-    def prepare_update_cycle(svc: Any, now: float) -> Any:
-        """Run pre-update recovery/supervision hooks and return the latest worker snapshot."""
-        svc._watchdog_recover(now)
-        svc._ensure_auto_input_helper_process(now)
-        svc._refresh_auto_input_snapshot(now)
-        return svc._get_worker_snapshot()
+    def _direct_pm_snapshot_max_age_seconds(svc: Any) -> float:
+        """Return the minimum freshness window for directly supplied worker PM snapshots."""
+        candidates = [1.0]
+        worker_poll_seconds = getattr(svc, "_worker_poll_interval_seconds", None)
+        if worker_poll_seconds is not None:
+            try:
+                worker_poll_seconds = float(worker_poll_seconds)
+            except (TypeError, ValueError):
+                worker_poll_seconds = None
+            if worker_poll_seconds is not None and worker_poll_seconds > 0:
+                candidates.append(worker_poll_seconds * 2.0)
+        return max(1.0, min(candidates))
 
     @staticmethod
     def resolve_pm_status_for_update(svc: Any, worker_snapshot: dict[str, Any], now: float) -> dict[str, Any] | None:
         """Return the freshest Shelly status, including short soft-fail reuse."""
-        pm_status = worker_snapshot.get("pm_status")
-        if pm_status is not None:
-            pm_status = dict(pm_status)
-            snapshot_at = worker_snapshot.get("pm_captured_at", worker_snapshot.get("captured_at", now))
-            snapshot_at = now if snapshot_at is None else float(snapshot_at)
-            svc._last_pm_status = dict(pm_status)
-            svc._last_pm_status_at = snapshot_at
-            return pm_status
+        soft_fail_seconds = float(getattr(svc, "auto_shelly_soft_fail_seconds", 10.0))
+        pm_status, pm_confirmed, snapshot_at = UpdateCycleController._worker_pm_snapshot_data(worker_snapshot, now)
+        if pm_status is None:
+            return UpdateCycleController._cached_pm_status_for_soft_fail(svc, now, soft_fail_seconds)
+        pm_status["_pm_confirmed"] = pm_confirmed
+        if UpdateCycleController._pm_snapshot_falls_back_to_cache(snapshot_at, now):
+            return UpdateCycleController._cached_pm_status_for_soft_fail(svc, now, soft_fail_seconds)
 
-        if (
-            svc._last_pm_status is not None
-            and svc._last_pm_status_at is not None
-            and (now - svc._last_pm_status_at) <= svc.auto_shelly_soft_fail_seconds
-        ):
-            return dict(svc._last_pm_status)
-        return None
+        should_remember, within_soft_fail = UpdateCycleController._pm_snapshot_storage_decision(
+            svc,
+            now,
+            snapshot_at,
+            soft_fail_seconds,
+        )
+        if should_remember:
+            UpdateCycleController._remember_pm_snapshot(svc, pm_status, snapshot_at, pm_confirmed)
+        if within_soft_fail:
+            return pm_status
+        return UpdateCycleController._cached_pm_status_for_soft_fail(svc, now, soft_fail_seconds)
+
+    @staticmethod
+    def _pm_snapshot_from_future(snapshot_at: float, now: float) -> bool:
+        """Return True when a worker PM snapshot timestamp lies implausibly in the future."""
+        return not timestamp_not_future(
+            snapshot_at,
+            now,
+            UpdateCycleController.FUTURE_INPUT_TIMESTAMP_TOLERANCE_SECONDS,
+        )
+
+    @staticmethod
+    def _pm_snapshot_falls_back_to_cache(snapshot_at: float, now: float) -> bool:
+        """Return True when a PM snapshot must immediately fall back to cached state."""
+        return UpdateCycleController._pm_snapshot_from_future(snapshot_at, now)
+
+    @staticmethod
+    def _pm_snapshot_within_soft_fail_budget(
+        svc: Any,
+        now: float,
+        snapshot_at: float,
+        soft_fail_seconds: float,
+    ) -> bool:
+        """Return True when a PM snapshot is still usable before soft-fail fallback."""
+        direct_snapshot_max_age = UpdateCycleController._direct_pm_snapshot_max_age_seconds(svc)
+        return (float(now) - snapshot_at) <= max(soft_fail_seconds, direct_snapshot_max_age)
+
+    @staticmethod
+    def _pm_snapshot_newer_than_last(svc: Any, snapshot_at: float) -> bool:
+        """Return True when a PM snapshot is at least as new as the stored one."""
+        last_snapshot_at = getattr(svc, "_last_pm_status_at", None)
+        return last_snapshot_at is None or snapshot_at >= float(last_snapshot_at)
+
+    @staticmethod
+    def _pm_snapshot_storage_decision(
+        svc: Any,
+        now: float,
+        snapshot_at: float,
+        soft_fail_seconds: float,
+    ) -> tuple[bool, bool]:
+        """Return whether to remember a PM snapshot and whether it stays directly usable."""
+        within_soft_fail = UpdateCycleController._pm_snapshot_within_soft_fail_budget(
+            svc,
+            now,
+            snapshot_at,
+            soft_fail_seconds,
+        )
+        should_remember = within_soft_fail or UpdateCycleController._pm_snapshot_newer_than_last(svc, snapshot_at)
+        return should_remember, within_soft_fail
+
+    @staticmethod
+    def _offline_confirmed_relay_max_age_seconds(svc: Any) -> float:
+        """Return how old a confirmed relay sample may be for offline publishing."""
+        candidates = [2.0]
+        worker_poll_seconds = getattr(svc, "_worker_poll_interval_seconds", None)
+        if worker_poll_seconds is not None and float(worker_poll_seconds) > 0:
+            candidates.append(float(worker_poll_seconds) * 2.0)
+        relay_sync_timeout_seconds = getattr(svc, "relay_sync_timeout_seconds", None)
+        if relay_sync_timeout_seconds is not None and float(relay_sync_timeout_seconds) > 0:
+            candidates.append(float(relay_sync_timeout_seconds))
+        return max(1.0, min(candidates))
+
+    @classmethod
+    def _offline_confirmed_relay_state(cls, svc: Any, now: float) -> bool:
+        """Return the last fresh confirmed relay state, defaulting to OFF when unknown."""
+        raw_pm_status = getattr(svc, "_last_confirmed_pm_status", None)
+        raw_captured_at = getattr(svc, "_last_confirmed_pm_status_at", None)
+        if not cls._offline_confirmed_relay_sample_present(raw_pm_status, raw_captured_at):
+            return False
+        pm_status = raw_pm_status
+        captured_at = raw_captured_at
+        assert isinstance(pm_status, dict)
+        assert captured_at is not None
+        if not cls._offline_confirmed_relay_sample_fresh(svc, now, float(captured_at)):
+            return False
+        return bool(pm_status.get("output"))
+
+    @staticmethod
+    def _offline_confirmed_relay_sample_present(
+        pm_status: Any,
+        captured_at: float | None,
+    ) -> bool:
+        """Return True when offline publishing has one confirmed relay sample to inspect."""
+        return isinstance(pm_status, dict) and "output" in pm_status and captured_at is not None
+
+    @classmethod
+    def _offline_confirmed_relay_sample_fresh(cls, svc: Any, now: float, captured_at: float) -> bool:
+        """Return True when one confirmed relay sample is fresh enough for offline status."""
+        max_age_seconds = cls._offline_confirmed_relay_max_age_seconds(svc)
+        return timestamp_age_within(
+            captured_at,
+            now,
+            max_age_seconds,
+            future_tolerance_seconds=cls.FUTURE_INPUT_TIMESTAMP_TOLERANCE_SECONDS,
+        )
 
     def publish_offline_update(self, now: float) -> bool:
         """Publish a disconnected Shelly state when no recent status is available."""
         svc = self.service
         voltage = svc._last_voltage if svc._last_voltage else 230.0
-        relay_on = bool(svc.virtual_startstop)
+        relay_on = self._offline_confirmed_relay_state(svc, now)
         power = 0.0
         energy_forward = 0.0
         status = 0
@@ -233,18 +259,90 @@ class UpdateCycleController:
         last_value_attr: str,
         last_at_attr: str,
         now: float,
+        max_age_seconds: float | None = None,
     ) -> tuple[Any, bool]:
         """Use fresh input values immediately and short-lived cached values as fallback."""
+        cache_max_age = float(svc.auto_input_cache_seconds)
+        if max_age_seconds is not None:
+            cache_max_age = min(cache_max_age, float(max_age_seconds))
+        value, snapshot_at = UpdateCycleController._discard_invalid_snapshot_input(
+            value,
+            snapshot_at,
+            now,
+            max_age_seconds,
+        )
         if value is not None:
             setattr(svc, last_value_attr, value)
             setattr(svc, last_at_attr, now if snapshot_at is None else float(snapshot_at))
             return value, False
 
+        return UpdateCycleController._cached_input_from_service(svc, last_value_attr, last_at_attr, now, cache_max_age)
+
+    @staticmethod
+    def _discard_invalid_snapshot_input(
+        value: Any,
+        snapshot_at: float | None,
+        now: float,
+        max_age_seconds: float | None,
+    ) -> tuple[Any, float | None]:
+        """Drop future or over-age source values before cache fallback is considered."""
+        if value is None or snapshot_at is None:
+            return value, snapshot_at
+        snapshot_time = float(snapshot_at)
+        if UpdateCycleController._snapshot_input_from_future(snapshot_time, now):
+            return None, None
+        if UpdateCycleController._snapshot_input_too_old(snapshot_time, now, max_age_seconds):
+            return None, None
+        return value, snapshot_time
+
+    @staticmethod
+    def _snapshot_input_from_future(snapshot_time: float, now: float) -> bool:
+        """Return True when one helper-fed source timestamp lies in the future."""
+        return not timestamp_not_future(
+            snapshot_time,
+            now,
+            UpdateCycleController.FUTURE_INPUT_TIMESTAMP_TOLERANCE_SECONDS,
+        )
+
+    @staticmethod
+    def _snapshot_input_too_old(
+        snapshot_time: float,
+        now: float,
+        max_age_seconds: float | None,
+    ) -> bool:
+        """Return True when one helper-fed source timestamp exceeds its max age."""
+        return max_age_seconds is not None and (float(now) - snapshot_time) > float(max_age_seconds)
+
+    @staticmethod
+    def _cached_input_from_service(
+        svc: Any,
+        last_value_attr: str,
+        last_at_attr: str,
+        now: float,
+        cache_max_age: float,
+    ) -> tuple[Any, bool]:
+        """Return a recent cached helper-fed value when direct input is unavailable."""
         last_value = getattr(svc, last_value_attr)
         last_at = getattr(svc, last_at_attr)
-        if last_value is not None and last_at is not None and (now - last_at) <= svc.auto_input_cache_seconds:
+        if (
+            last_value is not None
+            and last_at is not None
+            and last_at <= (float(now) + UpdateCycleController.FUTURE_INPUT_TIMESTAMP_TOLERANCE_SECONDS)
+            and (now - last_at) <= cache_max_age
+        ):
             return last_value, True
         return None, False
+
+    @staticmethod
+    def _auto_input_source_max_age_seconds(svc: Any, poll_interval_attr: str) -> float:
+        """Return the maximum tolerated age for one helper-fed source value."""
+        poll_interval_seconds = max(0.0, float(getattr(svc, poll_interval_attr, 0.0) or 0.0))
+        validation_seconds = max(0.0, float(getattr(svc, "auto_input_validation_poll_seconds", 30.0) or 30.0))
+        freshness_limit = validation_seconds if poll_interval_seconds <= 0.0 else min(
+            validation_seconds,
+            poll_interval_seconds * 2.0,
+        )
+        return max(1.0, freshness_limit)
 
     def resolve_auto_inputs(
         self,
@@ -265,6 +363,7 @@ class UpdateCycleController:
             "_last_pv_value",
             "_last_pv_at",
             now,
+            max_age_seconds=self._auto_input_source_max_age_seconds(svc, "auto_pv_poll_interval_seconds"),
         )
         grid_power, grid_cached = self.resolve_cached_input_value(
             svc,
@@ -273,6 +372,7 @@ class UpdateCycleController:
             "_last_grid_value",
             "_last_grid_at",
             now,
+            max_age_seconds=self._auto_input_source_max_age_seconds(svc, "auto_grid_poll_interval_seconds"),
         )
         battery_soc, battery_cached = self.resolve_cached_input_value(
             svc,
@@ -281,6 +381,7 @@ class UpdateCycleController:
             "_last_battery_soc_value",
             "_last_battery_soc_at",
             now,
+            max_age_seconds=self._auto_input_source_max_age_seconds(svc, "auto_battery_poll_interval_seconds"),
         )
         svc._auto_cached_inputs_used = pv_cached or grid_cached or battery_cached
         if svc._auto_cached_inputs_used:
@@ -288,68 +389,150 @@ class UpdateCycleController:
         return pv_power, battery_soc, grid_power
 
     @staticmethod
-    def log_auto_relay_change(svc: Any, desired_relay: bool) -> None:
-        """Log the current averaged Auto metrics when Auto changes relay state."""
-        metrics = svc._last_auto_metrics
-        logging.info(
-            "Auto relay %s reason=%s surplus=%sW grid=%sW soc=%s%%",
-            "ON" if desired_relay else "OFF",
-            svc._last_health_reason,
-            f"{metrics.get('surplus'):.0f}" if metrics.get("surplus") is not None else "na",
-            f"{metrics.get('grid'):.0f}" if metrics.get("grid") is not None else "na",
-            f"{metrics.get('soc'):.1f}" if metrics.get("soc") is not None else "na",
-        )
-
-    def apply_relay_decision(self, desired_relay, relay_on, pm_status, power, current, now, auto_mode_active):
-        """Queue relay changes and update optimistic local Shelly state."""
-        svc = self.service
-        if desired_relay == relay_on:
-            return relay_on, power, current
-
-        if auto_mode_active and svc.auto_audit_log:
-            self.log_auto_relay_change(svc, desired_relay)
-
-        try:
-            svc._queue_relay_command(desired_relay, now)
-        except Exception as error:  # pylint: disable=broad-except
-            svc._mark_failure("shelly")
-            svc._warning_throttled(
-                "shelly-switch-failed",
-                svc.auto_shelly_soft_fail_seconds,
-                "Shelly relay switch queue failed: %s",
-                error,
-                exc_info=error,
-            )
-            return relay_on, power, current
-
-        relay_on = desired_relay
-        pm_status = dict(pm_status)
-        pm_status["output"] = relay_on
-        if not relay_on:
-            power = 0.0
-            current = 0.0
-        svc._publish_local_pm_status(relay_on, now)
-        return relay_on, power, current
+    def _normalize_learned_charge_power_state(value: Any) -> str:
+        """Return one supported learned-power state string."""
+        return normalize_learning_state(value)
 
     @staticmethod
-    def derive_status_code(svc, relay_on, power, auto_mode_active):
-        """Translate relay/power state into the Venus EV charger status code."""
-        if relay_on and power >= svc.charging_threshold_watts:
-            return 2
-        if relay_on:
-            return svc.idle_status
-        return 4 if auto_mode_active else 6
+    def _normalize_learned_charge_power_phase(value: Any) -> str | None:
+        """Return one supported phase signature for a learned charging profile."""
+        return normalize_learning_phase(value)
 
-    def publish_online_update(self, status, energy_forward, relay_on, power, voltage, now):
-        """Publish live measurements and derived runtime state for an online Shelly status."""
-        svc = self.service
-        phase_data = self._phase_values(power, voltage, svc.phase, svc.voltage_mode)
-        total_current = self._total_phase_current(phase_data)
-
+    @staticmethod
+    def _set_learning_tracking(
+        svc: Any,
+        *,
+        state: str,
+        learned_power: float | None,
+        updated_at: float | None,
+        learning_since: float | None,
+        sample_count: int,
+        phase_signature: str | None,
+        voltage_signature: float | None,
+        signature_mismatch_sessions: int,
+        checked_session_started_at: float | None,
+    ) -> bool:
+        """Apply one coherent learned-power snapshot and report whether it changed."""
+        normalized = UpdateCycleController._normalized_learning_tracking_values(
+            state=state,
+            learned_power=learned_power,
+            updated_at=updated_at,
+            learning_since=learning_since,
+            sample_count=sample_count,
+            phase_signature=phase_signature,
+            voltage_signature=voltage_signature,
+            signature_mismatch_sessions=signature_mismatch_sessions,
+            checked_session_started_at=checked_session_started_at,
+        )
+        attr_map = {
+            "state": "learned_charge_power_state",
+            "power": "learned_charge_power_watts",
+            "updated_at": "learned_charge_power_updated_at",
+            "learning_since": "learned_charge_power_learning_since",
+            "sample_count": "learned_charge_power_sample_count",
+            "phase_signature": "learned_charge_power_phase",
+            "voltage_signature": "learned_charge_power_voltage",
+            "signature_mismatch_sessions": "learned_charge_power_signature_mismatch_sessions",
+            "checked_session_started_at": "learned_charge_power_signature_checked_session_started_at",
+        }
         changed = False
-        changed |= svc._publish_live_measurements(power, voltage, total_current, phase_data, now)
-        changed |= self.update_virtual_state(status, energy_forward, relay_on)
+        for key, attr_name in attr_map.items():
+            if getattr(svc, attr_name, None) != normalized[key]:
+                changed = True
+            setattr(svc, attr_name, normalized[key])
         return changed
+
+    @staticmethod
+    def _normalized_learning_power_value(value: Any) -> float | None:
+        """Return the normalized learned charging power in watts."""
+        return None if value is None else round(float(value), 1)
+
+    @staticmethod
+    def _normalized_learning_timestamp(value: Any) -> float | None:
+        """Return one normalized learned-power timestamp."""
+        return None if value is None else float(value)
+
+    @staticmethod
+    def _normalized_learning_count(value: Any) -> int:
+        """Return one normalized non-negative learning counter."""
+        return max(0, int(value))
+
+    @staticmethod
+    def _normalized_learning_tracking_values(**values: Any) -> dict[str, Any]:
+        """Normalize one coherent learned-power snapshot before storing it on the service."""
+        return {
+            "state": UpdateCycleController._normalize_learned_charge_power_state(values["state"]),
+            "power": UpdateCycleController._normalized_learning_power_value(values["learned_power"]),
+            "updated_at": UpdateCycleController._normalized_learning_timestamp(values["updated_at"]),
+            "learning_since": UpdateCycleController._normalized_learning_timestamp(values["learning_since"]),
+            "sample_count": UpdateCycleController._normalized_learning_count(values["sample_count"]),
+            "phase_signature": UpdateCycleController._normalize_learned_charge_power_phase(values["phase_signature"]),
+            "voltage_signature": UpdateCycleController._normalized_learning_power_value(values["voltage_signature"]),
+            "signature_mismatch_sessions": UpdateCycleController._normalized_learning_count(
+                values["signature_mismatch_sessions"]
+            ),
+            "checked_session_started_at": UpdateCycleController._normalized_learning_timestamp(
+                values["checked_session_started_at"]
+            ),
+        }
+
+    @classmethod
+    def _learning_stability_tolerance(cls, reference_power: float) -> float:
+        """Return the allowed measurement deviation before learning restarts."""
+        return max(
+            float(cls.LEARNED_POWER_STABLE_TOLERANCE_WATTS),
+            abs(float(reference_power)) * float(cls.LEARNED_POWER_STABLE_TOLERANCE_RATIO),
+        )
+
+    @staticmethod
+    def _learning_phase_count(phase: str) -> float:
+        """Return the configured number of charging phases for plausibility checks."""
+        return 3.0 if str(phase).strip().upper() == "3P" else 1.0
+
+    def _current_learning_phase_signature(self) -> str | None:
+        """Return the configured phase signature used for learned-power validation."""
+        return self._normalize_learned_charge_power_phase(getattr(self.service, "phase", "L1"))
+
+    def _current_learning_voltage_signature(self, voltage: float) -> float | None:
+        """Return the best current voltage signature for learned-power tracking."""
+        if float(voltage) > 0:
+            return float(voltage)
+        last_voltage = getattr(self.service, "_last_voltage", None)
+        if last_voltage is None or float(last_voltage) <= 0:
+            return None
+        return float(last_voltage)
+
+    @classmethod
+    def _voltage_signature_tolerance(cls, reference_voltage: float) -> float:
+        """Return the allowed voltage drift before a learned signature counts as changed."""
+        return max(
+            float(cls.LEARNED_POWER_VOLTAGE_TOLERANCE_VOLTS),
+            abs(float(reference_voltage)) * float(cls.LEARNED_POWER_STABLE_TOLERANCE_RATIO),
+        )
+
+    def _plausible_learning_power_max(self, voltage: float) -> float:
+        """Return a conservative upper bound for a valid charging-power sample."""
+        svc = self.service
+        effective_voltage = float(voltage) if float(voltage) > 0 else float(getattr(svc, "_last_voltage", 230.0) or 230.0)
+        if self._learning_phase_count(getattr(svc, "phase", "L1")) == 3.0 and str(
+            getattr(svc, "voltage_mode", "phase")
+        ).strip().lower() != "phase":
+            effective_voltage = effective_voltage / math.sqrt(3.0)
+        phase_count = self._learning_phase_count(getattr(svc, "phase", "L1"))
+        max_current = max(float(getattr(svc, "max_current", 16.0)), 0.0)
+        # Allow modest sensor drift while still rejecting obviously impossible spikes.
+        return max_current * effective_voltage * phase_count * 1.1
+
+    def _is_learned_charge_power_stale(self, now: float) -> bool:
+        """Return True when the persisted learned value is too old for reuse."""
+        svc = self.service
+        max_age_seconds = float(getattr(svc, "auto_learn_charge_power_max_age_seconds", 21600.0))
+        if max_age_seconds <= 0:
+            return False
+        updated_at = getattr(svc, "learned_charge_power_updated_at", None)
+        if updated_at is None:
+            return True
+        return (float(now) - float(updated_at)) > max_age_seconds
 
     @staticmethod
     def complete_update_cycle(svc, changed, now, relay_on, power, current, status, pv_power, battery_soc, grid_power):
@@ -388,16 +571,27 @@ class UpdateCycleController:
             if pm_status is None:
                 return self.publish_offline_update(now)
 
-            relay_on, power, voltage, current, energy_forward = self.extract_pm_measurements(svc, pm_status)
-            pm_status = self.apply_startup_manual_target(pm_status, now)
-            relay_on, power, voltage, current, energy_forward = self.extract_pm_measurements(svc, pm_status)
-            if voltage > 0.0:
-                svc._last_voltage = voltage
-            auto_mode_active = svc._mode_uses_auto_logic(svc.virtual_mode)
+            (
+                pm_status,
+                relay_on,
+                power,
+                voltage,
+                current,
+                energy_forward,
+                pm_confirmed,
+                auto_mode_active,
+            ) = self._prepared_online_update_state(pm_status, now)
+            learning_state_changed = self._refresh_learning_before_decision(
+                relay_on,
+                power,
+                voltage,
+                now,
+                pm_confirmed,
+            )
             pv_power, battery_soc, grid_power = self.resolve_auto_inputs(worker_snapshot, now, auto_mode_active)
 
             desired_relay = svc._auto_decide_relay(relay_on, pv_power, battery_soc, grid_power)
-            relay_on, power, current = self.apply_relay_decision(
+            relay_on, power, current, relay_confirmed = self.apply_relay_decision(
                 desired_relay,
                 relay_on,
                 pm_status,
@@ -406,8 +600,19 @@ class UpdateCycleController:
                 now,
                 auto_mode_active,
             )
+            self._apply_relay_sync_health(relay_on, relay_confirmed, now)
             status = self.derive_status_code(svc, relay_on, power, auto_mode_active)
             changed = self.publish_online_update(status, energy_forward, relay_on, power, voltage, now)
+            learning_updated = self.update_learned_charge_power(
+                relay_on,
+                status,
+                power,
+                voltage,
+                now,
+                pm_confirmed=relay_confirmed,
+            )
+            if learning_state_changed or learning_updated:
+                svc._save_runtime_state()
             self.complete_update_cycle(
                 svc,
                 changed,
@@ -428,3 +633,48 @@ class UpdateCycleController:
                 exc_info=error,
             )
         return True
+
+    def _prepared_online_update_state(
+        self,
+        pm_status: dict[str, Any],
+        now: float,
+    ) -> tuple[dict[str, Any], bool, float, float, float, float, bool, bool]:
+        """Return normalized online-update state after startup target handling."""
+        svc = self.service
+        relay_on, power, voltage, current, energy_forward = self.extract_pm_measurements(svc, pm_status)
+        pm_status = self.apply_startup_manual_target(pm_status, now)
+        relay_on, power, voltage, current, energy_forward = self.extract_pm_measurements(svc, pm_status)
+        pm_confirmed = self._pm_status_confirmed(pm_status)
+        if voltage > 0.0:
+            svc._last_voltage = voltage
+        auto_mode_active = svc._mode_uses_auto_logic(svc.virtual_mode)
+        return pm_status, relay_on, power, voltage, current, energy_forward, pm_confirmed, auto_mode_active
+
+    def _refresh_learning_before_decision(
+        self,
+        relay_on: bool,
+        power: float,
+        voltage: float,
+        now: float,
+        pm_confirmed: bool,
+    ) -> bool:
+        """Refresh learned-power state before Auto decides on relay changes."""
+        learning_state_changed = self.refresh_learned_charge_power_state(now)
+        learning_state_changed |= self.reconcile_learned_charge_power_signature(
+            relay_on,
+            power,
+            voltage,
+            now,
+            pm_confirmed=pm_confirmed,
+        )
+        return learning_state_changed
+
+    def _apply_relay_sync_health(self, relay_on: bool, relay_confirmed: bool, now: float) -> None:
+        """Publish one relay-sync health override when needed."""
+        relay_sync_health = self.relay_sync_health_override(
+            relay_on,
+            relay_confirmed,
+            now,
+        )
+        if relay_sync_health is not None:
+            self.service._set_health(relay_sync_health, cached=False)

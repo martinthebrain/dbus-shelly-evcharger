@@ -53,7 +53,7 @@ class UpdateCycleMixin(ServiceControllerFactoryMixin):
         self._ensure_update_controller()
         return self._update_controller.extract_pm_measurements(self, pm_status)
 
-    def _resolve_cached_input_value(self, value, snapshot_at, last_value_attr, last_at_attr, now):
+    def _resolve_cached_input_value(self, value, snapshot_at, last_value_attr, last_at_attr, now, max_age_seconds=None):
         self._ensure_update_controller()
         return self._update_controller.resolve_cached_input_value(
             self,
@@ -62,38 +62,51 @@ class UpdateCycleMixin(ServiceControllerFactoryMixin):
             last_value_attr,
             last_at_attr,
             now,
+            max_age_seconds=max_age_seconds,
         )
 
-    def _resolve_auto_inputs(self, worker_snapshot, now):
+    def _resolve_auto_inputs(self, worker_snapshot, now, auto_mode_active):
         self._ensure_update_controller()
-        return self._update_controller.resolve_auto_inputs(worker_snapshot, now)
+        return self._update_controller.resolve_auto_inputs(worker_snapshot, now, auto_mode_active)
 
-    def _log_auto_relay_change(self, desired_relay, relay_on, pv_power, battery_soc, grid_power):
+    def _log_auto_relay_change(self, desired_relay):
         self._ensure_update_controller()
-        return self._update_controller.log_auto_relay_change(
-            self,
+        return self._update_controller.log_auto_relay_change(self, desired_relay)
+
+    def _apply_relay_decision(self, desired_relay, relay_on, pm_status, power, current, now, auto_mode_active):
+        self._ensure_update_controller()
+        return self._update_controller.apply_relay_decision(
             desired_relay,
             relay_on,
+            pm_status,
+            power,
+            current,
+            now,
+            auto_mode_active,
+        )
+
+    def _derive_status_code(self, relay_on, power, auto_mode_active):
+        self._ensure_update_controller()
+        return self._update_controller.derive_status_code(self, relay_on, power, auto_mode_active)
+
+    def _publish_online_update(self, status, energy_forward, relay_on, power, voltage, now):
+        self._ensure_update_controller()
+        return self._update_controller.publish_online_update(status, energy_forward, relay_on, power, voltage, now)
+
+    def _complete_update_cycle(self, changed, now, relay_on, power, current, status, pv_power, battery_soc, grid_power):
+        self._ensure_update_controller()
+        return self._update_controller.complete_update_cycle(
+            self,
+            changed,
+            now,
+            relay_on,
+            power,
+            current,
+            status,
             pv_power,
             battery_soc,
             grid_power,
         )
-
-    def _apply_relay_decision(self, desired_relay, relay_on, now):
-        self._ensure_update_controller()
-        return self._update_controller.apply_relay_decision(desired_relay, relay_on, now)
-
-    def _derive_status_code(self, relay_on, power):
-        self._ensure_update_controller()
-        return self._update_controller.derive_status_code(self, relay_on, power)
-
-    def _publish_online_update(self, pm_status, now):
-        self._ensure_update_controller()
-        return self._update_controller.publish_online_update(pm_status, now)
-
-    def _complete_update_cycle(self, changed):
-        self._ensure_update_controller()
-        return self._update_controller.complete_update_cycle(self, changed)
 
     def _sign_of_life(self):
         self._ensure_update_controller()

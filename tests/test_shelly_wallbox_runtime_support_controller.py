@@ -19,6 +19,16 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertEqual(service._worker_poll_interval_seconds, 1.0)
         self.assertIsNotNone(service._worker_snapshot_lock)
         self.assertEqual(service._worker_snapshot["captured_at"], 0.0)
+        self.assertFalse(service._worker_snapshot["pm_confirmed"])
+        self.assertFalse(service._last_pm_status_confirmed)
+        self.assertIsNone(service._last_confirmed_pm_status)
+        self.assertIsNone(service._last_confirmed_pm_status_at)
+        self.assertEqual(service._last_auto_state, "idle")
+        self.assertEqual(service._last_auto_state_code, 0)
+        self.assertEqual(service.relay_sync_timeout_seconds, 3.0)
+        self.assertIsNone(service._relay_sync_expected_state)
+        self.assertIsNone(service._auto_input_snapshot_last_captured_at)
+        self.assertIsNone(service._auto_input_snapshot_version)
 
         partial_service = SimpleNamespace(poll_interval_ms=500, deviceinstance=61)
         partial_controller = RuntimeSupportController(partial_service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
@@ -26,6 +36,12 @@ class TestRuntimeSupportController(unittest.TestCase):
         partial_controller.ensure_observability_state()
         self.assertEqual(partial_service.auto_input_snapshot_path, "/run/dbus-shelly-wallbox-auto-61.json")
         self.assertIn("cache_hits", partial_service._error_state)
+        self.assertFalse(partial_service._worker_snapshot["pm_confirmed"])
+        self.assertFalse(partial_service._last_pm_status_confirmed)
+        self.assertIsNone(partial_service._last_confirmed_pm_status)
+        self.assertIsNone(partial_service._last_confirmed_pm_status_at)
+        self.assertIsNone(partial_service._auto_input_snapshot_last_captured_at)
+        self.assertIsNone(partial_service._auto_input_snapshot_version)
 
         snapshot = {"captured_at": 1.0, "pm_status": {"output": True}}
         partial_service._ensure_worker_state = MagicMock()
@@ -52,6 +68,33 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertFalse(partial_controller.source_retry_ready("dbus", 100.0))
         self.assertTrue(partial_controller.source_retry_ready("dbus", 106.0))
 
+    def test_worker_snapshot_contract_normalizes_pm_invariants(self):
+        partial_service = SimpleNamespace(poll_interval_ms=500, deviceinstance=61, _time_now=lambda: 100.0)
+        controller = RuntimeSupportController(partial_service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+        controller.ensure_worker_state()
+        partial_service._ensure_worker_state = MagicMock()
+
+        controller.set_worker_snapshot(
+            {
+                "captured_at": 10.0,
+                "pm_captured_at": 12.0,
+                "pm_status": {"apower": 1800.0},
+                "pm_confirmed": True,
+            }
+        )
+        snapshot = controller.get_worker_snapshot()
+        self.assertEqual(snapshot["captured_at"], 10.0)
+        self.assertIsNone(snapshot["pm_status"])
+        self.assertIsNone(snapshot["pm_captured_at"])
+        self.assertFalse(snapshot["pm_confirmed"])
+
+        controller.update_worker_snapshot(captured_at=20.0, pm_status={"output": True}, pm_confirmed=True)
+        snapshot = controller.get_worker_snapshot()
+        self.assertEqual(snapshot["captured_at"], 20.0)
+        self.assertEqual(snapshot["pm_captured_at"], 20.0)
+        self.assertEqual(snapshot["pm_status"], {"output": True})
+        self.assertTrue(snapshot["pm_confirmed"])
+
     def test_audit_helpers_and_watchdog_cover_remaining_branches(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/auto.log"
@@ -63,7 +106,7 @@ class TestRuntimeSupportController(unittest.TestCase):
                 auto_audit_log_path=path,
                 auto_audit_log_max_age_hours=0.0,
                 auto_audit_log_repeat_seconds=0.0,
-                _last_auto_audit_key=("waiting", None, 0, 1, 1, 1, 1, None, None),
+                _last_auto_audit_key=("waiting", None, 0, 0, 1, 1, 1, "idle", None, None, None, None, None, None, None),
                 _last_auto_audit_event_at=995.0,
                 auto_watchdog_stale_seconds=0.0,
                 started_at=900.0,
@@ -72,9 +115,19 @@ class TestRuntimeSupportController(unittest.TestCase):
             )
             controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 10, lambda *_args, **_kwargs: 0)
 
-            self.assertEqual(controller._relay_state_for_audit(service), 1)
+            self.assertEqual(controller._relay_state_for_audit(service), 0)
             self.assertIn("surplus=na", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
             self.assertIn("detail=na", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn("state=idle", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn("relay=0", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn(
+                "threshold_mode=na",
+                controller._format_auto_audit_line(service, "waiting", False, 1000.0),
+            )
+            self.assertIn(
+                "learned_charge_power_state=na",
+                controller._format_auto_audit_line(service, "waiting", False, 1000.0),
+            )
             self.assertEqual(
                 controller._prune_auto_audit_payload(["", "bad-line", "500\told\n", "1500\tnew\n"], 1000.0),
                 ["bad-line", "1500\tnew\n"],
@@ -100,7 +153,7 @@ class TestRuntimeSupportController(unittest.TestCase):
             service._last_auto_audit_cleanup_at = 0.0
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write("1\told\n")
-            with patch("dbus_shelly_wallbox_runtime_support.write_text_atomically", side_effect=RuntimeError("boom")):
+            with patch("dbus_shelly_wallbox_runtime_audit.write_text_atomically", side_effect=RuntimeError("boom")):
                 controller._cleanup_auto_audit_log(10000.0)
 
             service.auto_watchdog_stale_seconds = 10.0
@@ -110,6 +163,67 @@ class TestRuntimeSupportController(unittest.TestCase):
             service._is_update_stale = lambda now: True
             controller.watchdog_recover(20.0)
             service._reset_system_bus.assert_called_once_with()
+
+    def test_audit_prefers_last_confirmed_relay_state_over_local_placeholder(self):
+        service = make_runtime_support_service(
+            _last_pm_status={"output": True},
+            _last_pm_status_confirmed=False,
+            _last_confirmed_pm_status={"output": False},
+            _last_confirmed_pm_status_at=95.0,
+            virtual_startstop=1,
+        )
+        controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+
+        self.assertEqual(controller._relay_state_for_audit(service), 0)
+        self.assertIn("relay=0", controller._format_auto_audit_line(service, "waiting", False, 100.0))
+
+    def test_audit_normalizes_state_and_sanitizes_invalid_threshold_metrics(self):
+        service = make_runtime_support_service(
+            _last_auto_state="odd-state",
+            _last_auto_state_code=99,
+            _last_auto_metrics={
+                "surplus": "bad",
+                "grid": -900.0,
+                "soc": 150.0,
+                "profile": 7,
+                "start_threshold": 1200.0,
+                "stop_threshold": 1850.0,
+                "learned_charge_power": -1.0,
+                "learned_charge_power_state": "mystery",
+                "threshold_scale": "bad",
+                "threshold_mode": 4,
+            },
+        )
+        controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+
+        line = controller._format_auto_audit_line(service, "waiting", False, 100.0)
+        audit_key = controller._auto_audit_key(service, "waiting", False)
+
+        self.assertIn("state=idle", line)
+        self.assertIn("profile=7", line)
+        self.assertIn("surplus=na", line)
+        self.assertIn("soc=na", line)
+        self.assertIn("start_threshold=na", line)
+        self.assertIn("stop_threshold=na", line)
+        self.assertIn("learned_charge_power=na", line)
+        self.assertIn("learned_charge_power_state=unknown", line)
+        self.assertIn("threshold_scale=na", line)
+        self.assertEqual(audit_key[7], "idle")
+        self.assertIsNone(audit_key[12])
+        self.assertIsNone(audit_key[13])
+        self.assertIsNone(audit_key[14])
+
+    def test_audit_ignores_stale_confirmed_relay_state_instead_of_virtual_placeholder(self):
+        service = make_runtime_support_service(
+            _time_now=lambda: 100.0,
+            _last_confirmed_pm_status={"output": True},
+            _last_confirmed_pm_status_at=80.0,
+            virtual_startstop=1,
+        )
+        controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+
+        self.assertEqual(controller._relay_state_for_audit(service), 0)
+        self.assertIn("relay=0", controller._format_auto_audit_line(service, "waiting", False, 100.0))
 
     def test_audit_and_watchdog_early_returns_cover_remaining_branches(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -155,6 +269,10 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertEqual(warning_mock.call_count, 2)
         self.assertEqual(service._warning_state["worker-failed"], 131.0)
 
+    def test_bucket_metric_returns_raw_value_when_step_is_not_positive(self):
+        self.assertEqual(RuntimeSupportController._bucket_metric(1.23, step=0.0), 1.23)
+        self.assertIsNone(RuntimeSupportController._bucket_metric(None, step=50.0))
+
     def test_write_auto_audit_event_deduplicates_identical_reason_within_repeat_window(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/auto-reasons.log"
@@ -175,6 +293,10 @@ class TestRuntimeSupportController(unittest.TestCase):
                 "profile": "normal",
                 "start_threshold": 1850.0,
                 "stop_threshold": 1350.0,
+                "learned_charge_power": None,
+                "learned_charge_power_state": "unknown",
+                "threshold_scale": 1.0,
+                "threshold_mode": "static",
             }
             controller.write_auto_audit_event("waiting-surplus", cached=False)
 
@@ -204,6 +326,10 @@ class TestRuntimeSupportController(unittest.TestCase):
                 "profile": "normal",
                 "start_threshold": 1850.0,
                 "stop_threshold": 1350.0,
+                "learned_charge_power": None,
+                "learned_charge_power_state": "unknown",
+                "threshold_scale": 1.0,
+                "threshold_mode": "static",
             }
             controller.write_auto_audit_event("waiting-surplus", cached=False)
 
@@ -212,6 +338,41 @@ class TestRuntimeSupportController(unittest.TestCase):
 
         self.assertEqual(len(lines), 2)
         self.assertTrue(all("reason=waiting-surplus" in line for line in lines))
+
+    def test_write_auto_audit_event_repeats_same_reason_when_threshold_bucket_changes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = f"{temp_dir}/auto-reasons.log"
+            current_time = [1000.0]
+            service = make_runtime_support_service(
+                _time_now=lambda: current_time[0],
+                auto_audit_log_path=path,
+                _last_auto_metrics=make_auto_metrics(
+                    learned_charge_power=1900.0,
+                    learned_charge_power_state="stable",
+                    threshold_scale=1.0,
+                    threshold_mode="adaptive",
+                ),
+            )
+
+            controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+            controller.write_auto_audit_event("waiting-surplus", cached=False)
+            current_time[0] = 1005.0
+            service._last_auto_metrics = make_auto_metrics(
+                start_threshold=1980.0,
+                stop_threshold=960.0,
+                learned_charge_power=2280.0,
+                learned_charge_power_state="stable",
+                threshold_scale=1.2,
+                threshold_mode="adaptive",
+            )
+            controller.write_auto_audit_event("waiting-surplus", cached=False)
+
+            with open(path, "r", encoding="utf-8") as handle:
+                lines = handle.readlines()
+
+        self.assertEqual(len(lines), 2)
+        self.assertIn("threshold_scale=1.000", lines[0])
+        self.assertIn("threshold_scale=1.200", lines[1])
 
     def test_write_auto_audit_event_prunes_old_entries_by_age(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -253,6 +414,10 @@ class TestRuntimeSupportController(unittest.TestCase):
                     profile="high-soc",
                     start_threshold=1650.0,
                     stop_threshold=800.0,
+                    learned_charge_power=2280.0,
+                    learned_charge_power_state="stable",
+                    threshold_scale=1.2,
+                    threshold_mode="adaptive",
                     stop_alpha=0.15,
                     stop_alpha_stage="volatile",
                     surplus_volatility=520.0,
@@ -269,6 +434,10 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertIn("profile=high-soc", payload)
         self.assertIn("start_threshold=1650W", payload)
         self.assertIn("stop_threshold=800W", payload)
+        self.assertIn("learned_charge_power=2280W", payload)
+        self.assertIn("learned_charge_power_state=stable", payload)
+        self.assertIn("threshold_scale=1.200", payload)
+        self.assertIn("threshold_mode=adaptive", payload)
         self.assertIn("stop_alpha=0.15", payload)
         self.assertIn("stop_alpha_stage=volatile", payload)
         self.assertIn("surplus_volatility=520W", payload)
@@ -309,6 +478,10 @@ class TestRuntimeSupportController(unittest.TestCase):
                 "profile": "normal",
                 "start_threshold": 1850.0,
                 "stop_threshold": 1350.0,
+                "learned_charge_power": None,
+                "learned_charge_power_state": "unknown",
+                "threshold_scale": 1.0,
+                "threshold_mode": "static",
             }
             controller.write_auto_audit_event("auto-stop", cached=False)
 

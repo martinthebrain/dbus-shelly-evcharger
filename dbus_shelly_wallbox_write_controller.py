@@ -11,12 +11,65 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from dbus_shelly_wallbox_contracts import write_failure_is_reversible
+from dbus_shelly_wallbox_write_snapshot import (
+    SNAPSHOT_ATTRS,
+    SNAPSHOT_DBUS_PATHS,
+    SNAPSHOT_DEQUE_ATTRS,
+    SNAPSHOT_MAPPING_ATTRS,
+    SNAPSHOT_VALUE_ATTRS,
+    capture_write_state,
+    restore_write_state,
+)
+
 
 class DbusWriteController:
     """Encapsulate writable DBus path handling for the Shelly wallbox service."""
 
+    SNAPSHOT_DBUS_PATHS = SNAPSHOT_DBUS_PATHS
+    SNAPSHOT_ATTRS = SNAPSHOT_ATTRS
+    SNAPSHOT_DEQUE_ATTRS = SNAPSHOT_DEQUE_ATTRS
+    SNAPSHOT_VALUE_ATTRS = SNAPSHOT_VALUE_ATTRS
+    SNAPSHOT_MAPPING_ATTRS = SNAPSHOT_MAPPING_ATTRS
+
     def __init__(self, port: Any) -> None:
         self.port = port
+        self._relay_side_effect_started = False
+
+    @classmethod
+    def _snapshot_write_state(cls, svc: Any) -> dict[str, Any]:
+        """Capture mutable write-path state so failed writes can be rolled back."""
+        return capture_write_state(
+            svc,
+            attrs=cls.SNAPSHOT_ATTRS,
+            deque_attrs=cls.SNAPSHOT_DEQUE_ATTRS,
+            value_attrs=cls.SNAPSHOT_VALUE_ATTRS,
+            mapping_attrs=cls.SNAPSHOT_MAPPING_ATTRS,
+            dbus_paths=cls.SNAPSHOT_DBUS_PATHS,
+        )
+
+    @staticmethod
+    def _restore_write_state(svc: Any, snapshot: dict[str, Any]) -> None:
+        """Restore one previously captured write-path snapshot."""
+        restore_write_state(svc, snapshot)
+
+    def _queue_relay_command(self, svc: Any, relay_on: bool, current_time: float) -> None:
+        """Queue one relay command and record that write handling became irreversible."""
+        svc._queue_relay_command(relay_on, current_time)
+        self._relay_side_effect_started = True
+
+    @staticmethod
+    def _publish_local_pm_status_best_effort(svc: Any, relay_on: bool, current_time: float) -> None:
+        """Try to publish one optimistic local relay placeholder without aborting the write."""
+        try:
+            svc.publish_local_pm_status(relay_on, current_time)
+        except Exception as error:  # pylint: disable=broad-except
+            logging.warning(
+                "Local relay placeholder publish failed after queuing relay=%s: %s",
+                int(bool(relay_on)),
+                error,
+                exc_info=error,
+            )
 
     @staticmethod
     def _log_normalized_mode(requested_mode: int, applied_mode: int) -> None:
@@ -40,10 +93,11 @@ class DbusWriteController:
     def _activate_auto_without_cutover(svc: Any) -> None:
         """Enter Auto mode without forcing a relay cutover."""
         svc.auto_mode_cutover_pending = False
+        svc.ignore_min_offtime_once = False
 
-    @staticmethod
-    def _queue_auto_cutover(svc: Any, current_time: float) -> None:
+    def _queue_auto_cutover(self, svc: Any, current_time: float) -> None:
         """Perform the clean manual-to-auto cutover while charging."""
+        self._queue_relay_command(svc, False, current_time)
         svc.virtual_enable = 1
         svc.virtual_startstop = 0
         svc.auto_mode_cutover_pending = True
@@ -51,19 +105,19 @@ class DbusWriteController:
         # Auto mode should take control from a known relay-off state. This
         # avoids inheriting a manual ON state and makes the next Auto start
         # decision explicit and visible in the logs.
-        svc._queue_relay_command(False, current_time)
-        svc._publish_local_pm_status(False, current_time)
+        self._publish_local_pm_status_best_effort(svc, False, current_time)
 
     def _handle_mode_transition_to_auto(self, previous_mode: int, current_time: float) -> None:
         """Apply side effects when switching into an Auto-controlled mode."""
         port = self.port
         if port.mode_uses_auto_logic(previous_mode):
             return
-        port.manual_override_until = 0.0
-        if port.virtual_startstop:
+        if port.relay_may_be_on_for_cutover():
             self._queue_auto_cutover(port, current_time)
+            port.manual_override_until = 0.0
             return
         self._activate_auto_without_cutover(port)
+        port.manual_override_until = 0.0
 
     @staticmethod
     def _snapshot_for_mode(svc: Any, current_time: float, auto_mode_active: bool) -> None:
@@ -111,40 +165,40 @@ class DbusWriteController:
         svc._publish_dbus_path("/Mode", svc.virtual_mode, current_time, force=True)
         DbusWriteController._publish_startstop_enable(svc, current_time, auto_mode_active)
 
-    @staticmethod
-    def _apply_auto_disable(svc: Any, current_time: float) -> None:
+    def _apply_auto_disable(self, svc: Any, current_time: float) -> None:
         """Queue a relay-off transition after an Auto deny request."""
-        svc._queue_relay_command(False, current_time)
+        self._queue_relay_command(svc, False, current_time)
+        svc.virtual_enable = 0
         svc.virtual_startstop = 0
-        svc._publish_local_pm_status(False, current_time)
+        self._publish_local_pm_status_best_effort(svc, False, current_time)
 
-    @staticmethod
-    def _apply_manual_startstop_request(svc: Any, wanted_on: bool, current_time: float) -> None:
+    def _apply_manual_startstop_request(self, svc: Any, wanted_on: bool, current_time: float) -> None:
         """Apply direct relay control in Manual mode."""
-        svc._queue_relay_command(wanted_on, current_time)
+        self._queue_relay_command(svc, wanted_on, current_time)
         svc.virtual_startstop = 1 if wanted_on else 0
         svc.virtual_enable = svc.virtual_startstop
         svc.manual_override_until = current_time + svc.auto_manual_override_seconds
-        svc._publish_local_pm_status(wanted_on, current_time)
+        self._publish_local_pm_status_best_effort(svc, wanted_on, current_time)
 
-    @staticmethod
-    def _apply_manual_enable_request(svc: Any, wanted_on: bool, current_time: float) -> None:
+    def _apply_manual_enable_request(self, svc: Any, wanted_on: bool, current_time: float) -> None:
         """Apply direct enable/disable control in Manual mode."""
-        svc.manual_override_until = current_time + svc.auto_manual_override_seconds
-        svc._queue_relay_command(wanted_on, current_time)
+        self._queue_relay_command(svc, wanted_on, current_time)
+        svc.virtual_enable = 1 if wanted_on else 0
         svc.virtual_startstop = 1 if wanted_on else 0
-        svc._publish_local_pm_status(wanted_on, current_time)
+        svc.manual_override_until = current_time + svc.auto_manual_override_seconds
+        self._publish_local_pm_status_best_effort(svc, wanted_on, current_time)
 
     def _handle_mode_write(self, requested_mode: int) -> None:
         port = self.port
         previous_mode = int(port.virtual_mode)
         current_time = port.time_now()
-        port.virtual_mode = port.normalize_mode(requested_mode)
-        auto_mode_active = port.mode_uses_auto_logic(port.virtual_mode)
-        self._log_normalized_mode(requested_mode, port.virtual_mode)
-        self._reset_auto_decision_state(port)
+        normalized_mode = port.normalize_mode(requested_mode)
+        auto_mode_active = port.mode_uses_auto_logic(normalized_mode)
+        self._log_normalized_mode(requested_mode, normalized_mode)
         if auto_mode_active:
             self._handle_mode_transition_to_auto(previous_mode, current_time)
+        port.virtual_mode = normalized_mode
+        self._reset_auto_decision_state(port)
         self._snapshot_for_mode(port, current_time, auto_mode_active)
         self._publish_mode_paths(port, current_time, auto_mode_active)
         logging.info(
@@ -172,9 +226,10 @@ class DbusWriteController:
             # In Auto, StartStop acts like an allow/deny request for the auto
             # controller. It must not bypass SOC/night/surplus checks by
             # forcing the relay on directly.
-            port.virtual_enable = 1 if wanted_on else 0
             if not wanted_on:
                 self._apply_auto_disable(port, current_time)
+            else:
+                port.virtual_enable = 1
             self._publish_startstop_enable(port, current_time, auto_mode_active=True)
         else:
             # In Manual, StartStop remains direct relay control.
@@ -190,10 +245,11 @@ class DbusWriteController:
     def _handle_enable_write(self, wanted_on: bool) -> None:
         port = self.port
         current_time = port.time_now()
-        port.virtual_enable = 1 if wanted_on else 0
         if port.mode_uses_auto_logic(port.virtual_mode):
             if not wanted_on:
                 self._apply_auto_disable(port, current_time)
+            else:
+                port.virtual_enable = 1
         else:
             self._apply_manual_enable_request(port, wanted_on, current_time)
         self._publish_startstop_enable(
@@ -224,22 +280,47 @@ class DbusWriteController:
             target_value = port.min_current
         port.publish_dbus_path(path, target_value, current_time, force=True)
 
+    def _execute_write(self, path: str, value: Any) -> None:
+        """Dispatch one writable DBus path to its dedicated handler."""
+        if path == "/Mode":
+            self._handle_mode_write(int(value))
+            return
+        if path == "/AutoStart":
+            self._handle_autostart_write(value)
+            return
+        if path == "/StartStop":
+            self._handle_startstop_write(bool(int(value)))
+            return
+        if path == "/Enable":
+            self._handle_enable_write(bool(int(value)))
+            return
+        if path in ("/SetCurrent", "/MaxCurrent", "/MinCurrent"):
+            self._handle_current_setting_write(path, value)
+
     def handle_write(self, path: str, value: Any) -> bool:
         """Handle writable DBus path updates from Venus OS."""
         port = self.port
+        snapshot = self._snapshot_write_state(port._service)
+        self._relay_side_effect_started = False
         try:
-            if path == "/Mode":
-                self._handle_mode_write(int(value))
-            elif path == "/AutoStart":
-                self._handle_autostart_write(value)
-            elif path == "/StartStop":
-                self._handle_startstop_write(bool(int(value)))
-            elif path == "/Enable":
-                self._handle_enable_write(bool(int(value)))
-            elif path in ("/SetCurrent", "/MaxCurrent", "/MinCurrent"):
-                self._handle_current_setting_write(path, value)
+            self._execute_write(path, value)
             port.save_runtime_state()
             return True
         except Exception as error:  # pylint: disable=broad-except
-            logging.warning("Write to %s=%s failed: %s", path, value, error, exc_info=error)
-            return False
+            if write_failure_is_reversible(self._relay_side_effect_started):
+                self._restore_write_state(port._service, snapshot)
+                logging.warning("Write to %s=%s failed: %s", path, value, error, exc_info=error)
+                return False
+            logging.warning(
+                "Write to %s=%s failed after relay side effects started; keeping in-flight state: %s",
+                path,
+                value,
+                error,
+                exc_info=error,
+            )
+            # Once a relay transition was accepted by the worker queue, the DBus
+            # write is no longer safely reversible. Report success so callers do
+            # not treat an in-flight transition as if it had been rejected.
+            return True
+        finally:
+            self._relay_side_effect_started = False

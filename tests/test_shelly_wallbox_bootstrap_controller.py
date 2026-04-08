@@ -111,6 +111,8 @@ class TestServiceBootstrapController(unittest.TestCase):
             virtual_enable=1,
             _last_health_reason="init",
             _last_health_code=0,
+            _last_auto_state="idle",
+            _last_auto_state_code=0,
             _handle_write=MagicMock(),
         )
 
@@ -119,6 +121,8 @@ class TestServiceBootstrapController(unittest.TestCase):
 
         self.assertEqual(service._dbusservice.paths["/Mgmt/ProcessName"]["value"], "/tmp/dbus_shelly_wallbox.py")
         self.assertEqual(service._dbusservice.paths["/Mode"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/State"]["value"], "idle")
+        self.assertEqual(service._dbusservice.paths["/Auto/StateCode"]["value"], 0)
         self.assertTrue(service._dbusservice.paths["/Mode"]["writeable"])
         self.assertTrue(service._dbusservice.register_called)
 
@@ -155,6 +159,15 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service.virtual_enable, 0)
         self.assertEqual(service.virtual_set_current, 12.5)
         self.assertEqual(list(service.auto_samples), [])
+        self.assertIsNone(service.learned_charge_power_watts)
+        self.assertIsNone(service.learned_charge_power_updated_at)
+        self.assertEqual(service.learned_charge_power_state, "unknown")
+        self.assertIsNone(service.learned_charge_power_learning_since)
+        self.assertEqual(service.learned_charge_power_sample_count, 0)
+        self.assertIsNone(service.learned_charge_power_phase)
+        self.assertIsNone(service.learned_charge_power_voltage)
+        self.assertEqual(service.learned_charge_power_signature_mismatch_sessions, 0)
+        self.assertIsNone(service.learned_charge_power_signature_checked_session_started_at)
         self.assertIsNone(service.relay_last_changed_at)
         self.assertFalse(service._auto_mode_cutover_pending)
 
@@ -291,6 +304,13 @@ class TestServiceBootstrapController(unittest.TestCase):
                     "AutoStopEwmaAlphaVolatile": "0.2",
                     "AutoStopSurplusVolatilityLowWatts": "120",
                     "AutoStopSurplusVolatilityHighWatts": "380",
+                    "AutoLearnChargePower": "1",
+                    "AutoReferenceChargePowerWatts": "2050",
+                    "AutoLearnChargePowerMinWatts": "650",
+                    "AutoLearnChargePowerAlpha": "0.3",
+                    "AutoLearnChargePowerStartDelaySeconds": "40",
+                    "AutoLearnChargePowerWindowSeconds": "120",
+                    "AutoLearnChargePowerMaxAgeSeconds": "1800",
                     "AutoInputCacheSeconds": "150",
                     "AutoAuditLog": "1",
                     "AutoAuditLogPath": "/tmp/auto.log",
@@ -332,6 +352,13 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service.auto_stop_ewma_alpha_volatile, 0.2)
         self.assertEqual(service.auto_stop_surplus_volatility_low_watts, 120.0)
         self.assertEqual(service.auto_stop_surplus_volatility_high_watts, 380.0)
+        self.assertTrue(service.auto_learn_charge_power_enabled)
+        self.assertEqual(service.auto_reference_charge_power_watts, 2050.0)
+        self.assertEqual(service.auto_learn_charge_power_min_watts, 650.0)
+        self.assertEqual(service.auto_learn_charge_power_alpha, 0.3)
+        self.assertEqual(service.auto_learn_charge_power_start_delay_seconds, 40.0)
+        self.assertEqual(service.auto_learn_charge_power_window_seconds, 120.0)
+        self.assertEqual(service.auto_learn_charge_power_max_age_seconds, 1800.0)
         self.assertEqual(service.auto_input_cache_seconds, 150.0)
         self.assertTrue(service.auto_audit_log)
         self.assertEqual(service.auto_audit_log_path, "/tmp/auto.log")
@@ -359,6 +386,12 @@ class TestServiceBootstrapController(unittest.TestCase):
                     "AutoStopEwmaAlphaVolatile": "-1",
                     "AutoStopSurplusVolatilityLowWatts": "200",
                     "AutoStopSurplusVolatilityHighWatts": "100",
+                    "AutoReferenceChargePowerWatts": "-1",
+                    "AutoLearnChargePowerMinWatts": "-1",
+                    "AutoLearnChargePowerAlpha": "-1",
+                    "AutoLearnChargePowerStartDelaySeconds": "-1",
+                    "AutoLearnChargePowerWindowSeconds": "-1",
+                    "AutoLearnChargePowerMaxAgeSeconds": "-1",
                 }
             }
         )
@@ -376,6 +409,12 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service.auto_policy.ewma.stable_alpha, 0.55)
         self.assertEqual(service.auto_policy.ewma.volatile_alpha, 0.15)
         self.assertEqual(service.auto_policy.ewma.volatility_high_watts, 200.0)
+        self.assertEqual(service.auto_policy.learn_charge_power.reference_power_watts, 1900.0)
+        self.assertEqual(service.auto_policy.learn_charge_power.min_watts, 0.0)
+        self.assertEqual(service.auto_policy.learn_charge_power.alpha, 0.2)
+        self.assertEqual(service.auto_policy.learn_charge_power.start_delay_seconds, 0.0)
+        self.assertEqual(service.auto_policy.learn_charge_power.window_seconds, 0.0)
+        self.assertEqual(service.auto_policy.learn_charge_power.max_age_seconds, 0.0)
         self.assertEqual(len(service.auto_month_windows), len(MONTH_WINDOW_DEFAULTS))
 
     def test_load_runtime_configuration_populates_identity_sources_and_helper_settings(self):
@@ -426,6 +465,10 @@ class TestServiceBootstrapController(unittest.TestCase):
                     "AutoGridMissingStopSeconds": "33",
                     "AutoGridRecoveryStartSeconds": "14",
                     "AutoInputSnapshotPath": "/tmp/auto.json",
+                    "AutoPvPollIntervalMs": "2200",
+                    "AutoGridPollIntervalMs": "3300",
+                    "AutoBatteryPollIntervalMs": "4400",
+                    "AutoInputValidationPollSeconds": "45",
                     "AutoInputHelperRestartSeconds": "8",
                     "AutoInputHelperStaleSeconds": "19",
                     "AutoShellySoftFailSeconds": "17",
@@ -488,6 +531,10 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service.auto_grid_missing_stop_seconds, 33.0)
         self.assertEqual(service.auto_grid_recovery_start_seconds, 14.0)
         self.assertEqual(service.auto_input_snapshot_path, "/tmp/auto.json")
+        self.assertEqual(service.auto_pv_poll_interval_seconds, 2.2)
+        self.assertEqual(service.auto_grid_poll_interval_seconds, 3.3)
+        self.assertEqual(service.auto_battery_poll_interval_seconds, 4.4)
+        self.assertEqual(service.auto_input_validation_poll_seconds, 45.0)
         self.assertEqual(service.auto_input_helper_restart_seconds, 8.0)
         self.assertEqual(service.auto_input_helper_stale_seconds, 19.0)
         self.assertEqual(service.auto_shelly_soft_fail_seconds, 17.0)

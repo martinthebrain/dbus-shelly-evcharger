@@ -1,0 +1,196 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Small controller ports that decouple controllers from the full service object."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+from dbus_shelly_wallbox_contracts import non_negative_int, normalize_binary_flag, normalized_auto_state_pair
+from dbus_shelly_wallbox_ports_base import _ControllerBoundPort
+
+class AutoDecisionPort(_ControllerBoundPort):
+    """Expose the Auto-decision surface needed by ``AutoDecisionController``."""
+
+    _ALLOWED_ATTRS = {
+        "auto_samples",
+        "auto_average_window_seconds",
+        "relay_last_changed_at",
+        "relay_last_off_at",
+        "auto_start_condition_since",
+        "auto_stop_condition_since",
+        "auto_stop_condition_reason",
+        "_last_health_reason",
+        "_last_health_code",
+        "_last_auto_state",
+        "_last_auto_state_code",
+        "_last_pm_status_confirmed",
+        "_last_confirmed_pm_status",
+        "_last_confirmed_pm_status_at",
+        "auto_shelly_soft_fail_seconds",
+        "auto_min_runtime_seconds",
+        "auto_min_offtime_seconds",
+        "_last_grid_at",
+        "_grid_recovery_required",
+        "_grid_recovery_since",
+        "auto_grid_missing_stop_seconds",
+        "auto_grid_recovery_start_seconds",
+        "virtual_mode",
+        "_auto_mode_cutover_pending",
+        "_ignore_min_offtime_once",
+        "_last_battery_allow_warning",
+        "auto_allow_without_battery_soc",
+        "auto_battery_scan_interval_seconds",
+        "auto_resume_soc",
+        "auto_min_soc",
+        "auto_high_soc_threshold",
+        "auto_high_soc_release_threshold",
+        "auto_high_soc_start_surplus_watts",
+        "auto_high_soc_stop_surplus_watts",
+        "auto_stop_delay_seconds",
+        "auto_stop_grid_import_watts",
+        "auto_stop_surplus_delay_seconds",
+        "auto_stop_ewma_alpha",
+        "auto_stop_ewma_alpha_stable",
+        "auto_stop_ewma_alpha_volatile",
+        "auto_stop_surplus_volatility_low_watts",
+        "auto_stop_surplus_volatility_high_watts",
+        "auto_policy",
+        "auto_night_lock_stop",
+        "_last_auto_metrics",
+        "_auto_high_soc_profile_active",
+        "_stop_smoothed_surplus_power",
+        "_stop_smoothed_grid_power",
+        "started_at",
+        "auto_startup_warmup_seconds",
+        "manual_override_until",
+        "virtual_autostart",
+        "auto_start_delay_seconds",
+        "auto_start_max_grid_import_watts",
+        "auto_start_surplus_watts",
+        "auto_stop_surplus_watts",
+        "_auto_cached_inputs_used",
+        "virtual_enable",
+        "virtual_startstop",
+        "auto_daytime_only",
+        "auto_month_windows",
+        "auto_audit_log",
+    }
+
+    _ALLOWED_METHODS = {
+        "_time_now",
+    }
+
+    _MUTABLE_ATTRS = _ALLOWED_ATTRS
+
+    @property
+    def virtual_mode(self) -> int:
+        return non_negative_int(getattr(self._service, "virtual_mode", 0))
+
+    @virtual_mode.setter
+    def virtual_mode(self, value: Any) -> None:
+        normalize_mode = getattr(self._service, "_normalize_mode", None)
+        self._service.virtual_mode = (
+            normalize_mode(value) if callable(normalize_mode) else non_negative_int(value)
+        )
+
+    @property
+    def virtual_autostart(self) -> int:
+        return normalize_binary_flag(getattr(self._service, "virtual_autostart", 1), default=1)
+
+    @virtual_autostart.setter
+    def virtual_autostart(self, value: Any) -> None:
+        self._service.virtual_autostart = normalize_binary_flag(value)
+
+    @property
+    def virtual_enable(self) -> int:
+        return normalize_binary_flag(getattr(self._service, "virtual_enable", 1), default=1)
+
+    @virtual_enable.setter
+    def virtual_enable(self, value: Any) -> None:
+        self._service.virtual_enable = normalize_binary_flag(value)
+
+    @property
+    def virtual_startstop(self) -> int:
+        return normalize_binary_flag(getattr(self._service, "virtual_startstop", 1), default=1)
+
+    @virtual_startstop.setter
+    def virtual_startstop(self, value: Any) -> None:
+        self._service.virtual_startstop = normalize_binary_flag(value)
+
+    @property
+    def _auto_mode_cutover_pending(self) -> bool:
+        return bool(getattr(self._service, "_auto_mode_cutover_pending", False))
+
+    @_auto_mode_cutover_pending.setter
+    def _auto_mode_cutover_pending(self, value: Any) -> None:
+        self._service._auto_mode_cutover_pending = bool(value)
+
+    @property
+    def _ignore_min_offtime_once(self) -> bool:
+        return bool(getattr(self._service, "_ignore_min_offtime_once", False))
+
+    @_ignore_min_offtime_once.setter
+    def _ignore_min_offtime_once(self, value: Any) -> None:
+        self._service._ignore_min_offtime_once = bool(value)
+
+    @property
+    def _last_auto_state(self) -> str:
+        state, _code = normalized_auto_state_pair(
+            getattr(self._service, "_last_auto_state", "idle"),
+            getattr(self._service, "_last_auto_state_code", 0),
+        )
+        return state
+
+    @_last_auto_state.setter
+    def _last_auto_state(self, value: Any) -> None:
+        state, code = normalized_auto_state_pair(value, getattr(self._service, "_last_auto_state_code", 0))
+        self._service._last_auto_state = state
+        self._service._last_auto_state_code = code
+
+    @property
+    def _last_auto_state_code(self) -> int:
+        _state, code = normalized_auto_state_pair(
+            getattr(self._service, "_last_auto_state", "idle"),
+            getattr(self._service, "_last_auto_state_code", 0),
+        )
+        return code
+
+    @_last_auto_state_code.setter
+    def _last_auto_state_code(self, value: Any) -> None:
+        state, code = normalized_auto_state_pair(getattr(self._service, "_last_auto_state", "idle"), value)
+        self._service._last_auto_state = state
+        self._service._last_auto_state_code = code
+
+    def clear_auto_samples(self, *args: Any, **kwargs: Any) -> Any:
+        return self._controller_or_override("_clear_auto_samples", "clear_auto_samples")(*args, **kwargs)
+
+    def set_health(self, *args: Any, **kwargs: Any) -> Any:
+        return self._controller_or_override("_set_health", "set_health")(*args, **kwargs)
+
+    def save_runtime_state(self, *args: Any, **kwargs: Any) -> Any:
+        return self._service._save_runtime_state(*args, **kwargs)
+
+    def write_auto_audit_event(self, *args: Any, **kwargs: Any) -> Any:
+        return self._service._write_auto_audit_event(*args, **kwargs)
+
+    def peek_pending_relay_command(self, *args: Any, **kwargs: Any) -> Any:
+        return self._service._peek_pending_relay_command(*args, **kwargs)
+
+    def is_within_auto_daytime_window(self, *args: Any, **kwargs: Any) -> Any:
+        return self._controller_or_override(
+            "_is_within_auto_daytime_window",
+            "is_within_auto_daytime_window",
+        )(*args, **kwargs)
+
+    def get_available_surplus_watts(self, *args: Any, **kwargs: Any) -> Any:
+        return self._controller_or_override(
+            "_get_available_surplus_watts",
+            "get_available_surplus_watts",
+        )(*args, **kwargs)
+
+    def add_auto_sample(self, *args: Any, **kwargs: Any) -> Any:
+        return self._controller_or_override("_add_auto_sample", "add_auto_sample")(*args, **kwargs)
+
+    def average_auto_metric(self, *args: Any, **kwargs: Any) -> Any:
+        return self._controller_or_override("_average_auto_metric", "average_auto_metric")(*args, **kwargs)

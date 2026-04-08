@@ -1,0 +1,25 @@
+{
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "strict",
+  "reportPrivateUsage": "none",
+  "reportUnusedFunction": "none",
+  "reportUnusedClass": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownArgumentType": "none",
+  "include": [
+    "dbus_shelly_wallbox_shared.py",
+    "dbus_shelly_wallbox_contracts.py",
+    "dbus_shelly_wallbox_common.py",
+    "dbus_shelly_wallbox_ports_base.py",
+    "dbus_shelly_wallbox_ports_write.py",
+    "dbus_shelly_wallbox_ports_auto.py",
+    "dbus_shelly_wallbox_ports_update.py",
+    "dbus_shelly_wallbox_ports_dbus.py",
+    "dbus_shelly_wallbox_ports.py",
+    "tests/test_shelly_wallbox_ports.py"
+  ],
+  "exclude": [
+    "**/__pycache__"
+  ]
+}

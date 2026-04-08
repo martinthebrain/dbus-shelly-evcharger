@@ -99,9 +99,11 @@ class ShellyIoController:
         if not isinstance(pm_status["aenergy"], dict):
             pm_status["aenergy"] = {}
         pm_status["aenergy"].setdefault("total", 0.0)
-        if not relay_on:
-            pm_status["apower"] = 0.0
-            pm_status["current"] = 0.0
+        # A locally published relay command is only an optimistic placeholder
+        # until the next confirmed Shelly read. Keep instantaneous power/current
+        # at zero so stale measurements are never interpreted as a fresh charge.
+        pm_status["apower"] = 0.0
+        pm_status["current"] = 0.0
         return pm_status
 
     def publish_local_pm_status(self, relay_on, now=None):
@@ -109,12 +111,15 @@ class ShellyIoController:
         svc = self.service
         current = svc._time_now() if now is None else float(now)
         pm_status = svc._build_local_pm_status(relay_on)
+        pm_status["_pm_confirmed"] = False
         svc._last_pm_status = dict(pm_status)
         svc._last_pm_status_at = current
+        svc._last_pm_status_confirmed = False
         svc._update_worker_snapshot(
             captured_at=current,
             pm_captured_at=current,
             pm_status=pm_status,
+            pm_confirmed=False,
         )
         return pm_status
 
@@ -126,6 +131,10 @@ class ShellyIoController:
         with svc._relay_command_lock:
             svc._pending_relay_state = bool(relay_on)
             svc._pending_relay_requested_at = current
+            svc._relay_sync_expected_state = bool(relay_on)
+            svc._relay_sync_requested_at = current
+            svc._relay_sync_deadline_at = current + float(getattr(svc, "relay_sync_timeout_seconds", 2.0))
+            svc._relay_sync_failure_reported = False
 
     def peek_pending_relay_command(self):
         """Return the latest queued relay command without clearing it."""
@@ -188,6 +197,7 @@ class ShellyIoController:
                 pm_captured_at=read_at,
                 auto_mode_active=svc._mode_uses_auto_logic(getattr(svc, "virtual_mode", 0)),
                 pm_status=pm_status,
+                pm_confirmed=True,
             )
         except Exception as error:  # pylint: disable=broad-except
             svc._mark_failure("shelly")
@@ -197,6 +207,16 @@ class ShellyIoController:
                 "Shelly status read failed: %s",
                 error,
                 exc_info=error,
+            )
+            # Clear the live PM payload after a failed read so the main loop can
+            # fall back to the short soft-fail cache instead of treating an old
+            # confirmed snapshot as perpetually current.
+            svc._update_worker_snapshot(
+                captured_at=now,
+                auto_mode_active=svc._mode_uses_auto_logic(getattr(svc, "virtual_mode", 0)),
+                pm_status=None,
+                pm_captured_at=None,
+                pm_confirmed=False,
             )
 
     def io_worker_loop(self):

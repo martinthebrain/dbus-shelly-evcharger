@@ -559,7 +559,7 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         self.assertEqual(service.virtual_startstop, 0)
         self.assertEqual(service.manual_override_until, 123.5)
         self.assertTrue(service._auto_mode_cutover_pending)
-        self.assertTrue(service._ignore_min_offtime_once)
+        self.assertFalse(service._ignore_min_offtime_once)
         self.assertEqual(service.relay_last_changed_at, 111.0)
         self.assertEqual(service.relay_last_off_at, 112.0)
 
@@ -586,6 +586,7 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         self.assertIn('"mode":1', saved)
         self.assertIn('"enable":1', saved)
         self.assertIn('"auto_mode_cutover_pending":1', saved)
+        self.assertNotIn('"ignore_min_offtime_once"', saved)
 
     def test_io_worker_once_collects_snapshot_in_ram(self):
         service = ShellyWallboxService.__new__(ShellyWallboxService)
@@ -648,7 +649,9 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         service.auto_input_helper_stale_seconds = 15
         service.auto_input_helper_restart_seconds = 5
         helper_snapshot = {
+            "snapshot_version": 1,
             "captured_at": 100.0,
+            "heartbeat_at": 100.0,
             "pv_captured_at": 100.0,
             "pv_power": 2300.0,
             "battery_captured_at": 100.0,
@@ -700,6 +703,7 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         service.auto_input_helper_stale_seconds = 15
         service.auto_input_helper_restart_seconds = 5
         helper_snapshot = {
+            "snapshot_version": 1,
             "captured_at": 100.0,
             "heartbeat_at": 130.0,
             "pv_captured_at": 100.0,
@@ -756,7 +760,9 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         service.auto_input_helper_stale_seconds = 15
         service.auto_input_helper_restart_seconds = 5
         helper_snapshot = {
+            "snapshot_version": 1,
             "captured_at": 100.0,
+            "heartbeat_at": 100.0,
             "pv_captured_at": 100.0,
             "pv_power": 2300.0,
             "battery_captured_at": 100.0,
@@ -1163,6 +1169,10 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         service._last_health_reason = "init"
         service._last_health_code = 0
         service._last_grid_at = 110.0
+        service._last_pm_status_confirmed = True
+        service._last_confirmed_pm_status = {"output": False}
+        service._last_confirmed_pm_status_at = 110.5
+        service._relay_sync_requested_at = 110.0
         service._peek_pending_relay_command = MagicMock(return_value=(None, None))
 
         with unittest.mock.patch("dbus_shelly_wallbox.time.time", return_value=111.0):
@@ -1801,7 +1811,8 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         self._set_worker_snapshot(
             service,
             captured_at=100.0,
-            pm_captured_at=50.0,
+            pm_captured_at=95.0,
+            pm_confirmed=True,
             pm_status={
                 "output": False,
                 "apower": 0.0,
@@ -1810,11 +1821,11 @@ class TestShellyWallboxHelpers(unittest.TestCase):
                 "aenergy": {"total": 1000.0},
             },
             pv_power=2400.0,
-            pv_captured_at=70.0,
+            pv_captured_at=98.0,
             battery_soc=56.0,
-            battery_captured_at=80.0,
+            battery_captured_at=85.0,
             grid_power=-2100.0,
-            grid_captured_at=90.0,
+            grid_captured_at=96.0,
             auto_mode_active=True,
         )
         service._auto_decide_relay = MagicMock(return_value=False)
@@ -1822,10 +1833,58 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         with unittest.mock.patch("dbus_shelly_wallbox.time.time", return_value=100.0):
             self.assertTrue(service._update())
 
-        self.assertEqual(service._dbusservice["/Auto/LastShellyReadAge"], 50)
-        self.assertEqual(service._dbusservice["/Auto/LastPvReadAge"], 30)
-        self.assertEqual(service._dbusservice["/Auto/LastBatteryReadAge"], 20)
-        self.assertEqual(service._dbusservice["/Auto/LastGridReadAge"], 10)
+        self.assertEqual(service._dbusservice["/Auto/LastShellyReadAge"], 5)
+        self.assertEqual(service._dbusservice["/Auto/LastPvReadAge"], 2)
+        self.assertEqual(service._dbusservice["/Auto/LastBatteryReadAge"], 15)
+        self.assertEqual(service._dbusservice["/Auto/LastGridReadAge"], 4)
+
+    def test_diagnostics_keep_last_confirmed_shelly_age_after_local_placeholder_publish(self):
+        service = self._make_update_service()
+        service._last_confirmed_pm_status = {"output": False}
+        service._last_confirmed_pm_status_at = 95.0
+        service._last_pm_status = {"output": False}
+        service._last_pm_status_at = 95.0
+        service._last_pm_status_confirmed = True
+
+        service._publish_local_pm_status(True, 100.0)
+        service._publish_diagnostic_paths(100.0)
+
+        self.assertFalse(service._last_pm_status_confirmed)
+        self.assertEqual(service._dbusservice["/Auto/LastShellyReadAge"], 5)
+
+    def test_diagnostics_fall_back_to_last_confirmed_flagged_pm_age_when_no_confirmed_snapshot_is_stored(self):
+        service = self._make_update_service()
+        service._last_confirmed_pm_status = None
+        service._last_confirmed_pm_status_at = None
+        service._last_pm_status = {"output": False}
+        service._last_pm_status_at = 95.0
+        service._last_pm_status_confirmed = True
+
+        service._publish_diagnostic_paths(100.0)
+
+        self.assertEqual(service._dbusservice["/Auto/LastShellyReadAge"], 5)
+
+    def test_diagnostics_normalize_invalid_auto_state_pair_before_publish(self):
+        service = self._make_update_service()
+        service._last_auto_state = "mystery"
+        service._last_auto_state_code = 99
+
+        service._publish_diagnostic_paths(100.0)
+
+        self.assertEqual(service._dbusservice["/Auto/State"], "idle")
+        self.assertEqual(service._dbusservice["/Auto/StateCode"], 0)
+
+    def test_diagnostics_ignore_future_confirmed_shelly_timestamps(self):
+        service = self._make_update_service()
+        service._last_confirmed_pm_status = {"output": False}
+        service._last_confirmed_pm_status_at = 105.0
+        service._last_pm_status = {"output": False}
+        service._last_pm_status_at = 106.0
+        service._last_pm_status_confirmed = True
+
+        service._publish_diagnostic_paths(100.0)
+
+        self.assertEqual(service._dbusservice["/Auto/LastShellyReadAge"], -1)
 
     def test_stale_helper_snapshot_prevents_auto_start_and_marks_grid_missing(self):
         service = self._make_update_service()
@@ -1849,8 +1908,9 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         service._queue_relay_command = MagicMock()
         self._set_worker_snapshot(
             service,
-            captured_at=99.0,
-            pm_captured_at=99.0,
+            captured_at=125.0,
+            pm_captured_at=125.0,
+            pm_confirmed=True,
             pm_status={
                 "output": False,
                 "apower": 0.0,
@@ -1860,7 +1920,9 @@ class TestShellyWallboxHelpers(unittest.TestCase):
             },
         )
         helper_snapshot = {
+            "snapshot_version": 1,
             "captured_at": 100.0,
+            "heartbeat_at": 100.0,
             "pv_captured_at": 100.0,
             "pv_power": 2600.0,
             "battery_captured_at": 100.0,

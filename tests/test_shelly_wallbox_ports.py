@@ -2,13 +2,14 @@
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 from dbus_shelly_wallbox_ports import AutoDecisionPort, DbusInputPort, UpdateCyclePort, WriteControllerPort
 
 
 class TestWallboxPorts(unittest.TestCase):
-    def test_base_ports_raise_for_unknown_attrs_and_missing_controller_bindings(self):
+    def test_base_ports_raise_for_unknown_attrs_and_missing_controller_bindings(self) -> None:
         service = SimpleNamespace(
             virtual_mode=0,
             virtual_autostart=1,
@@ -72,7 +73,7 @@ class TestWallboxPorts(unittest.TestCase):
         with self.assertRaises(AttributeError):
             input_port.list_dbus_services()
 
-    def test_port_allowed_methods_exist_on_service_class(self):
+    def test_port_allowed_methods_exist_on_service_class(self) -> None:
         source_text = "\n".join(
             Path(file_name).read_text(encoding="utf-8")
             for file_name in (
@@ -87,15 +88,24 @@ class TestWallboxPorts(unittest.TestCase):
             with self.subTest(method_name=method_name):
                 self.assertIn(f"def {method_name}(", source_text)
 
-    def test_port_declared_attrs_are_referenced_in_service_code(self):
+    def test_port_declared_attrs_are_referenced_in_service_code(self) -> None:
         source_text = "\n".join(
             Path(file_name).read_text(encoding="utf-8")
             for file_name in (
                 "dbus_shelly_wallbox.py",
                 "dbus_shelly_wallbox_auto_logic.py",
+                "dbus_shelly_wallbox_auto_logic_samples.py",
+                "dbus_shelly_wallbox_auto_logic_gates.py",
+                "dbus_shelly_wallbox_auto_logic_decisions.py",
                 "dbus_shelly_wallbox_auto_policy.py",
                 "dbus_shelly_wallbox_bootstrap.py",
+                "dbus_shelly_wallbox_bootstrap_config.py",
+                "dbus_shelly_wallbox_bootstrap_runtime.py",
+                "dbus_shelly_wallbox_bootstrap_paths.py",
                 "dbus_shelly_wallbox_runtime_support.py",
+                "dbus_shelly_wallbox_runtime_setup.py",
+                "dbus_shelly_wallbox_runtime_audit.py",
+                "dbus_shelly_wallbox_runtime_health.py",
                 "dbus_shelly_wallbox_service_auto.py",
                 "dbus_shelly_wallbox_service_factory.py",
                 "dbus_shelly_wallbox_service_runtime.py",
@@ -103,9 +113,12 @@ class TestWallboxPorts(unittest.TestCase):
                 "dbus_shelly_wallbox_service_update.py",
                 "dbus_shelly_wallbox_state.py",
                 "dbus_shelly_wallbox_update_cycle.py",
+                "dbus_shelly_wallbox_update_cycle_state.py",
+                "dbus_shelly_wallbox_update_cycle_relay.py",
+                "dbus_shelly_wallbox_update_cycle_learning.py",
             )
         )
-        declared_attrs = set()
+        declared_attrs: set[str] = set()
         for port_class in (WriteControllerPort, DbusInputPort, UpdateCyclePort, AutoDecisionPort):
             declared_attrs.update(port_class._ALLOWED_ATTRS)
             declared_attrs.update(port_class._MUTABLE_ATTRS)
@@ -113,7 +126,7 @@ class TestWallboxPorts(unittest.TestCase):
             with self.subTest(attr_name=attr_name):
                 self.assertIn(attr_name, source_text)
 
-    def test_write_controller_port_forwards_state_and_methods(self):
+    def test_write_controller_port_forwards_state_and_methods(self) -> None:
         service = SimpleNamespace(
             virtual_mode=0,
             virtual_autostart=1,
@@ -143,16 +156,257 @@ class TestWallboxPorts(unittest.TestCase):
 
         port = WriteControllerPort(service)
         port.virtual_mode = 2
-        self.assertEqual(service.virtual_mode, 2)
+        port.virtual_autostart = "0"
+        port.virtual_enable = 5
+        port.virtual_startstop = "bad"
+        port.auto_mode_cutover_pending = 1
+        port.ignore_min_offtime_once = 0
+        self.assertEqual(service.virtual_mode, 1)
+        self.assertEqual(service.virtual_autostart, 0)
+        self.assertEqual(service.virtual_enable, 1)
+        self.assertEqual(service.virtual_startstop, 0)
         self.assertEqual(port.auto_manual_override_seconds, 300.0)
-        self.assertFalse(port.auto_mode_cutover_pending)
+        self.assertTrue(port.auto_mode_cutover_pending)
         self.assertFalse(port.ignore_min_offtime_once)
         port.queue_relay_command(True, 100.0)
         service._queue_relay_command.assert_called_once_with(True, 100.0)
         self.assertEqual(port.normalize_mode("1"), 1)
         self.assertEqual(port._normalize_mode("1"), 1)
 
-    def test_dbus_input_port_uses_service_override_before_controller(self):
+    def test_write_controller_port_requires_confirmed_off_before_skipping_cutover(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=0,
+            virtual_autostart=1,
+            virtual_startstop=0,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            min_current=6.0,
+            max_current=16.0,
+            auto_start_condition_since=None,
+            auto_stop_condition_since=None,
+            manual_override_until=0.0,
+            auto_manual_override_seconds=300.0,
+            _auto_mode_cutover_pending=False,
+            _ignore_min_offtime_once=False,
+            _clear_auto_samples=MagicMock(),
+            _queue_relay_command=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _get_worker_snapshot=MagicMock(return_value={"pm_status": {"output": False}, "pm_confirmed": False}),
+            _update_worker_snapshot=MagicMock(),
+            _publish_dbus_path=MagicMock(),
+            _time_now=MagicMock(return_value=100.0),
+            _normalize_mode=MagicMock(return_value=1),
+            _mode_uses_auto_logic=MagicMock(return_value=True),
+            _state_summary=MagicMock(return_value="state"),
+            _save_runtime_state=MagicMock(),
+            _peek_pending_relay_command=MagicMock(return_value=(False, 99.0)),
+            _last_pm_status={"output": False},
+            _last_pm_status_confirmed=False,
+            _last_pm_status_at=99.0,
+        )
+
+        port = WriteControllerPort(service)
+
+        self.assertTrue(port.relay_may_be_on_for_cutover())
+
+        service._get_worker_snapshot.return_value = {
+            "pm_status": {"output": False},
+            "pm_confirmed": True,
+            "pm_captured_at": 99.5,
+        }
+        self.assertFalse(port.relay_may_be_on_for_cutover())
+
+    def test_write_controller_port_ignores_inconsistent_confirmed_worker_snapshot(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=0,
+            virtual_autostart=1,
+            virtual_startstop=0,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            min_current=6.0,
+            max_current=16.0,
+            auto_start_condition_since=None,
+            auto_stop_condition_since=None,
+            manual_override_until=0.0,
+            auto_manual_override_seconds=300.0,
+            _auto_mode_cutover_pending=False,
+            _ignore_min_offtime_once=False,
+            _clear_auto_samples=MagicMock(),
+            _queue_relay_command=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _get_worker_snapshot=MagicMock(
+                return_value={"captured_at": 100.0, "pm_status": {"apower": 1800.0}, "pm_confirmed": True}
+            ),
+            _update_worker_snapshot=MagicMock(),
+            _publish_dbus_path=MagicMock(),
+            _time_now=MagicMock(return_value=100.0),
+            _normalize_mode=MagicMock(return_value=1),
+            _mode_uses_auto_logic=MagicMock(return_value=True),
+            _state_summary=MagicMock(return_value="state"),
+            _save_runtime_state=MagicMock(),
+            _peek_pending_relay_command=MagicMock(return_value=(False, 99.0)),
+            _last_pm_status={"output": False},
+            _last_pm_status_confirmed=False,
+            _last_pm_status_at=99.0,
+        )
+
+        port = WriteControllerPort(service)
+
+        self.assertTrue(port.relay_may_be_on_for_cutover())
+
+    def test_write_controller_port_uses_confirmed_last_pm_status_for_pending_off(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=0,
+            virtual_autostart=1,
+            virtual_startstop=0,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            min_current=6.0,
+            max_current=16.0,
+            auto_start_condition_since=None,
+            auto_stop_condition_since=None,
+            manual_override_until=0.0,
+            auto_manual_override_seconds=300.0,
+            _auto_mode_cutover_pending=False,
+            _ignore_min_offtime_once=False,
+            _clear_auto_samples=MagicMock(),
+            _queue_relay_command=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _get_worker_snapshot=MagicMock(return_value={"pm_status": {"output": True}, "pm_confirmed": False}),
+            _update_worker_snapshot=MagicMock(),
+            _publish_dbus_path=MagicMock(),
+            _time_now=MagicMock(return_value=100.0),
+            _normalize_mode=MagicMock(return_value=1),
+            _mode_uses_auto_logic=MagicMock(return_value=True),
+            _state_summary=MagicMock(return_value="state"),
+            _save_runtime_state=MagicMock(),
+            _peek_pending_relay_command=MagicMock(return_value=(False, 99.0)),
+            _last_pm_status={"output": False},
+            _last_pm_status_confirmed=True,
+            _last_pm_status_at=99.5,
+        )
+
+        port = WriteControllerPort(service)
+
+        self.assertFalse(port.relay_may_be_on_for_cutover())
+
+    def test_write_controller_port_uses_confirmed_last_pm_status_without_pending_command(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=0,
+            virtual_autostart=1,
+            virtual_startstop=1,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            min_current=6.0,
+            max_current=16.0,
+            auto_start_condition_since=None,
+            auto_stop_condition_since=None,
+            manual_override_until=0.0,
+            auto_manual_override_seconds=300.0,
+            _auto_mode_cutover_pending=False,
+            _ignore_min_offtime_once=False,
+            _clear_auto_samples=MagicMock(),
+            _queue_relay_command=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _get_worker_snapshot=MagicMock(return_value={"pm_status": {"output": True}, "pm_confirmed": False}),
+            _update_worker_snapshot=MagicMock(),
+            _publish_dbus_path=MagicMock(),
+            _time_now=MagicMock(return_value=100.0),
+            _normalize_mode=MagicMock(return_value=1),
+            _mode_uses_auto_logic=MagicMock(return_value=True),
+            _state_summary=MagicMock(return_value="state"),
+            _save_runtime_state=MagicMock(),
+            _peek_pending_relay_command=MagicMock(return_value=(None, None)),
+            _last_pm_status={"output": False},
+            _last_pm_status_confirmed=True,
+            _last_pm_status_at=99.5,
+        )
+
+        port = WriteControllerPort(service)
+
+        self.assertFalse(port.relay_may_be_on_for_cutover())
+
+    def test_write_controller_port_treats_stale_confirmed_off_as_potentially_on(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=0,
+            virtual_autostart=1,
+            virtual_startstop=0,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            min_current=6.0,
+            max_current=16.0,
+            auto_start_condition_since=None,
+            auto_stop_condition_since=None,
+            manual_override_until=0.0,
+            auto_manual_override_seconds=300.0,
+            _auto_mode_cutover_pending=False,
+            _ignore_min_offtime_once=False,
+            _clear_auto_samples=MagicMock(),
+            _queue_relay_command=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _get_worker_snapshot=MagicMock(
+                return_value={
+                    "pm_status": {"output": False},
+                    "pm_confirmed": True,
+                    "pm_captured_at": 95.0,
+                }
+            ),
+            _update_worker_snapshot=MagicMock(),
+            _publish_dbus_path=MagicMock(),
+            _time_now=MagicMock(return_value=100.0),
+            _normalize_mode=MagicMock(return_value=1),
+            _mode_uses_auto_logic=MagicMock(return_value=True),
+            _state_summary=MagicMock(return_value="state"),
+            _save_runtime_state=MagicMock(),
+            _peek_pending_relay_command=MagicMock(return_value=(None, None)),
+            _last_pm_status={"output": False},
+            _last_pm_status_confirmed=True,
+            _last_pm_status_at=95.0,
+            _worker_poll_interval_seconds=1.0,
+            relay_sync_timeout_seconds=2.0,
+        )
+
+        port = WriteControllerPort(service)
+
+        self.assertTrue(port.relay_may_be_on_for_cutover())
+
+    def test_write_controller_port_treats_unknown_relay_state_as_potentially_on(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=0,
+            virtual_autostart=1,
+            virtual_startstop=0,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            min_current=6.0,
+            max_current=16.0,
+            auto_start_condition_since=None,
+            auto_stop_condition_since=None,
+            manual_override_until=0.0,
+            auto_manual_override_seconds=300.0,
+            _auto_mode_cutover_pending=False,
+            _ignore_min_offtime_once=False,
+            _clear_auto_samples=MagicMock(),
+            _queue_relay_command=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _get_worker_snapshot=MagicMock(return_value={"pm_status": None, "pm_confirmed": False}),
+            _update_worker_snapshot=MagicMock(),
+            _publish_dbus_path=MagicMock(),
+            _time_now=MagicMock(return_value=100.0),
+            _normalize_mode=MagicMock(return_value=1),
+            _mode_uses_auto_logic=MagicMock(return_value=True),
+            _state_summary=MagicMock(return_value="state"),
+            _save_runtime_state=MagicMock(),
+            _peek_pending_relay_command=MagicMock(return_value=(None, None)),
+            _last_pm_status=None,
+            _last_pm_status_confirmed=False,
+            _last_pm_status_at=None,
+        )
+
+        port = WriteControllerPort(service)
+
+        self.assertTrue(port.relay_may_be_on_for_cutover())
+
+    def test_dbus_input_port_uses_service_override_before_controller(self) -> None:
         service = SimpleNamespace(
             auto_pv_service="",
             auto_pv_service_prefix="com.victronenergy.pvinverter",
@@ -195,7 +449,7 @@ class TestWallboxPorts(unittest.TestCase):
         port = DbusInputPort(service)
 
         class DummyController:
-            def get_dbus_value(self, *_args, **_kwargs):
+            def get_dbus_value(self, *_args: Any, **_kwargs: Any) -> Any:
                 raise AssertionError("service override should win")
 
         port.bind_controller(DummyController())
@@ -203,7 +457,7 @@ class TestWallboxPorts(unittest.TestCase):
         self.assertEqual(port._get_dbus_value("svc", "/Path"), 42.0)
         self.assertEqual(service._get_dbus_value.call_count, 2)
 
-    def test_auto_decision_port_falls_back_to_bound_controller(self):
+    def test_auto_decision_port_falls_back_to_bound_controller(self) -> None:
         service = SimpleNamespace(
             auto_samples=[],
             auto_average_window_seconds=60.0,
@@ -248,10 +502,10 @@ class TestWallboxPorts(unittest.TestCase):
         port = AutoDecisionPort(service)
 
         class DummyController:
-            def clear_auto_samples(self):
+            def clear_auto_samples(self) -> str:
                 return "cleared"
 
-            def is_within_auto_daytime_window(self):
+            def is_within_auto_daytime_window(self) -> bool:
                 return True
 
         port.bind_controller(DummyController())
@@ -259,7 +513,7 @@ class TestWallboxPorts(unittest.TestCase):
         self.assertEqual(port._clear_auto_samples(), "cleared")
         self.assertTrue(port.is_within_auto_daytime_window())
 
-    def test_auto_decision_port_forwards_audit_and_pending_helpers(self):
+    def test_auto_decision_port_forwards_audit_and_pending_helpers(self) -> None:
         service = SimpleNamespace(
             auto_samples=[],
             auto_average_window_seconds=60.0,
@@ -310,13 +564,117 @@ class TestWallboxPorts(unittest.TestCase):
         self.assertEqual(port.peek_pending_relay_command(), (True, 123.0))
         service._write_auto_audit_event.assert_called_once_with("running", False)
 
-    def test_update_cycle_port_forwards_mutable_runtime_fields(self):
+    def test_auto_decision_port_exposes_confirmed_pm_state_and_service_time_source(self) -> None:
+        service = SimpleNamespace(
+            auto_samples=[],
+            auto_average_window_seconds=60.0,
+            relay_last_changed_at=None,
+            relay_last_off_at=None,
+            auto_start_condition_since=None,
+            auto_stop_condition_since=None,
+            _last_health_reason="init",
+            _last_health_code=0,
+            _last_auto_state="idle",
+            _last_auto_state_code=0,
+            _last_pm_status_confirmed=True,
+            _last_confirmed_pm_status={"output": True},
+            _last_confirmed_pm_status_at=123.0,
+            auto_min_runtime_seconds=0.0,
+            auto_min_offtime_seconds=0.0,
+            _last_grid_at=None,
+            _grid_recovery_required=False,
+            _grid_recovery_since=None,
+            auto_grid_missing_stop_seconds=60.0,
+            auto_grid_recovery_start_seconds=30.0,
+            virtual_mode=1,
+            _auto_mode_cutover_pending=False,
+            _ignore_min_offtime_once=False,
+            _last_battery_allow_warning=None,
+            auto_allow_without_battery_soc=False,
+            auto_battery_scan_interval_seconds=60.0,
+            auto_resume_soc=50.0,
+            auto_min_soc=30.0,
+            auto_high_soc_threshold=55.0,
+            auto_high_soc_release_threshold=50.0,
+            auto_high_soc_start_surplus_watts=1800.0,
+            auto_high_soc_stop_surplus_watts=1200.0,
+            auto_stop_delay_seconds=30.0,
+            auto_stop_grid_import_watts=200.0,
+            auto_stop_surplus_delay_seconds=30.0,
+            auto_stop_ewma_alpha=0.35,
+            auto_stop_ewma_alpha_stable=0.55,
+            auto_stop_ewma_alpha_volatile=0.15,
+            auto_stop_surplus_volatility_low_watts=150.0,
+            auto_stop_surplus_volatility_high_watts=400.0,
+            auto_policy=None,
+            auto_night_lock_stop=False,
+            _last_auto_metrics={},
+            _auto_high_soc_profile_active=False,
+            _stop_smoothed_surplus_power=None,
+            _stop_smoothed_grid_power=None,
+            started_at=0.0,
+            auto_startup_warmup_seconds=0.0,
+            manual_override_until=0.0,
+            virtual_autostart=1,
+            auto_start_delay_seconds=30.0,
+            auto_start_max_grid_import_watts=50.0,
+            auto_start_surplus_watts=2000.0,
+            auto_stop_surplus_watts=1500.0,
+            _auto_cached_inputs_used=False,
+            virtual_enable=1,
+            virtual_startstop=0,
+            auto_daytime_only=False,
+            auto_month_windows={},
+            auto_audit_log=False,
+            _save_runtime_state=MagicMock(),
+            _set_health=MagicMock(return_value="health-set"),
+            _peek_pending_relay_command=MagicMock(return_value=(None, None)),
+            _time_now=MagicMock(return_value=456.0),
+            _normalize_mode=MagicMock(return_value=2),
+        )
+
+        port = AutoDecisionPort(service)
+
+        self.assertEqual(port._last_confirmed_pm_status, {"output": True})
+        self.assertEqual(port._last_confirmed_pm_status_at, 123.0)
+        self.assertEqual(port._time_now(), 456.0)
+        self.assertEqual(port.set_health("running", False, relay_intent=True), "health-set")
+        self.assertEqual(port._last_auto_state, "idle")
+        self.assertEqual(port._last_auto_state_code, 0)
+        self.assertEqual(port.virtual_autostart, 1)
+        self.assertEqual(port.virtual_enable, 1)
+        self.assertEqual(port.virtual_startstop, 0)
+        port.virtual_mode = "5"
+        port.virtual_autostart = "0"
+        port.virtual_enable = 7
+        port.virtual_startstop = "bad"
+        self.assertEqual(service.virtual_mode, 2)
+        self.assertEqual(service.virtual_autostart, 0)
+        self.assertEqual(service.virtual_enable, 1)
+        self.assertEqual(service.virtual_startstop, 0)
+
+        service._last_auto_state = "odd"
+        service._last_auto_state_code = 99
+        self.assertEqual(port._last_auto_state, "idle")
+        self.assertEqual(port._last_auto_state_code, 0)
+
+        port._last_auto_state = "charging"
+        self.assertEqual(service._last_auto_state, "charging")
+        self.assertEqual(service._last_auto_state_code, 3)
+
+        port._last_auto_state_code = 99
+        self.assertEqual(service._last_auto_state, "charging")
+        self.assertEqual(service._last_auto_state_code, 3)
+
+    def test_update_cycle_port_forwards_mutable_runtime_fields(self) -> None:
         service = SimpleNamespace(
             _startup_manual_target=None,
             virtual_mode=1,
             auto_shelly_soft_fail_seconds=10.0,
             _last_health_reason="init",
             _last_health_code=0,
+            _last_auto_state="weird",
+            _last_auto_state_code=99,
             charging_started_at=None,
             energy_at_start=0.0,
             virtual_startstop=0,
@@ -346,9 +704,33 @@ class TestWallboxPorts(unittest.TestCase):
             service_name="svc",
             _dbusservice={"/Ac/Power": 0.0},
             _mode_uses_auto_logic=MagicMock(return_value=True),
+            _normalize_mode=MagicMock(return_value=2),
+            _last_pm_status_confirmed=False,
+            learned_charge_power_state="mystery",
         )
 
         port = UpdateCyclePort(service)
         port.last_status = 2
+        port._startup_manual_target = 1
+        port.virtual_mode = "5"
+        port.virtual_startstop = "0"
+        port.virtual_enable = 7
+        port._last_pm_status_confirmed = 1
+        port.learned_charge_power_state = "stable"
         self.assertEqual(service.last_status, 2)
+        self.assertTrue(service._startup_manual_target)
+        self.assertEqual(service.virtual_mode, 2)
+        self.assertEqual(service.virtual_startstop, 0)
+        self.assertEqual(service.virtual_enable, 1)
+        self.assertTrue(service._last_pm_status_confirmed)
+        self.assertEqual(service.learned_charge_power_state, "stable")
+        self.assertEqual(port._last_auto_state, "idle")
+        self.assertEqual(port._last_auto_state_code, 0)
+        self.assertTrue(port._last_pm_status_confirmed)
+        port._last_auto_state = "charging"
+        self.assertEqual(service._last_auto_state, "charging")
+        self.assertEqual(service._last_auto_state_code, 3)
+        port._last_auto_state_code = 99
+        self.assertEqual(service._last_auto_state, "charging")
+        self.assertEqual(service._last_auto_state_code, 3)
         self.assertTrue(port._mode_uses_auto_logic(1))

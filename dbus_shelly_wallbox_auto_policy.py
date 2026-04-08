@@ -94,6 +94,82 @@ class AutoStopEwmaPolicy:
 
 
 @dataclass
+class AutoLearnChargePowerPolicy:
+    """Learning policy for adapting thresholds to the measured charging power."""
+
+    enabled: bool = True
+    reference_power_watts: float = 1900.0
+    min_watts: float = 500.0
+    alpha: float = 0.2
+    start_delay_seconds: float = 30.0
+    window_seconds: float = 180.0
+    max_age_seconds: float = 21600.0
+
+    def clamp(self) -> None:
+        """Clamp invalid learning settings to safe, conservative defaults."""
+        if self.reference_power_watts <= 0:
+            logging.warning(
+                "AutoReferenceChargePowerWatts %s invalid, clamping to 1900.0",
+                self.reference_power_watts,
+            )
+            self.reference_power_watts = 1900.0
+        if self.min_watts < 0:
+            logging.warning(
+                "AutoLearnChargePowerMinWatts %s invalid, clamping to 0",
+                self.min_watts,
+            )
+            self.min_watts = 0.0
+        if not 0 < self.alpha <= 1:
+            logging.warning(
+                "AutoLearnChargePowerAlpha %s outside (0,1], clamping to 0.2",
+                self.alpha,
+            )
+            self.alpha = 0.2
+        if self.start_delay_seconds < 0:
+            logging.warning(
+                "AutoLearnChargePowerStartDelaySeconds %s invalid, clamping to 0",
+                self.start_delay_seconds,
+            )
+            self.start_delay_seconds = 0.0
+        if self.window_seconds < 0:
+            logging.warning(
+                "AutoLearnChargePowerWindowSeconds %s invalid, clamping to 0",
+                self.window_seconds,
+            )
+            self.window_seconds = 0.0
+        if self.max_age_seconds < 0:
+            logging.warning(
+                "AutoLearnChargePowerMaxAgeSeconds %s invalid, clamping to 0",
+                self.max_age_seconds,
+            )
+            self.max_age_seconds = 0.0
+        self._warn_semantic_relationships()
+
+    def _warn_semantic_relationships(self) -> None:
+        """Warn about odd-but-valid learning combinations without changing them."""
+        if not self.enabled:
+            return
+        if 0 < self.window_seconds < self.start_delay_seconds:
+            logging.warning(
+                "AutoLearnChargePowerWindowSeconds %s below AutoLearnChargePowerStartDelaySeconds %s, learning may never leave the initial delay window",
+                self.window_seconds,
+                self.start_delay_seconds,
+            )
+        if 0 < self.max_age_seconds < self.window_seconds:
+            logging.warning(
+                "AutoLearnChargePowerMaxAgeSeconds %s below AutoLearnChargePowerWindowSeconds %s, learned power may expire before a full learning window completes",
+                self.max_age_seconds,
+                self.window_seconds,
+            )
+        if self.min_watts >= self.reference_power_watts:
+            logging.warning(
+                "AutoLearnChargePowerMinWatts %s at or above AutoReferenceChargePowerWatts %s, learning may reject normal charging sessions",
+                self.min_watts,
+                self.reference_power_watts,
+            )
+
+
+@dataclass
 class AutoPolicy:
     """Centralized Auto-mode policy used by bootstrap, validation, and logic."""
 
@@ -112,6 +188,7 @@ class AutoPolicy:
     grid_recovery_start_seconds: float = 10.0
     stop_surplus_delay_seconds: float = 10.0
     ewma: AutoStopEwmaPolicy = field(default_factory=AutoStopEwmaPolicy)
+    learn_charge_power: AutoLearnChargePowerPolicy = field(default_factory=AutoLearnChargePowerPolicy)
 
     @classmethod
     def from_config(cls, defaults: SectionProxy) -> AutoPolicy:
@@ -146,6 +223,15 @@ class AutoPolicy:
                 volatility_low_watts=float(_config_value(defaults, "AutoStopSurplusVolatilityLowWatts", 150)),
                 volatility_high_watts=float(_config_value(defaults, "AutoStopSurplusVolatilityHighWatts", 400)),
             ),
+            learn_charge_power=AutoLearnChargePowerPolicy(
+                enabled=defaults.get("AutoLearnChargePower", "1").strip().lower() in ("1", "true", "yes", "on"),
+                reference_power_watts=float(_config_value(defaults, "AutoReferenceChargePowerWatts", 1900)),
+                min_watts=float(_config_value(defaults, "AutoLearnChargePowerMinWatts", 500)),
+                alpha=float(_config_value(defaults, "AutoLearnChargePowerAlpha", 0.2)),
+                start_delay_seconds=float(_config_value(defaults, "AutoLearnChargePowerStartDelaySeconds", 30)),
+                window_seconds=float(_config_value(defaults, "AutoLearnChargePowerWindowSeconds", 180)),
+                max_age_seconds=float(_config_value(defaults, "AutoLearnChargePowerMaxAgeSeconds", 21600)),
+            ),
         )
 
     @classmethod
@@ -177,6 +263,15 @@ class AutoPolicy:
                 volatility_low_watts=float(getattr(svc, "auto_stop_surplus_volatility_low_watts", 150.0)),
                 volatility_high_watts=float(getattr(svc, "auto_stop_surplus_volatility_high_watts", 400.0)),
             ),
+            learn_charge_power=AutoLearnChargePowerPolicy(
+                enabled=bool(getattr(svc, "auto_learn_charge_power_enabled", True)),
+                reference_power_watts=float(getattr(svc, "auto_reference_charge_power_watts", 1900.0)),
+                min_watts=float(getattr(svc, "auto_learn_charge_power_min_watts", 500.0)),
+                alpha=float(getattr(svc, "auto_learn_charge_power_alpha", 0.2)),
+                start_delay_seconds=float(getattr(svc, "auto_learn_charge_power_start_delay_seconds", 30.0)),
+                window_seconds=float(getattr(svc, "auto_learn_charge_power_window_seconds", 180.0)),
+                max_age_seconds=float(getattr(svc, "auto_learn_charge_power_max_age_seconds", 21600.0)),
+            ),
         )
 
     @staticmethod
@@ -192,6 +287,60 @@ class AutoPolicy:
             return float(value)
         logging.warning("%s %s invalid, clamping to 0", label, value)
         return 0.0
+
+    @staticmethod
+    def _warn_small_threshold_gap(
+        profile: AutoThresholdProfile,
+        start_label: str,
+        stop_label: str,
+        profile_label: str,
+    ) -> None:
+        gap_watts = float(profile.start_surplus_watts - profile.stop_surplus_watts)
+        recommended_gap_watts = max(100.0, float(profile.start_surplus_watts) * 0.08)
+        if gap_watts >= recommended_gap_watts:
+            return
+        logging.warning(
+            "%s surplus gap %.1f W between %s %.1f and %s %.1f is very small, relay chatter risk may increase",
+            profile_label,
+            gap_watts,
+            start_label,
+            profile.start_surplus_watts,
+            stop_label,
+            profile.stop_surplus_watts,
+        )
+
+    def _warn_semantic_relationships(self) -> None:
+        """Warn about unusual-but-valid policy combinations without clamping them."""
+        self._warn_small_threshold_gap(
+            self.normal_profile,
+            "AutoStartSurplusWatts",
+            "AutoStopSurplusWatts",
+            "Normal Auto profile",
+        )
+        self._warn_small_threshold_gap(
+            self.high_soc_profile,
+            "AutoHighSocStartSurplusWatts",
+            "AutoHighSocStopSurplusWatts",
+            "High-SOC Auto profile",
+        )
+        if (self.high_soc_threshold - self.high_soc_release_threshold) < 2.0:
+            logging.warning(
+                "AutoHighSocThreshold %s and AutoHighSocReleaseThreshold %s leave very little SOC hysteresis, profile switching may flap",
+                self.high_soc_threshold,
+                self.high_soc_release_threshold,
+            )
+        if (self.resume_soc - self.min_soc) < 1.0:
+            logging.warning(
+                "AutoResumeSoc %s is very close to AutoMinSoc %s, SOC-based start/stop hysteresis is very small",
+                self.resume_soc,
+                self.min_soc,
+            )
+        if self.stop_grid_import_watts <= self.start_max_grid_import_watts:
+            logging.warning(
+                "AutoStopGridImportWatts %s at or below AutoStartMaxGridImportWatts %s, grid-import hysteresis is zero or negative",
+                self.stop_grid_import_watts,
+                self.start_max_grid_import_watts,
+            )
 
     def clamp(self) -> None:
         """Clamp invalid policy values while keeping semantic relationships intact."""
@@ -228,6 +377,8 @@ class AutoPolicy:
         self.normal_profile.clamp("AutoStartSurplusWatts", "AutoStopSurplusWatts")
         self.high_soc_profile.clamp("AutoHighSocStartSurplusWatts", "AutoHighSocStopSurplusWatts")
         self.ewma.clamp()
+        self.learn_charge_power.clamp()
+        self._warn_semantic_relationships()
 
     def apply_to_service(self, svc: Any) -> None:
         """Mirror the policy onto legacy flat service attributes for compatibility."""
@@ -249,6 +400,13 @@ class AutoPolicy:
         svc.auto_stop_ewma_alpha_volatile = float(self.ewma.volatile_alpha)
         svc.auto_stop_surplus_volatility_low_watts = float(self.ewma.volatility_low_watts)
         svc.auto_stop_surplus_volatility_high_watts = float(self.ewma.volatility_high_watts)
+        svc.auto_learn_charge_power_enabled = bool(self.learn_charge_power.enabled)
+        svc.auto_reference_charge_power_watts = float(self.learn_charge_power.reference_power_watts)
+        svc.auto_learn_charge_power_min_watts = float(self.learn_charge_power.min_watts)
+        svc.auto_learn_charge_power_alpha = float(self.learn_charge_power.alpha)
+        svc.auto_learn_charge_power_start_delay_seconds = float(self.learn_charge_power.start_delay_seconds)
+        svc.auto_learn_charge_power_window_seconds = float(self.learn_charge_power.window_seconds)
+        svc.auto_learn_charge_power_max_age_seconds = float(self.learn_charge_power.max_age_seconds)
 
     def resolve_threshold_profile(
         self,

@@ -6,7 +6,12 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from dbus_shelly_wallbox_auto_policy import AutoPolicy, AutoStopEwmaPolicy, AutoThresholdProfile
+from dbus_shelly_wallbox_auto_policy import (
+    AutoLearnChargePowerPolicy,
+    AutoPolicy,
+    AutoStopEwmaPolicy,
+    AutoThresholdProfile,
+)
 from dbus_shelly_wallbox_state import ServiceStateController
 from tests.wallbox_test_fixtures import make_runtime_state_service, make_state_validation_service
 
@@ -20,18 +25,26 @@ class TestServiceStateController(unittest.TestCase):
             virtual_autostart=1,
             _auto_mode_cutover_pending=True,
             _ignore_min_offtime_once=False,
+            _last_auto_state="waiting",
             _last_health_reason="running",
         )
         controller = ServiceStateController(service, int)
 
         self.assertTrue(controller.config_path().endswith("config.shelly_wallbox.ini"))
         self.assertEqual(controller.coerce_runtime_int("7"), 7)
+        self.assertEqual(controller.coerce_runtime_int(True, 3), 3)
         self.assertEqual(controller.coerce_runtime_int("bad", 3), 3)
         self.assertEqual(controller.coerce_runtime_float("7.5"), 7.5)
+        self.assertEqual(controller.coerce_runtime_float(True, 3.5), 3.5)
         self.assertEqual(controller.coerce_runtime_float("bad", 3.5), 3.5)
+        self.assertEqual(controller.coerce_runtime_float(float("nan"), 3.5), 3.5)
+        self.assertEqual(controller.coerce_runtime_float(float("inf"), 3.5), 3.5)
         self.assertIsNone(controller._coerce_optional_runtime_float(None))
         self.assertEqual(controller._coerce_optional_runtime_float("7.5"), 7.5)
+        self.assertIsNone(controller._coerce_optional_runtime_past_time(110.0, 100.0))
+        self.assertEqual(controller._coerce_optional_runtime_past_time(100.5, 100.0), 100.5)
         self.assertIn("mode=1", controller.state_summary())
+        self.assertIn("auto_state=waiting", controller.state_summary())
         self.assertIn("health=running", controller.state_summary())
 
     def test_load_runtime_state_missing_file_and_load_config_success(self):
@@ -63,6 +76,12 @@ class TestServiceStateController(unittest.TestCase):
             auto_average_window_seconds=-1,
             auto_min_runtime_seconds=-1,
             auto_min_offtime_seconds=-1,
+            auto_reference_charge_power_watts=-1,
+            auto_learn_charge_power_min_watts=-1,
+            auto_learn_charge_power_alpha=-1,
+            auto_learn_charge_power_start_delay_seconds=-1,
+            auto_learn_charge_power_window_seconds=-1,
+            auto_learn_charge_power_max_age_seconds=-1,
             auto_start_delay_seconds=-1,
             auto_stop_delay_seconds=-1,
             auto_stop_surplus_delay_seconds=-1,
@@ -100,6 +119,12 @@ class TestServiceStateController(unittest.TestCase):
         self.assertEqual(service.auto_stop_ewma_alpha, 0.35)
         self.assertEqual(service.auto_stop_ewma_alpha_stable, 0.55)
         self.assertEqual(service.auto_stop_ewma_alpha_volatile, 0.15)
+        self.assertEqual(service.auto_reference_charge_power_watts, 1900.0)
+        self.assertEqual(service.auto_learn_charge_power_min_watts, 0.0)
+        self.assertEqual(service.auto_learn_charge_power_alpha, 0.2)
+        self.assertEqual(service.auto_learn_charge_power_start_delay_seconds, 0.0)
+        self.assertEqual(service.auto_learn_charge_power_window_seconds, 0.0)
+        self.assertEqual(service.auto_learn_charge_power_max_age_seconds, 0.0)
         self.assertEqual(service.auto_stop_surplus_volatility_low_watts, 0.0)
         self.assertEqual(service.auto_stop_surplus_volatility_high_watts, 0.0)
         self.assertEqual(service.shelly_request_timeout_seconds, 2.0)
@@ -160,6 +185,15 @@ class TestServiceStateController(unittest.TestCase):
                     volatility_low_watts=200.0,
                     volatility_high_watts=100.0,
                 ),
+                learn_charge_power=AutoLearnChargePowerPolicy(
+                    enabled=True,
+                    reference_power_watts=-1.0,
+                    min_watts=-1.0,
+                    alpha=-1.0,
+                    start_delay_seconds=-1.0,
+                    window_seconds=-1.0,
+                    max_age_seconds=-1.0,
+                ),
             ),
         )
 
@@ -176,8 +210,20 @@ class TestServiceStateController(unittest.TestCase):
         self.assertEqual(service.auto_policy.ewma.stable_alpha, 0.55)
         self.assertEqual(service.auto_policy.ewma.volatile_alpha, 0.15)
         self.assertEqual(service.auto_policy.ewma.volatility_high_watts, 200.0)
+        self.assertEqual(service.auto_policy.learn_charge_power.reference_power_watts, 1900.0)
+        self.assertEqual(service.auto_policy.learn_charge_power.min_watts, 0.0)
+        self.assertEqual(service.auto_policy.learn_charge_power.alpha, 0.2)
+        self.assertEqual(service.auto_policy.learn_charge_power.start_delay_seconds, 0.0)
+        self.assertEqual(service.auto_policy.learn_charge_power.window_seconds, 0.0)
+        self.assertEqual(service.auto_policy.learn_charge_power.max_age_seconds, 0.0)
         self.assertEqual(service.auto_start_surplus_watts, 1850.0)
         self.assertEqual(service.auto_high_soc_stop_surplus_watts, 1650.0)
+        self.assertEqual(service.auto_reference_charge_power_watts, 1900.0)
+        self.assertEqual(service.auto_learn_charge_power_min_watts, 0.0)
+        self.assertEqual(service.auto_learn_charge_power_alpha, 0.2)
+        self.assertEqual(service.auto_learn_charge_power_start_delay_seconds, 0.0)
+        self.assertEqual(service.auto_learn_charge_power_window_seconds, 0.0)
+        self.assertEqual(service.auto_learn_charge_power_max_age_seconds, 0.0)
 
     def test_validate_runtime_config_legacy_auto_thresholds_clamp_release_and_volatility_order(self):
         service = make_state_validation_service(
@@ -211,6 +257,15 @@ class TestServiceStateController(unittest.TestCase):
                 manual_override_until=123.5,
                 _auto_mode_cutover_pending=True,
                 _ignore_min_offtime_once=True,
+                learned_charge_power_watts=1980.0,
+                learned_charge_power_updated_at=113.0,
+                learned_charge_power_state="stable",
+                learned_charge_power_learning_since=None,
+                learned_charge_power_sample_count=4,
+                learned_charge_power_phase="L1",
+                learned_charge_power_voltage=229.4,
+                learned_charge_power_signature_mismatch_sessions=1,
+                learned_charge_power_signature_checked_session_started_at=80.0,
                 relay_last_changed_at=111.0,
                 relay_last_off_at=112.0,
                 _runtime_state_serialized=None,
@@ -226,6 +281,15 @@ class TestServiceStateController(unittest.TestCase):
             self.assertEqual(saved["mode"], 1)
             self.assertEqual(saved["autostart"], 0)
             self.assertEqual(saved["auto_mode_cutover_pending"], 1)
+            self.assertNotIn("ignore_min_offtime_once", saved)
+            self.assertEqual(saved["learned_charge_power_watts"], 1980.0)
+            self.assertEqual(saved["learned_charge_power_updated_at"], 113.0)
+            self.assertEqual(saved["learned_charge_power_state"], "stable")
+            self.assertEqual(saved["learned_charge_power_sample_count"], 4)
+            self.assertEqual(saved["learned_charge_power_phase"], "L1")
+            self.assertEqual(saved["learned_charge_power_voltage"], 229.4)
+            self.assertEqual(saved["learned_charge_power_signature_mismatch_sessions"], 1)
+            self.assertEqual(saved["learned_charge_power_signature_checked_session_started_at"], 80.0)
 
             service.virtual_mode = 0
             service.virtual_autostart = 1
@@ -234,6 +298,15 @@ class TestServiceStateController(unittest.TestCase):
             service.manual_override_until = 0.0
             service._auto_mode_cutover_pending = False
             service._ignore_min_offtime_once = False
+            service.learned_charge_power_watts = None
+            service.learned_charge_power_updated_at = None
+            service.learned_charge_power_state = "unknown"
+            service.learned_charge_power_learning_since = None
+            service.learned_charge_power_sample_count = 0
+            service.learned_charge_power_phase = None
+            service.learned_charge_power_voltage = None
+            service.learned_charge_power_signature_mismatch_sessions = 0
+            service.learned_charge_power_signature_checked_session_started_at = None
             service.relay_last_changed_at = None
             service.relay_last_off_at = None
 
@@ -245,9 +318,113 @@ class TestServiceStateController(unittest.TestCase):
             self.assertEqual(service.virtual_startstop, 0)
             self.assertEqual(service.manual_override_until, 123.5)
             self.assertTrue(service._auto_mode_cutover_pending)
-            self.assertTrue(service._ignore_min_offtime_once)
+            self.assertFalse(service._ignore_min_offtime_once)
+            self.assertEqual(service.learned_charge_power_watts, 1980.0)
+            self.assertEqual(service.learned_charge_power_updated_at, 113.0)
+            self.assertEqual(service.learned_charge_power_state, "stable")
+            self.assertIsNone(service.learned_charge_power_learning_since)
+            self.assertEqual(service.learned_charge_power_sample_count, 4)
+            self.assertEqual(service.learned_charge_power_phase, "L1")
+            self.assertEqual(service.learned_charge_power_voltage, 229.4)
+            self.assertEqual(service.learned_charge_power_signature_mismatch_sessions, 1)
+            self.assertEqual(service.learned_charge_power_signature_checked_session_started_at, 80.0)
             self.assertEqual(service.relay_last_changed_at, 111.0)
             self.assertEqual(service.relay_last_off_at, 112.0)
+
+    def test_load_runtime_state_normalizes_unknown_learned_power_state_values(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = f"{temp_dir}/state.json"
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "mode": 1,
+                        "autostart": 1,
+                        "enable": 1,
+                        "startstop": 0,
+                        "manual_override_until": 0.0,
+                        "auto_mode_cutover_pending": 0,
+                        "ignore_min_offtime_once": 0,
+                        "learned_charge_power_watts": 1980.0,
+                        "learned_charge_power_updated_at": 113.0,
+                        "learned_charge_power_state": "nonsense",
+                        "learned_charge_power_sample_count": 2,
+                        "learned_charge_power_phase": "weird",
+                    },
+                    handle,
+                )
+
+            service = make_runtime_state_service(runtime_state_path=path)
+            controller = ServiceStateController(service, lambda value: int(value))
+            controller.load_runtime_state()
+
+            self.assertFalse(service._ignore_min_offtime_once)
+            self.assertEqual(service.learned_charge_power_state, "unknown")
+            self.assertEqual(service.learned_charge_power_sample_count, 2)
+            self.assertIsNone(service.learned_charge_power_phase)
+
+    def test_load_runtime_state_discards_future_historical_timestamps(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = f"{temp_dir}/state.json"
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "mode": 1,
+                        "autostart": 1,
+                        "enable": 1,
+                        "startstop": 0,
+                        "manual_override_until": 150.0,
+                        "auto_mode_cutover_pending": 0,
+                        "learned_charge_power_watts": 1980.0,
+                        "learned_charge_power_updated_at": 120.0,
+                        "learned_charge_power_learning_since": 121.0,
+                        "learned_charge_power_signature_checked_session_started_at": 122.0,
+                        "relay_last_changed_at": 123.0,
+                        "relay_last_off_at": 124.0,
+                    },
+                    handle,
+                )
+
+            service = make_runtime_state_service(runtime_state_path=path)
+            service._time_now = lambda: 100.0
+            controller = ServiceStateController(service, lambda value: int(value))
+            controller.load_runtime_state()
+
+            self.assertEqual(service.manual_override_until, 150.0)
+            self.assertIsNone(service.learned_charge_power_updated_at)
+            self.assertIsNone(service.learned_charge_power_learning_since)
+            self.assertIsNone(service.learned_charge_power_signature_checked_session_started_at)
+            self.assertIsNone(service.relay_last_changed_at)
+            self.assertIsNone(service.relay_last_off_at)
+
+    def test_load_runtime_state_discards_negative_learned_power_and_voltage(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = f"{temp_dir}/state.json"
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "mode": 1,
+                        "autostart": 1,
+                        "enable": 1,
+                        "startstop": 0,
+                        "learned_charge_power_watts": -1.0,
+                        "learned_charge_power_updated_at": 100.0,
+                        "learned_charge_power_state": "stable",
+                        "learned_charge_power_voltage": -230.0,
+                        "learned_charge_power_sample_count": -4,
+                        "learned_charge_power_signature_mismatch_sessions": -2,
+                    },
+                    handle,
+                )
+
+            service = make_runtime_state_service(runtime_state_path=path)
+            service._time_now = lambda: 100.0
+            controller = ServiceStateController(service, lambda value: int(value))
+            controller.load_runtime_state()
+
+            self.assertIsNone(service.learned_charge_power_watts)
+            self.assertIsNone(service.learned_charge_power_voltage)
+            self.assertEqual(service.learned_charge_power_sample_count, 0)
+            self.assertEqual(service.learned_charge_power_signature_mismatch_sessions, 0)
 
     def test_save_runtime_state_skips_empty_path_deduplicates_and_warns_on_failure(self):
         service = make_runtime_state_service()

@@ -1,0 +1,361 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Internal Auto-mode decision workflow helpers for the Shelly wallbox service.
+
+The Auto controller keeps the policy readable by splitting the decision tree
+into many small helper methods. The high-level behavior is:
+- gather fresh PV, grid, and battery inputs
+- smooth the relevant values
+- check hard safety gates first
+- evaluate start/stop conditions
+- return the desired relay state plus a diagnostic health reason
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+import logging
+import math
+import time
+from datetime import datetime
+from typing import Any, Deque
+
+from dbus_shelly_wallbox_auto_policy import AutoPolicy, validate_auto_policy
+from dbus_shelly_wallbox_common import _auto_state_code, _derive_auto_state
+from dbus_shelly_wallbox_split_mixins import _ComposableControllerMixin
+
+AutoSample = tuple[float, float, float]
+AutoDecision = bool | object
+MonthWindow = tuple[tuple[int, int], tuple[int, int]]
+
+
+
+class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
+    def _handle_relay_on(
+        self,
+        avg_surplus_power: float,
+        avg_grid_power: float,
+        battery_soc: float,
+        daytime_window_open: bool,
+        now: float,
+        cached_inputs: bool,
+    ) -> bool:
+        """Evaluate Auto stop conditions while the relay is already on."""
+        svc = self.service
+        svc.auto_start_condition_since = None
+        minimum_runtime_elapsed = self._minimum_runtime_elapsed(now)
+
+        stop_reason = self._relay_on_stop_reason(
+            avg_surplus_power,
+            avg_grid_power,
+            battery_soc,
+            daytime_window_open,
+            minimum_runtime_elapsed,
+        )
+
+        if stop_reason is None:
+            return self._running_result_with_health("running", cached_inputs)
+        stop_delay_seconds = svc.auto_stop_delay_seconds
+        reported_reason = stop_reason
+        if stop_reason == "auto-stop-surplus":
+            stop_delay_seconds = float(self._auto_policy().stop_surplus_delay_seconds)
+            reported_reason = "auto-stop"
+        elif stop_reason in ("auto-stop-grid", "auto-stop-soc"):
+            reported_reason = "auto-stop"
+        return self._pending_stop_or_running(
+            now,
+            reported_reason,
+            cached_inputs,
+            "running",
+            delay_seconds=stop_delay_seconds,
+            stop_key=stop_reason,
+        )
+
+    def _relay_on_stop_reason(
+        self,
+        avg_surplus_power: float,
+        avg_grid_power: float,
+        battery_soc: float,
+        daytime_window_open: bool,
+        minimum_runtime_elapsed: bool,
+    ) -> str | None:
+        """Return the concrete stop reason while Auto is already running."""
+        svc = self.service
+        _, stop_surplus_watts, _ = self._surplus_thresholds_for_soc(battery_soc)
+        if getattr(svc, "auto_night_lock_stop", False) and not daytime_window_open and minimum_runtime_elapsed:
+            return "night-lock"
+        if not minimum_runtime_elapsed:
+            return None
+        policy = self._auto_policy()
+        if battery_soc < policy.min_soc:
+            return "auto-stop-soc"
+        if avg_grid_power >= policy.stop_grid_import_watts:
+            return "auto-stop-grid"
+        if avg_surplus_power <= stop_surplus_watts:
+            return "auto-stop-surplus"
+        return None
+
+    @staticmethod
+    def _relay_off_start_conditions_met(
+        minimum_offtime_elapsed: bool,
+        daytime_window_open: bool,
+        avg_surplus_power: float,
+        avg_grid_power: float,
+        battery_soc: float,
+        start_surplus_watts: float,
+        svc: Any,
+    ) -> bool:
+        """Return whether all Auto start gates are satisfied."""
+        return (
+            minimum_offtime_elapsed
+            and daytime_window_open
+            and avg_surplus_power >= start_surplus_watts
+            and avg_grid_power <= svc.auto_start_max_grid_import_watts
+            and battery_soc >= svc.auto_resume_soc
+        )
+
+    def _arm_or_fire_start(self, now: float, cached_inputs: bool) -> bool:
+        """Track delayed start conditions and start once the configured delay elapsed."""
+        svc = self.service
+        if svc.auto_start_condition_since is None:
+            svc.auto_start_condition_since = now
+            return False
+        if (now - svc.auto_start_condition_since) >= svc.auto_start_delay_seconds:
+            svc._ignore_min_offtime_once = False
+            svc._save_runtime_state()
+            self.set_health("auto-start", cached_inputs, relay_intent=True)
+            return True
+        return False
+
+    def _set_waiting_health(
+        self,
+        minimum_offtime_elapsed: bool,
+        daytime_window_open: bool,
+        avg_surplus_power: float,
+        avg_grid_power: float,
+        battery_soc: float,
+        cached_inputs: bool,
+    ) -> None:
+        """Set the most useful waiting reason while Auto is idle."""
+        svc = self.service
+        start_surplus_watts, _, _ = self._surplus_thresholds_for_soc(battery_soc)
+        if not minimum_offtime_elapsed:
+            reason = "waiting-offtime"
+        elif not daytime_window_open:
+            reason = "waiting-daytime"
+        elif avg_surplus_power < start_surplus_watts:
+            reason = "waiting-surplus"
+        elif avg_grid_power > svc.auto_start_max_grid_import_watts:
+            reason = "waiting-grid"
+        elif battery_soc < svc.auto_resume_soc:
+            reason = "waiting-soc"
+        else:
+            reason = "waiting"
+        self.set_health(reason, cached_inputs, relay_intent=False)
+
+    def _handle_relay_off(
+        self,
+        avg_surplus_power: float,
+        avg_grid_power: float,
+        battery_soc: float,
+        daytime_window_open: bool,
+        now: float,
+        cached_inputs: bool,
+    ) -> bool:
+        """Evaluate Auto start conditions while the relay is off."""
+        svc = self.service
+        start_surplus_watts, _, _ = self._surplus_thresholds_for_soc(battery_soc)
+        svc.auto_stop_condition_since = None
+        if not svc.virtual_autostart:
+            return self._idle_result_with_health("autostart-disabled", cached_inputs)
+
+        minimum_offtime_elapsed = self._minimum_offtime_elapsed(now)
+        if self._relay_off_start_conditions_met(
+            minimum_offtime_elapsed,
+            daytime_window_open,
+            avg_surplus_power,
+            avg_grid_power,
+            battery_soc,
+            start_surplus_watts,
+            svc,
+        ):
+            return self._arm_or_fire_start(now, cached_inputs)
+
+        self._clear_auto_start_tracking()
+        self._set_waiting_health(
+            minimum_offtime_elapsed,
+            daytime_window_open,
+            avg_surplus_power,
+            avg_grid_power,
+            battery_soc,
+            cached_inputs,
+        )
+        return False
+
+    def _pre_average_decision(
+        self,
+        relay_on: bool,
+        pv_power: float | None,
+        battery_soc: float | int | None,
+        grid_power: float | None,
+        now: float,
+        cached_inputs: bool,
+    ) -> tuple[AutoDecision, float | None]:
+        """Handle all early exits before rolling-average metrics are considered."""
+        svc = self.service
+        if not self._mode_uses_auto_logic(svc.virtual_mode):
+            return self._handle_non_auto_mode(relay_on), None
+
+        if not bool(getattr(svc, "virtual_enable", 1)):
+            return self._handle_disabled_mode(cached_inputs), None
+
+        decision = self._handle_cutover_pending(relay_on, cached_inputs)
+        if decision is not self._NO_DECISION:
+            return decision, None
+
+        if not self._grid_recently_read(grid_power, now):
+            return self._handle_grid_missing(relay_on, now, cached_inputs), None
+
+        battery_soc, decision = self._resolve_battery_soc(battery_soc, relay_on, now, cached_inputs)
+        if decision is not self._NO_DECISION:
+            return decision, None
+
+        decision = self._handle_grid_recovery_start_gate(relay_on, now, cached_inputs)
+        if decision is not self._NO_DECISION:
+            return decision, None
+
+        if pv_power is None or grid_power is None:
+            assert battery_soc is not None
+            return self._handle_missing_inputs(relay_on, battery_soc, grid_power, now, cached_inputs), None
+
+        return self._NO_DECISION, battery_soc
+
+    def _post_average_decision(
+        self,
+        relay_on: bool,
+        avg_surplus_power: float,
+        avg_grid_power: float,
+        battery_soc: float,
+        now: float,
+        cached_inputs: bool,
+    ) -> tuple[AutoDecision, bool | None]:
+        """Handle warmup/manual override gates after averages are available."""
+        decision = self._handle_common_runtime_gates(relay_on, now, cached_inputs)
+        if decision is not self._NO_DECISION:
+            return decision, None
+        return self._NO_DECISION, self.service._is_within_auto_daytime_window()
+
+    def _resolved_auto_decision(self, decision: AutoDecision) -> bool | None:
+        """Return a concrete relay decision or ``None`` when evaluation must continue."""
+        if decision is self._NO_DECISION:
+            return None
+        assert isinstance(decision, bool)
+        return decision
+
+    def _averaged_auto_metrics(
+        self,
+        now: float,
+        pv_power: float,
+        grid_power: float,
+        battery_soc: float,
+        relay_on: bool,
+        cached_inputs: bool,
+    ) -> tuple[float, float] | None:
+        """Return averaged Auto inputs once the rolling window is ready."""
+        avg_surplus_power, avg_grid_power = self._update_average_metrics(
+            now,
+            pv_power,
+            grid_power,
+            battery_soc,
+            relay_on,
+        )
+        if avg_surplus_power is None or avg_grid_power is None:
+            self.set_health("averaging", cached_inputs, relay_intent=relay_on)
+            return None
+        return avg_surplus_power, avg_grid_power
+
+    def _decision_from_averages(
+        self,
+        relay_on: bool,
+        avg_surplus_power: float,
+        avg_grid_power: float,
+        battery_soc: float,
+        now: float,
+        cached_inputs: bool,
+    ) -> bool:
+        """Complete Auto evaluation once rolling averages are available."""
+        decision, daytime_window_open = self._post_average_decision(
+            relay_on,
+            avg_surplus_power,
+            avg_grid_power,
+            battery_soc,
+            now,
+            cached_inputs,
+        )
+        resolved = self._resolved_auto_decision(decision)
+        if resolved is not None:
+            return resolved
+        assert daytime_window_open is not None
+        if relay_on:
+            return self._handle_relay_on(
+                avg_surplus_power,
+                avg_grid_power,
+                battery_soc,
+                daytime_window_open,
+                now,
+                cached_inputs,
+            )
+        return self._handle_relay_off(
+            avg_surplus_power,
+            avg_grid_power,
+            battery_soc,
+            daytime_window_open,
+            now,
+            cached_inputs,
+        )
+
+    def auto_decide_relay(
+        self,
+        relay_on: bool,
+        pv_power: float | None,
+        battery_soc: float | int | None,
+        grid_power: float | None,
+    ) -> bool:
+        """Return desired relay state based on auto surplus logic."""
+        svc = self.service
+        cached_inputs = bool(getattr(svc, "_auto_cached_inputs_used", False))
+        now = self._learning_policy_now()
+        decision, battery_soc = self._pre_average_decision(
+            relay_on,
+            pv_power,
+            battery_soc,
+            grid_power,
+            now,
+            cached_inputs,
+        )
+        resolved = self._resolved_auto_decision(decision)
+        if resolved is not None:
+            return resolved
+
+        assert pv_power is not None
+        assert grid_power is not None
+        assert battery_soc is not None
+
+        averages = self._averaged_auto_metrics(
+            now,
+            pv_power,
+            grid_power,
+            battery_soc,
+            relay_on,
+            cached_inputs,
+        )
+        if averages is None:
+            return relay_on
+        avg_surplus_power, avg_grid_power = averages
+        return self._decision_from_averages(
+            relay_on,
+            avg_surplus_power,
+            avg_grid_power,
+            battery_soc,
+            now,
+            cached_inputs,
+        )

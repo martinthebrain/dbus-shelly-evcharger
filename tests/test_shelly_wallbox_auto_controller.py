@@ -52,6 +52,18 @@ class TestAutoDecisionController(unittest.TestCase):
         self.assertEqual(service.relay_last_changed_at, 123.0)
         self.assertEqual(service.relay_last_off_at, 123.0)
 
+    def test_auto_decide_relay_uses_service_time_source(self):
+        controller, service = self._make_controller()
+        service._time_now = lambda: 150.0
+        service.relay_last_off_at = 140.0
+        service.auto_min_offtime_seconds = 20.0
+        service.auto_samples = deque([(149.0, 2500.0, -2500.0)])
+
+        with patch("dbus_shelly_wallbox_auto_logic.time.time", return_value=999.0):
+            self.assertFalse(controller.auto_decide_relay(False, 2500.0, 60.0, -2500.0))
+
+        self.assertEqual(service._last_health_reason, "waiting-offtime")
+
     def test_daytime_window_handles_equal_and_wraparound_ranges(self):
         controller, service = self._make_controller()
         service.auto_daytime_only = True
@@ -71,7 +83,59 @@ class TestAutoDecisionController(unittest.TestCase):
 
         self.assertEqual(service._last_health_reason, "grid-missing-cached")
         self.assertEqual(service._last_health_code, 101)
+        self.assertEqual(service._last_auto_state, "recovery")
+        self.assertEqual(service._last_auto_state_code, 5)
         service._write_auto_audit_event.assert_called_once_with("grid-missing", True)
+
+    def test_set_health_uses_explicit_learning_state_while_running(self):
+        controller, service = self._make_controller()
+        service._last_confirmed_pm_status = {"output": True}
+        service._last_confirmed_pm_status_at = 995.0
+        service.learned_charge_power_state = "learning"
+
+        controller.set_health("running", cached=False)
+
+        self.assertEqual(service._last_auto_state, "learning")
+        self.assertEqual(service._last_auto_state_code, 2)
+        self.assertEqual(service._last_auto_metrics["state"], "learning")
+        self.assertEqual(service._last_auto_metrics["relay_intent"], 1)
+
+    def test_set_health_postconditions_sanitize_metrics_and_follow_explicit_relay_intent(self):
+        controller, service = self._make_controller()
+        service._last_auto_metrics = {
+            "start_threshold": 1000.0,
+            "stop_threshold": 1200.0,
+            "threshold_mode": 7,
+            "learned_charge_power_state": "odd",
+        }
+
+        controller.set_health("running", cached=False, relay_intent=True)
+
+        self.assertEqual(service._last_health_reason, "running")
+        self.assertEqual(service._last_health_code, 99)
+        self.assertEqual(service._last_auto_state, "charging")
+        self.assertEqual(service._last_auto_state_code, 3)
+        self.assertEqual(service._last_auto_metrics["relay_intent"], 1)
+        self.assertEqual(service._last_auto_metrics["state"], "charging")
+        self.assertIsNone(service._last_auto_metrics["start_threshold"])
+        self.assertIsNone(service._last_auto_metrics["stop_threshold"])
+        self.assertEqual(service._last_auto_metrics["threshold_mode"], "7")
+
+    def test_observed_relay_state_ignores_stale_confirmed_or_virtual_only_state(self):
+        controller, service = self._make_controller()
+        service._last_confirmed_pm_status = {"output": True}
+        service._last_confirmed_pm_status_at = 980.0
+        service.virtual_startstop = 1
+
+        self.assertFalse(controller._observed_relay_state())
+
+    def test_derive_auto_state_uses_observed_relay_hint_and_learning_state(self):
+        controller, service = self._make_controller()
+        service._last_confirmed_pm_status = {"output": True}
+        service._last_confirmed_pm_status_at = 999.0
+        service.learned_charge_power_state = "learning"
+
+        self.assertEqual(controller._derive_auto_state("custom-reason"), "learning")
 
     def test_battery_soc_missing_without_override_returns_terminal_decision(self):
         controller, service = self._make_controller()
@@ -81,6 +145,17 @@ class TestAutoDecisionController(unittest.TestCase):
         self.assertIsNone(battery_soc)
         self.assertTrue(decision)
         self.assertEqual(service._last_health_reason, "battery-soc-missing")
+
+    def test_out_of_range_battery_soc_is_treated_as_missing(self):
+        controller, service = self._make_controller()
+        service._warning_throttled = MagicMock()
+
+        battery_soc, decision = controller._resolve_battery_soc(150.0, True, 100.0, False)
+
+        self.assertIsNone(battery_soc)
+        self.assertTrue(decision)
+        self.assertEqual(service._last_health_reason, "battery-soc-missing")
+        service._warning_throttled.assert_called_once()
 
     def test_stop_and_missing_input_helpers_cover_running_idle_and_none_reason(self):
         controller, service = self._make_controller()
@@ -245,6 +320,88 @@ class TestAutoDecisionController(unittest.TestCase):
         self.assertEqual(controller._surplus_thresholds_for_soc(44.0), (2000.0, 1600.0, "normal"))
         self.assertFalse(service._auto_high_soc_profile_active)
 
+    def test_non_auto_mode_sets_explicit_idle_state(self):
+        controller, service = self._make_controller()
+        service.virtual_mode = 0
+
+        result = controller._handle_non_auto_mode(True)
+
+        self.assertTrue(result)
+        self.assertEqual(service._last_auto_state, "idle")
+        self.assertEqual(service._last_auto_state_code, 0)
+
+    def test_learned_charge_power_scales_normal_and_high_soc_surplus_thresholds(self):
+        controller, service = self._make_controller()
+        service.learned_charge_power_watts = 2280.0
+        service.learned_charge_power_updated_at = 995.0
+        service.learned_charge_power_state = "stable"
+
+        self.assertEqual(controller._surplus_thresholds_for_soc(50.0), (2400.0, 1920.0, "normal"))
+        self.assertEqual(controller._surplus_thresholds_for_soc(55.0), (1980.0, 960.0, "high-soc"))
+
+    def test_learned_charge_power_scale_falls_back_to_static_when_disabled_or_invalid(self):
+        controller, service = self._make_controller()
+        policy = controller._auto_policy()
+
+        policy.learn_charge_power.enabled = False
+        service.learned_charge_power_watts = 2280.0
+        service.learned_charge_power_updated_at = 995.0
+        service.learned_charge_power_state = "stable"
+        self.assertEqual(controller._learned_charge_power_scale(), 1.0)
+
+        policy.learn_charge_power.enabled = True
+        service.learned_charge_power_watts = 0.0
+        self.assertEqual(controller._learned_charge_power_scale(), 1.0)
+
+    def test_learned_charge_power_scale_ignores_stale_runtime_value(self):
+        controller, service = self._make_controller()
+        service.learned_charge_power_watts = 2280.0
+        service.learned_charge_power_updated_at = 100.0
+        service.learned_charge_power_state = "stable"
+        service.auto_learn_charge_power_max_age_seconds = 60.0
+
+        self.assertEqual(controller._learned_charge_power_scale(), 1.0)
+        self.assertIsNone(controller._active_learned_charge_power())
+
+    def test_active_learned_charge_power_covers_unbounded_age_missing_timestamp_and_time_fallback(self):
+        controller, service = self._make_controller()
+        service.learned_charge_power_watts = 2280.0
+        service.learned_charge_power_state = "stable"
+        service.auto_learn_charge_power_max_age_seconds = 0.0
+        service.learned_charge_power_updated_at = None
+
+        self.assertEqual(controller._active_learned_charge_power(), 2280.0)
+
+        controller._auto_policy().learn_charge_power.max_age_seconds = 60.0
+        self.assertIsNone(controller._active_learned_charge_power())
+
+        delattr(service, "_time_now")
+        service.learned_charge_power_updated_at = 995.0
+        with patch("dbus_shelly_wallbox_auto_logic.time.time", return_value=1000.0):
+            self.assertEqual(controller._active_learned_charge_power(), 2280.0)
+
+    def test_learned_charge_power_helpers_cover_invalid_state_and_defensive_none_paths(self):
+        controller, service = self._make_controller()
+        service.learned_charge_power_watts = 2280.0
+        service.learned_charge_power_updated_at = 995.0
+        service.learned_charge_power_state = "unsupported"
+        self.assertEqual(controller._current_learned_charge_power_state(1000.0), "unknown")
+
+        with patch.object(controller, "_current_learned_charge_power_state", return_value="stable"):
+            service.learned_charge_power_watts = None
+            self.assertIsNone(controller._active_learned_charge_power())
+
+            service.learned_charge_power_watts = 0.0
+            self.assertIsNone(controller._active_learned_charge_power())
+
+            controller._auto_policy().learn_charge_power.max_age_seconds = 60.0
+            service.learned_charge_power_watts = 2280.0
+            service.learned_charge_power_updated_at = None
+            self.assertIsNone(controller._active_learned_charge_power())
+
+            service.learned_charge_power_updated_at = 900.0
+            self.assertIsNone(controller._active_learned_charge_power(1000.0))
+
     def test_average_metrics_records_active_threshold_profile_for_diagnostics(self):
         controller, service = self._make_controller()
         service._add_auto_sample = MagicMock()
@@ -255,9 +412,65 @@ class TestAutoDecisionController(unittest.TestCase):
         self.assertEqual(service._last_auto_metrics["profile"], "high-soc")
         self.assertEqual(service._last_auto_metrics["start_threshold"], 1650.0)
         self.assertEqual(service._last_auto_metrics["stop_threshold"], 800.0)
+        self.assertEqual(service._last_auto_metrics["learned_charge_power"], None)
+        self.assertEqual(service._last_auto_metrics["learned_charge_power_state"], "unknown")
+        self.assertEqual(service._last_auto_metrics["threshold_scale"], 1.0)
+        self.assertEqual(service._last_auto_metrics["threshold_mode"], "static")
         self.assertEqual(service._last_auto_metrics["stop_alpha"], 0.25)
         self.assertEqual(service._last_auto_metrics["stop_alpha_stage"], "base")
         self.assertIsNone(service._last_auto_metrics["surplus_volatility"])
+
+    def test_average_metrics_records_scaled_thresholds_when_learned_power_is_available(self):
+        controller, service = self._make_controller()
+        service.learned_charge_power_watts = 2280.0
+        service.learned_charge_power_updated_at = 995.0
+        service.learned_charge_power_state = "stable"
+        service._add_auto_sample = MagicMock()
+        service._average_auto_metric = MagicMock(side_effect=[2100.0, 40.0])
+
+        controller._update_average_metrics(100.0, 2600.0, -2200.0, 55.0, False)
+
+        self.assertEqual(service._last_auto_metrics["profile"], "high-soc")
+        self.assertEqual(service._last_auto_metrics["start_threshold"], 1980.0)
+        self.assertEqual(service._last_auto_metrics["stop_threshold"], 960.0)
+        self.assertEqual(service._last_auto_metrics["learned_charge_power"], 2280.0)
+        self.assertEqual(service._last_auto_metrics["learned_charge_power_state"], "stable")
+        self.assertEqual(service._last_auto_metrics["threshold_scale"], 1.2)
+        self.assertEqual(service._last_auto_metrics["threshold_mode"], "adaptive")
+
+    def test_average_metrics_falls_back_to_static_thresholds_when_learned_value_is_stale(self):
+        controller, service = self._make_controller()
+        service.learned_charge_power_watts = 2280.0
+        service.learned_charge_power_updated_at = 100.0
+        service.learned_charge_power_state = "stable"
+        service.auto_learn_charge_power_max_age_seconds = 60.0
+        service._add_auto_sample = MagicMock()
+        service._average_auto_metric = MagicMock(side_effect=[2100.0, 40.0])
+
+        controller._update_average_metrics(1000.0, 2600.0, -2200.0, 55.0, False)
+
+        self.assertEqual(service._last_auto_metrics["start_threshold"], 1650.0)
+        self.assertEqual(service._last_auto_metrics["stop_threshold"], 800.0)
+        self.assertIsNone(service._last_auto_metrics["learned_charge_power"])
+        self.assertEqual(service._last_auto_metrics["learned_charge_power_state"], "stale")
+        self.assertEqual(service._last_auto_metrics["threshold_scale"], 1.0)
+        self.assertEqual(service._last_auto_metrics["threshold_mode"], "static")
+
+    def test_learning_state_blocks_adaptive_thresholds_until_value_is_stable(self):
+        controller, service = self._make_controller()
+        service.learned_charge_power_watts = 2280.0
+        service.learned_charge_power_updated_at = 995.0
+        service.learned_charge_power_state = "learning"
+        service._add_auto_sample = MagicMock()
+        service._average_auto_metric = MagicMock(side_effect=[2100.0, 40.0])
+
+        controller._update_average_metrics(1000.0, 2600.0, -2200.0, 55.0, False)
+
+        self.assertEqual(service._last_auto_metrics["start_threshold"], 1650.0)
+        self.assertEqual(service._last_auto_metrics["stop_threshold"], 800.0)
+        self.assertIsNone(service._last_auto_metrics["learned_charge_power"])
+        self.assertEqual(service._last_auto_metrics["learned_charge_power_state"], "learning")
+        self.assertEqual(service._last_auto_metrics["threshold_mode"], "static")
 
     def test_stop_timer_resets_when_reason_changes_from_grid_to_surplus(self):
         controller, service = self._make_controller()
@@ -352,6 +565,100 @@ class TestAutoDecisionController(unittest.TestCase):
         self.assertTrue(service._grid_recovery_required)
         self.assertEqual(service._grid_recovery_since, 101.0)
 
+    def test_cutover_pending_stays_blocked_until_relay_off_is_confirmed(self):
+        controller, service = self._make_controller()
+        service._auto_mode_cutover_pending = True
+        service._last_pm_status_confirmed = False
+        service._peek_pending_relay_command = MagicMock(return_value=(None, None))
+
+        decision = controller._handle_cutover_pending(False, False)
+
+        self.assertFalse(decision)
+        self.assertTrue(service._auto_mode_cutover_pending)
+        self.assertFalse(service._ignore_min_offtime_once)
+        self.assertEqual(service._last_health_reason, "mode-transition")
+        service._save_runtime_state.assert_not_called()
+
+    def test_cutover_pending_clears_only_after_confirmed_relay_off(self):
+        controller, service = self._make_controller()
+        service._auto_mode_cutover_pending = True
+        service._last_pm_status_confirmed = True
+        service._last_confirmed_pm_status = {"output": False}
+        service._last_confirmed_pm_status_at = 999.5
+        service._relay_sync_requested_at = 999.0
+        service._peek_pending_relay_command = MagicMock(return_value=(None, None))
+
+        decision = controller._handle_cutover_pending(False, False)
+
+        self.assertIs(decision, controller._NO_DECISION)
+        self.assertFalse(service._auto_mode_cutover_pending)
+        self.assertTrue(service._ignore_min_offtime_once)
+        service._save_runtime_state.assert_called_once()
+
+    def test_cutover_pending_ignores_confirmed_off_sample_from_before_cutover_request(self):
+        controller, service = self._make_controller()
+        service._auto_mode_cutover_pending = True
+        service._last_pm_status_confirmed = True
+        service._last_confirmed_pm_status = {"output": False}
+        service._last_confirmed_pm_status_at = 998.0
+        service._relay_sync_requested_at = 999.0
+        service._peek_pending_relay_command = MagicMock(return_value=(None, None))
+
+        decision = controller._handle_cutover_pending(False, False)
+
+        self.assertFalse(decision)
+        self.assertTrue(service._auto_mode_cutover_pending)
+        self.assertFalse(service._ignore_min_offtime_once)
+        self.assertEqual(service._last_health_reason, "mode-transition")
+        service._save_runtime_state.assert_not_called()
+
+    def test_cutover_pending_uses_fallback_last_pm_status_when_confirmed_cache_is_missing(self):
+        controller, service = self._make_controller()
+        service._auto_mode_cutover_pending = True
+        service._peek_pending_relay_command = MagicMock(return_value=(None, None))
+        service._last_confirmed_pm_status = None
+        service._last_confirmed_pm_status_at = None
+        service._last_pm_status_confirmed = True
+        service._last_pm_status = {"output": False}
+        service._last_pm_status_at = 999.5
+        service._relay_sync_requested_at = 999.0
+        controller._learning_policy_now = MagicMock(return_value=1000.0)
+
+        decision = controller._handle_cutover_pending(False, False)
+
+        self.assertIs(decision, controller._NO_DECISION)
+        self.assertFalse(service._auto_mode_cutover_pending)
+        self.assertTrue(service._ignore_min_offtime_once)
+
+    def test_cutover_confirmed_helpers_cover_missing_and_stale_timestamps(self):
+        controller, service = self._make_controller()
+        service._relay_sync_requested_at = 999.0
+        service._worker_poll_interval_seconds = 1.0
+        service.relay_sync_timeout_seconds = 2.0
+
+        self.assertFalse(controller._cutover_confirmed_sample_fresh(None, 1000.0))
+        self.assertTrue(controller._cutover_confirmed_sample_fresh(999.5, 1000.0))
+        self.assertFalse(controller._cutover_confirmed_after_request(None))
+        self.assertFalse(controller._cutover_confirmed_after_request(998.0))
+
+    def test_cutover_confirmed_after_request_accepts_missing_request_timestamp(self):
+        controller, service = self._make_controller()
+        service._relay_sync_requested_at = None
+
+        self.assertTrue(controller._cutover_confirmed_after_request(998.0))
+
+    def test_learned_charge_power_age_helpers_cover_missing_update_timestamp(self):
+        controller, service = self._make_controller()
+        service.learned_charge_power_updated_at = None
+
+        self.assertIsNone(controller._learned_charge_power_age_seconds(1000.0))
+        self.assertTrue(controller._learned_charge_power_expired(1000.0))
+
+    def test_surplus_thresholds_fall_back_to_static_profile_when_scaled_thresholds_become_invalid(self):
+        controller, _service = self._make_controller()
+        with patch.object(controller, "_scale_surplus_thresholds", return_value=(800.0, 1200.0)):
+            self.assertEqual(controller._surplus_thresholds_for_soc(55.0), (1650.0, 800.0, "high-soc"))
+
     def test_auto_policy_synthesis_tolerates_read_only_service_attributes(self):
         class LockedAutoPolicyService(SimpleNamespace):
             def __setattr__(self, name, value):
@@ -378,3 +685,15 @@ class TestAutoDecisionController(unittest.TestCase):
         self.assertIs(decision, controller._NO_DECISION)
         self.assertFalse(service._grid_recovery_required)
         self.assertEqual(service._grid_recovery_since, 123.0)
+
+    def test_grid_recovery_gate_keeps_running_relay_unchanged_while_recovery_window_is_open(self):
+        controller, service = self._make_controller()
+        service.auto_grid_recovery_start_seconds = 30.0
+        service._grid_recovery_required = True
+        service._grid_recovery_since = 110.0
+
+        decision = controller._handle_grid_recovery_start_gate(True, 123.0, False)
+
+        self.assertIs(decision, controller._NO_DECISION)
+        self.assertTrue(service._grid_recovery_required)
+        self.assertEqual(service._grid_recovery_since, 110.0)

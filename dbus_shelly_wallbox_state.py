@@ -4,8 +4,17 @@
 import configparser
 import json
 import logging
+import math
 import os
+import time
 from dbus_shelly_wallbox_auto_policy import validate_auto_policy
+from dbus_shelly_wallbox_contracts import (
+    finite_float_or_none,
+    non_negative_float_or_none,
+    non_negative_int,
+    normalize_learning_phase,
+    normalize_learning_state,
+)
 from dbus_shelly_wallbox_shared import compact_json, write_text_atomically
 
 
@@ -55,12 +64,15 @@ class ServiceStateController:
             f"autostart={getattr(svc, 'virtual_autostart', 'na')} "
             f"cutover={int(bool(getattr(svc, '_auto_mode_cutover_pending', False)))} "
             f"ignore_offtime={int(bool(getattr(svc, '_ignore_min_offtime_once', False)))} "
+            f"auto_state={getattr(svc, '_last_auto_state', 'na')} "
             f"health={getattr(svc, '_last_health_reason', 'na')}"
         )
 
     @staticmethod
     def coerce_runtime_int(value, default=0):
         """Convert persisted runtime values to int safely."""
+        if isinstance(value, bool):
+            return int(default)
         try:
             return int(value)
         except (TypeError, ValueError):
@@ -69,10 +81,8 @@ class ServiceStateController:
     @staticmethod
     def coerce_runtime_float(value, default=0.0):
         """Convert persisted runtime values to float safely."""
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return float(default)
+        normalized = finite_float_or_none(value)
+        return float(default) if normalized is None else normalized
 
     def current_runtime_state(self):
         """Return the volatile runtime state that should survive service restarts."""
@@ -84,7 +94,21 @@ class ServiceStateController:
             "startstop": int(svc.virtual_startstop),
             "manual_override_until": float(svc.manual_override_until),
             "auto_mode_cutover_pending": 1 if svc._auto_mode_cutover_pending else 0,
-            "ignore_min_offtime_once": 1 if svc._ignore_min_offtime_once else 0,
+            "learned_charge_power_watts": getattr(svc, "learned_charge_power_watts", None),
+            "learned_charge_power_updated_at": getattr(svc, "learned_charge_power_updated_at", None),
+            "learned_charge_power_state": getattr(svc, "learned_charge_power_state", "unknown"),
+            "learned_charge_power_learning_since": getattr(svc, "learned_charge_power_learning_since", None),
+            "learned_charge_power_sample_count": int(getattr(svc, "learned_charge_power_sample_count", 0)),
+            "learned_charge_power_phase": getattr(svc, "learned_charge_power_phase", None),
+            "learned_charge_power_voltage": getattr(svc, "learned_charge_power_voltage", None),
+            "learned_charge_power_signature_mismatch_sessions": int(
+                getattr(svc, "learned_charge_power_signature_mismatch_sessions", 0)
+            ),
+            "learned_charge_power_signature_checked_session_started_at": getattr(
+                svc,
+                "learned_charge_power_signature_checked_session_started_at",
+                None,
+            ),
             "relay_last_changed_at": svc.relay_last_changed_at,
             "relay_last_off_at": svc.relay_last_off_at,
         }
@@ -99,6 +123,27 @@ class ServiceStateController:
         if value is None:
             return None
         return ServiceStateController.coerce_runtime_float(value)
+
+    @staticmethod
+    def _coerce_optional_runtime_past_time(value, now=None):
+        """Convert one persisted historical timestamp, rejecting implausible future values."""
+        normalized = ServiceStateController._coerce_optional_runtime_float(value)
+        if normalized is None:
+            return None
+        current = time.time() if now is None else float(now)
+        if normalized > (current + 1.0):
+            return None
+        return normalized
+
+    @staticmethod
+    def _normalize_learned_charge_power_state(value):
+        """Return one supported learned-power state string."""
+        return normalize_learning_state(value)
+
+    @staticmethod
+    def _normalize_learned_charge_power_phase(value):
+        """Return one supported learned-power phase signature."""
+        return normalize_learning_phase(value)
 
     def load_runtime_state(self):
         """Restore volatile runtime state from a RAM-backed file if present."""
@@ -115,6 +160,8 @@ class ServiceStateController:
             logging.warning("Unable to read runtime state from %s: %s", path, error)
             return
 
+        time_now = getattr(svc, "_time_now", None)
+        current_time = time_now() if callable(time_now) else time.time()
         svc.virtual_mode = self._normalize_mode(state.get("mode", svc.virtual_mode))
         svc.virtual_autostart = self.coerce_runtime_int(state.get("autostart"), svc.virtual_autostart)
         svc.virtual_enable = self.coerce_runtime_int(state.get("enable"), svc.virtual_enable)
@@ -126,13 +173,64 @@ class ServiceStateController:
         svc._auto_mode_cutover_pending = bool(
             self.coerce_runtime_int(state.get("auto_mode_cutover_pending"), svc._auto_mode_cutover_pending)
         )
-        svc._ignore_min_offtime_once = bool(
-            self.coerce_runtime_int(state.get("ignore_min_offtime_once"), svc._ignore_min_offtime_once)
+        # This flag is a one-shot runtime bypass, not durable session state.
+        # Clear it on every service start, even if an older runtime-state file
+        # still contains the legacy field.
+        svc._ignore_min_offtime_once = False
+        learned_charge_power_watts = state.get(
+            "learned_charge_power_watts",
+            getattr(svc, "learned_charge_power_watts", None),
+        )
+        learned_charge_power_updated_at = state.get(
+            "learned_charge_power_updated_at",
+            getattr(svc, "learned_charge_power_updated_at", None),
+        )
+        svc.learned_charge_power_watts = non_negative_float_or_none(learned_charge_power_watts)
+        svc.learned_charge_power_updated_at = self._coerce_optional_runtime_past_time(
+            learned_charge_power_updated_at,
+            current_time,
+        )
+        svc.learned_charge_power_state = self._normalize_learned_charge_power_state(
+            state.get("learned_charge_power_state", getattr(svc, "learned_charge_power_state", "unknown"))
+        )
+        svc.learned_charge_power_learning_since = self._coerce_optional_runtime_past_time(
+            state.get(
+                "learned_charge_power_learning_since",
+                getattr(svc, "learned_charge_power_learning_since", None),
+            ),
+            current_time,
+        )
+        svc.learned_charge_power_sample_count = non_negative_int(
+            state.get(
+                "learned_charge_power_sample_count",
+                getattr(svc, "learned_charge_power_sample_count", 0),
+            ),
+            0,
+        )
+        svc.learned_charge_power_phase = self._normalize_learned_charge_power_phase(
+            state.get("learned_charge_power_phase", getattr(svc, "learned_charge_power_phase", None))
+        )
+        svc.learned_charge_power_voltage = non_negative_float_or_none(
+            state.get("learned_charge_power_voltage", getattr(svc, "learned_charge_power_voltage", None))
+        )
+        svc.learned_charge_power_signature_mismatch_sessions = non_negative_int(
+            state.get(
+                "learned_charge_power_signature_mismatch_sessions",
+                getattr(svc, "learned_charge_power_signature_mismatch_sessions", 0),
+            ),
+            0,
+        )
+        svc.learned_charge_power_signature_checked_session_started_at = self._coerce_optional_runtime_past_time(
+            state.get(
+                "learned_charge_power_signature_checked_session_started_at",
+                getattr(svc, "learned_charge_power_signature_checked_session_started_at", None),
+            ),
+            current_time,
         )
         relay_last_changed_at = state.get("relay_last_changed_at", svc.relay_last_changed_at)
         relay_last_off_at = state.get("relay_last_off_at", svc.relay_last_off_at)
-        svc.relay_last_changed_at = self._coerce_optional_runtime_float(relay_last_changed_at)
-        svc.relay_last_off_at = self._coerce_optional_runtime_float(relay_last_off_at)
+        svc.relay_last_changed_at = self._coerce_optional_runtime_past_time(relay_last_changed_at, current_time)
+        svc.relay_last_off_at = self._coerce_optional_runtime_past_time(relay_last_off_at, current_time)
         svc._runtime_state_serialized = self._serialized_runtime_state()
         logging.info("Restored runtime state from %s: %s", path, self.state_summary())
 
@@ -274,68 +372,102 @@ class ServiceStateController:
         self._clamp_min_int(svc, "sign_of_life_minutes", 1, "SignOfLifeLog", " minute")
         self._clamp_min_int(svc, "auto_pv_max_services", 1, "AutoPvMaxServices", "")
         self._clamp_interval_settings()
-        if svc.startup_device_info_retries < 0:
-            logging.warning(
-                "StartupDeviceInfoRetries %s invalid, clamping to 0",
-                svc.startup_device_info_retries,
-            )
-            svc.startup_device_info_retries = 0
-        self._clamp_positive_timeout(
-            svc,
-            "shelly_request_timeout_seconds",
-            2.0,
-            "ShellyRequestTimeoutSeconds",
-        )
-        self._clamp_positive_timeout(
-            svc,
-            "dbus_method_timeout_seconds",
-            1.0,
-            "DbusMethodTimeoutSeconds",
-        )
-        if hasattr(svc, "auto_audit_log_max_age_hours"):
-            self._clamp_positive_timeout(
-                svc,
-                "auto_audit_log_max_age_hours",
-                168.0,
-                "AutoAuditLogMaxAgeHours",
-            )
-        if hasattr(svc, "auto_audit_log_repeat_seconds"):
-            self._clamp_positive_timeout(
-                svc,
-                "auto_audit_log_repeat_seconds",
-                30.0,
-                "AutoAuditLogRepeatSeconds",
-            )
+        self._validate_startup_retry_config(svc)
+        self._validate_timeout_settings(svc)
         if hasattr(svc, "auto_policy"):
             validate_auto_policy(svc.auto_policy, svc)
         else:
-            for attr_name in (
-                "auto_grid_recovery_start_seconds",
-                "auto_stop_surplus_delay_seconds",
-                "auto_stop_surplus_volatility_low_watts",
-                "auto_stop_surplus_volatility_high_watts",
-            ):
-                if hasattr(svc, attr_name):
-                    self._clamp_non_negative_float(svc, attr_name)
-            self._clamp_soc_thresholds()
-            self._clamp_surplus_thresholds(svc)
-            if hasattr(svc, "auto_stop_ewma_alpha"):
-                self._clamp_fraction(svc, "auto_stop_ewma_alpha", "AutoStopEwmaAlpha", 0.35)
-            if hasattr(svc, "auto_stop_ewma_alpha_stable"):
-                self._clamp_fraction(svc, "auto_stop_ewma_alpha_stable", "AutoStopEwmaAlphaStable", 0.55)
-            if hasattr(svc, "auto_stop_ewma_alpha_volatile"):
-                self._clamp_fraction(svc, "auto_stop_ewma_alpha_volatile", "AutoStopEwmaAlphaVolatile", 0.15)
-            if (
-                hasattr(svc, "auto_stop_surplus_volatility_low_watts")
-                and hasattr(svc, "auto_stop_surplus_volatility_high_watts")
-                and svc.auto_stop_surplus_volatility_high_watts < svc.auto_stop_surplus_volatility_low_watts
-            ):
-                logging.warning(
-                    "AutoStopSurplusVolatilityHighWatts %s below AutoStopSurplusVolatilityLowWatts %s, clamping",
-                    svc.auto_stop_surplus_volatility_high_watts,
-                    svc.auto_stop_surplus_volatility_low_watts,
-                )
-                svc.auto_stop_surplus_volatility_high_watts = svc.auto_stop_surplus_volatility_low_watts
+            self._validate_legacy_auto_config(svc)
+
+    @staticmethod
+    def _validate_startup_retry_config(svc):
+        """Clamp retry counters that must stay non-negative."""
+        if svc.startup_device_info_retries >= 0:
+            return
+        logging.warning(
+            "StartupDeviceInfoRetries %s invalid, clamping to 0",
+            svc.startup_device_info_retries,
+        )
+        svc.startup_device_info_retries = 0
+
+    def _validate_timeout_settings(self, svc):
+        """Clamp request and audit timeout-style settings."""
+        timeout_specs = (
+            ("shelly_request_timeout_seconds", 2.0, "ShellyRequestTimeoutSeconds"),
+            ("dbus_method_timeout_seconds", 1.0, "DbusMethodTimeoutSeconds"),
+        )
+        optional_specs = (
+            ("auto_audit_log_max_age_hours", 168.0, "AutoAuditLogMaxAgeHours"),
+            ("auto_audit_log_repeat_seconds", 30.0, "AutoAuditLogRepeatSeconds"),
+        )
+        for attr_name, default, label in timeout_specs:
+            self._clamp_positive_timeout(svc, attr_name, default, label)
+        for attr_name, default, label in optional_specs:
+            if hasattr(svc, attr_name):
+                self._clamp_positive_timeout(svc, attr_name, default, label)
+
+    def _validate_legacy_auto_config(self, svc):
+        """Clamp legacy Auto-mode attributes when no structured policy is attached yet."""
+        self._clamp_legacy_non_negative_auto_values(svc)
+        self._clamp_legacy_reference_power(svc)
+        self._clamp_soc_thresholds()
+        self._clamp_surplus_thresholds(svc)
+        self._clamp_legacy_fractional_values(svc)
+        self._clamp_legacy_volatility_band(svc)
+
+    def _clamp_legacy_non_negative_auto_values(self, svc):
+        """Clamp non-negative legacy Auto settings."""
+        for attr_name in (
+            "auto_grid_recovery_start_seconds",
+            "auto_stop_surplus_delay_seconds",
+            "auto_stop_surplus_volatility_low_watts",
+            "auto_stop_surplus_volatility_high_watts",
+            "auto_learn_charge_power_min_watts",
+            "auto_learn_charge_power_start_delay_seconds",
+            "auto_learn_charge_power_window_seconds",
+            "auto_learn_charge_power_max_age_seconds",
+        ):
+            if hasattr(svc, attr_name):
+                self._clamp_non_negative_float(svc, attr_name)
+
+    @staticmethod
+    def _clamp_legacy_reference_power(svc):
+        """Clamp the legacy adaptive-learning reference power."""
+        if not hasattr(svc, "auto_reference_charge_power_watts") or svc.auto_reference_charge_power_watts > 0:
+            return
+        logging.warning(
+            "AutoReferenceChargePowerWatts %s invalid, clamping to 1900.0",
+            svc.auto_reference_charge_power_watts,
+        )
+        svc.auto_reference_charge_power_watts = 1900.0
+
+    def _clamp_legacy_fractional_values(self, svc):
+        """Clamp smoothing and learning alpha values into the safe range."""
+        fraction_specs = (
+            ("auto_stop_ewma_alpha", "AutoStopEwmaAlpha", 0.35),
+            ("auto_stop_ewma_alpha_stable", "AutoStopEwmaAlphaStable", 0.55),
+            ("auto_stop_ewma_alpha_volatile", "AutoStopEwmaAlphaVolatile", 0.15),
+            ("auto_learn_charge_power_alpha", "AutoLearnChargePowerAlpha", 0.2),
+        )
+        for attr_name, label, default in fraction_specs:
+            if hasattr(svc, attr_name):
+                self._clamp_fraction(svc, attr_name, label, default)
+
+    @staticmethod
+    def _clamp_legacy_volatility_band(svc):
+        """Ensure the high volatility threshold never drops below the low threshold."""
+        if not (
+            hasattr(svc, "auto_stop_surplus_volatility_low_watts")
+            and hasattr(svc, "auto_stop_surplus_volatility_high_watts")
+            and svc.auto_stop_surplus_volatility_high_watts < svc.auto_stop_surplus_volatility_low_watts
+        ):
+            return
+        logging.warning(
+            "AutoStopSurplusVolatilityHighWatts %s below AutoStopSurplusVolatilityLowWatts %s, clamping",
+            svc.auto_stop_surplus_volatility_high_watts,
+            svc.auto_stop_surplus_volatility_low_watts,
+        )
+        svc.auto_stop_surplus_volatility_high_watts = svc.auto_stop_surplus_volatility_low_watts
 
     def load_config(self):
         """Load configuration or raise if the minimal settings are missing."""
