@@ -93,6 +93,7 @@ class TestShellyIoController(unittest.TestCase):
             _last_voltage=231.0,
             _time_now=MagicMock(return_value=100.0),
             _update_worker_snapshot=MagicMock(),
+            _last_pm_status_confirmed=True,
         )
         controller = ShellyIoController(service)
         service._build_local_pm_status = controller.build_local_pm_status
@@ -106,8 +107,16 @@ class TestShellyIoController(unittest.TestCase):
         self.assertEqual(pm_status["voltage"], 231.0)
         self.assertEqual(pm_status["aenergy"]["total"], 0.0)
         self.assertEqual(published["output"], True)
+        self.assertEqual(published["apower"], 0.0)
+        self.assertEqual(published["current"], 0.0)
         self.assertEqual(service._last_pm_status_at, 100.0)
-        service._update_worker_snapshot.assert_called_once()
+        self.assertFalse(service._last_pm_status_confirmed)
+        service._update_worker_snapshot.assert_called_once_with(
+            captured_at=100.0,
+            pm_captured_at=100.0,
+            pm_status=published,
+            pm_confirmed=False,
+        )
 
     def test_queue_peek_and_clear_pending_relay_command_use_worker_lock(self):
         service = SimpleNamespace(
@@ -116,6 +125,11 @@ class TestShellyIoController(unittest.TestCase):
             _relay_command_lock=MagicMock(),
             _pending_relay_state=None,
             _pending_relay_requested_at=None,
+            relay_sync_timeout_seconds=4.0,
+            _relay_sync_expected_state=None,
+            _relay_sync_requested_at=None,
+            _relay_sync_deadline_at=None,
+            _relay_sync_failure_reported=True,
         )
         service._relay_command_lock.__enter__ = MagicMock(return_value=None)
         service._relay_command_lock.__exit__ = MagicMock(return_value=None)
@@ -128,6 +142,10 @@ class TestShellyIoController(unittest.TestCase):
         service._ensure_worker_state.assert_called()
         self.assertEqual(service._pending_relay_state, None)
         self.assertEqual(service._pending_relay_requested_at, None)
+        self.assertEqual(service._relay_sync_expected_state, True)
+        self.assertEqual(service._relay_sync_requested_at, 100.0)
+        self.assertEqual(service._relay_sync_deadline_at, 104.0)
+        self.assertFalse(service._relay_sync_failure_reported)
 
     def test_worker_apply_pending_relay_command_marks_success_and_clears_queue(self):
         service = SimpleNamespace(
@@ -195,6 +213,7 @@ class TestShellyIoController(unittest.TestCase):
         service._worker_apply_pending_relay_command.assert_called_once_with()
         service._mark_recovery.assert_called_once_with("shelly", "Shelly status reads recovered")
         self.assertEqual(service._update_worker_snapshot.call_count, 2)
+        self.assertEqual(service._update_worker_snapshot.call_args_list[1].kwargs["pm_confirmed"], True)
 
         failing_service = SimpleNamespace(
             _ensure_worker_state=MagicMock(),
@@ -213,6 +232,17 @@ class TestShellyIoController(unittest.TestCase):
         controller.io_worker_once()
         failing_service._mark_failure.assert_called_once_with("shelly")
         failing_service._warning_throttled.assert_called_once()
+        self.assertEqual(failing_service._update_worker_snapshot.call_count, 2)
+        self.assertEqual(
+            failing_service._update_worker_snapshot.call_args_list[1].kwargs,
+            {
+                "captured_at": 100.0,
+                "auto_mode_active": True,
+                "pm_status": None,
+                "pm_captured_at": None,
+                "pm_confirmed": False,
+            },
+        )
 
     def test_io_worker_loop_logs_cycle_failure_and_continues(self):
         stop_event = MagicMock()

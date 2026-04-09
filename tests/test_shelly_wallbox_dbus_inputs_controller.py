@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import unittest
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import dbus_shelly_wallbox_dbus_inputs
@@ -9,7 +10,7 @@ from dbus_shelly_wallbox_dbus_inputs import DbusInputController
 
 class TestDbusInputController(unittest.TestCase):
     @staticmethod
-    def _make_service():
+    def _make_service() -> SimpleNamespace:
         service = SimpleNamespace(
             auto_pv_service="",
             auto_pv_service_prefix="com.victronenergy.pvinverter",
@@ -48,20 +49,21 @@ class TestDbusInputController(unittest.TestCase):
         )
         return service
 
-    def test_get_dbus_value_and_list_services_cover_retry_and_failure_paths(self):
+    def test_get_dbus_value_and_list_services_cover_retry_and_failure_paths(self) -> None:
         service = self._make_service()
         controller = DbusInputController(service)
+        module: Any = dbus_shelly_wallbox_dbus_inputs
 
         service._get_system_bus.return_value = MagicMock(get_object=MagicMock(return_value=object()))
         failing_interface = MagicMock()
         failing_interface.GetValue.side_effect = [RuntimeError("boom"), RuntimeError("boom")]
-        original_interface = dbus_shelly_wallbox_dbus_inputs.dbus.Interface
-        dbus_shelly_wallbox_dbus_inputs.dbus.Interface = MagicMock(return_value=failing_interface)
+        original_interface = module.dbus.Interface
+        module.dbus.Interface = MagicMock(return_value=failing_interface)
         try:
             with self.assertRaises(RuntimeError):
                 controller.get_dbus_value("svc", "/Path")
         finally:
-            dbus_shelly_wallbox_dbus_inputs.dbus.Interface = original_interface
+            module.dbus.Interface = original_interface
 
         self.assertEqual(service._reset_system_bus.call_count, 2)
 
@@ -74,18 +76,18 @@ class TestDbusInputController(unittest.TestCase):
         service._get_system_bus.return_value = MagicMock(get_object=MagicMock(return_value=object()))
         failing_interface = MagicMock()
         failing_interface.ListNames.side_effect = RuntimeError("dbus down")
-        dbus_shelly_wallbox_dbus_inputs.dbus.Interface = MagicMock(return_value=failing_interface)
+        module.dbus.Interface = MagicMock(return_value=failing_interface)
         try:
             with patch("dbus_shelly_wallbox_dbus_inputs.time.time", return_value=100.0):
                 with self.assertRaises(RuntimeError):
                     controller.list_dbus_services()
         finally:
-            dbus_shelly_wallbox_dbus_inputs.dbus.Interface = original_interface
+            module.dbus.Interface = original_interface
 
         self.assertEqual(service._dbus_list_failures, 1)
         self.assertEqual(service._dbus_list_backoff_until, 105.0)
 
-    def test_pv_resolution_and_missing_pv_paths_cover_explicit_cached_and_rescan_failures(self):
+    def test_pv_resolution_and_missing_pv_paths_cover_explicit_cached_and_rescan_failures(self) -> None:
         service = self._make_service()
         controller = DbusInputController(service)
 
@@ -119,7 +121,7 @@ class TestDbusInputController(unittest.TestCase):
         )
         service._mark_recovery.assert_called_once_with("pv", "No readable PV values discovered, assuming 0 W")
 
-    def test_battery_and_grid_paths_cover_override_cache_failures_and_missing_values(self):
+    def test_battery_and_grid_paths_cover_override_cache_failures_and_missing_values(self) -> None:
         service = self._make_service()
         controller = DbusInputController(service)
 
@@ -127,8 +129,8 @@ class TestDbusInputController(unittest.TestCase):
         self.assertFalse(controller._battery_service_has_soc("battery"))
 
         service.auto_battery_service = "configured-battery"
-        controller._battery_service_has_soc = MagicMock(return_value=False)
-        self.assertIsNone(controller._resolve_battery_service_override())
+        with patch.object(controller, "_battery_service_has_soc", return_value=False):
+            self.assertIsNone(controller._resolve_battery_service_override())
 
         service._resolved_auto_battery_service = "cached-battery"
         service._auto_battery_last_scan = 100.0
@@ -136,9 +138,9 @@ class TestDbusInputController(unittest.TestCase):
             self.assertEqual(controller._cached_auto_battery_service(120.0), "cached-battery")
 
         service._list_dbus_services = MagicMock(return_value=["com.victronenergy.system"])
-        controller._battery_service_has_soc = MagicMock(return_value=False)
-        with self.assertRaises(ValueError):
-            controller._scan_auto_battery_service(200.0)
+        with patch.object(controller, "_battery_service_has_soc", return_value=False):
+            with self.assertRaises(ValueError):
+                controller._scan_auto_battery_service(200.0)
 
         service._source_retry_ready = MagicMock(return_value=False)
         self.assertIsNone(controller.get_battery_soc())
@@ -167,19 +169,21 @@ class TestDbusInputController(unittest.TestCase):
         self.assertTrue(seen_value)
         self.assertEqual(missing_paths, ["/Ac/Grid/L2/Power"])
 
-    def test_battery_override_cached_resolution_and_nonnumeric_grid_values(self):
+    def test_battery_override_cached_resolution_and_nonnumeric_grid_values(self) -> None:
         service = self._make_service()
         controller = DbusInputController(service)
 
-        controller._battery_service_has_soc = MagicMock(return_value=True)
-        self.assertEqual(controller._resolve_battery_service_override(), service.auto_battery_service)
+        with patch.object(controller, "_battery_service_has_soc", return_value=True):
+            self.assertEqual(controller._resolve_battery_service_override(), service.auto_battery_service)
 
-        controller._resolve_battery_service_override = MagicMock(return_value="override-battery")
-        self.assertEqual(controller.resolve_auto_battery_service(), "override-battery")
+        with patch.object(controller, "_resolve_battery_service_override", return_value="override-battery"):
+            self.assertEqual(controller.resolve_auto_battery_service(), "override-battery")
 
-        controller._resolve_battery_service_override = MagicMock(return_value=None)
-        controller._cached_auto_battery_service = MagicMock(return_value="cached-battery")
-        self.assertEqual(controller.resolve_auto_battery_service(), "cached-battery")
+        with (
+            patch.object(controller, "_resolve_battery_service_override", return_value=None),
+            patch.object(controller, "_cached_auto_battery_service", return_value="cached-battery"),
+        ):
+            self.assertEqual(controller.resolve_auto_battery_service(), "cached-battery")
 
         service._get_dbus_value = MagicMock(return_value=["bad"])
         total, seen_value, missing_paths = controller._read_grid_phase_values(["/Ac/Grid/L1/Power"])

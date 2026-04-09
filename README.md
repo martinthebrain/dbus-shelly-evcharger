@@ -131,6 +131,7 @@ The Auto logic is intentionally conservative:
 - hard stop reasons such as low battery SOC or high grid import are handled strictly
 - low-surplus stop behavior can be softer and more delay-tolerant
 - stale or missing helper data prevents unsafe Auto starts
+- the service can automatically learn the real charging power of the connected portable EVSE, use it for adaptive Auto-mode thresholds, and mirror the derived rounded charging current in the Venus EV charger tile
 
 ### Auto Logic Overview
 

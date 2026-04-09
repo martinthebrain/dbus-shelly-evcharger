@@ -298,6 +298,7 @@ class TestShellyWallboxStress(unittest.TestCase):
                         elif index % 4 == 2:
                             payload = json.dumps(
                                 {
+                                    "snapshot_version": 1,
                                     "captured_at": float(index),
                                     "heartbeat_at": float(index),
                                     "pv_captured_at": float(index),
@@ -311,6 +312,7 @@ class TestShellyWallboxStress(unittest.TestCase):
                         else:
                             payload = json.dumps(
                                 {
+                                    "snapshot_version": 1,
                                     "captured_at": float(index - 100),
                                     "heartbeat_at": float(index - 100),
                                     "pv_captured_at": float(index - 100),
@@ -351,6 +353,7 @@ class TestShellyWallboxStress(unittest.TestCase):
                 snapshot_path,
                 json.dumps(
                     {
+                        "snapshot_version": 1,
                         "captured_at": float(iterations - 100),
                         "heartbeat_at": float(iterations - 100),
                         "pv_captured_at": float(iterations - 100),
@@ -368,6 +371,7 @@ class TestShellyWallboxStress(unittest.TestCase):
                 snapshot_path,
                 json.dumps(
                     {
+                        "snapshot_version": 1,
                         "captured_at": float(iterations + 1),
                         "heartbeat_at": float(iterations + 1),
                         "pv_captured_at": float(iterations + 1),

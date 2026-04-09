@@ -3,25 +3,31 @@ from __future__ import annotations
 
 from collections import deque
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 from dbus_shelly_wallbox_auto_policy import AutoPolicy, AutoStopEwmaPolicy, AutoThresholdProfile
 
 
-def make_auto_metrics(**overrides):
-    metrics = {
+def make_auto_metrics(**overrides: object) -> dict[str, object]:
+    metrics: dict[str, object] = {
+        "state": "waiting",
         "surplus": 850.0,
         "grid": -900.0,
         "soc": 55.0,
         "profile": "normal",
         "start_threshold": 1850.0,
         "stop_threshold": 1350.0,
+        "learned_charge_power": None,
+        "learned_charge_power_state": "unknown",
+        "threshold_scale": 1.0,
+        "threshold_mode": "static",
     }
     metrics.update(overrides)
     return metrics
 
 
-def make_auto_policy(**overrides):
+def make_auto_policy(**overrides: object) -> AutoPolicy:
     policy = AutoPolicy(
         normal_profile=AutoThresholdProfile(1850.0, 1350.0),
         high_soc_profile=AutoThresholdProfile(1650.0, 800.0),
@@ -46,8 +52,8 @@ def make_auto_policy(**overrides):
     return policy
 
 
-def make_auto_controller_service(**overrides):
-    data = {
+def make_auto_controller_service(**overrides: object) -> SimpleNamespace:
+    data: dict[str, object] = {
         "auto_samples": deque(),
         "auto_average_window_seconds": 30.0,
         "relay_last_changed_at": None,
@@ -56,6 +62,7 @@ def make_auto_controller_service(**overrides):
         "auto_min_offtime_seconds": 120.0,
         "auto_allow_without_battery_soc": False,
         "auto_battery_scan_interval_seconds": 60.0,
+        "auto_shelly_soft_fail_seconds": 10.0,
         "auto_grid_recovery_start_seconds": 10.0,
         "auto_resume_soc": 50.0,
         "auto_min_soc": 40.0,
@@ -72,6 +79,13 @@ def make_auto_controller_service(**overrides):
         "auto_stop_ewma_alpha_volatile": 0.15,
         "auto_stop_surplus_volatility_low_watts": 150.0,
         "auto_stop_surplus_volatility_high_watts": 400.0,
+        "auto_learn_charge_power_enabled": True,
+        "auto_reference_charge_power_watts": 1900.0,
+        "auto_learn_charge_power_min_watts": 500.0,
+        "auto_learn_charge_power_alpha": 0.2,
+        "auto_learn_charge_power_start_delay_seconds": 30.0,
+        "auto_learn_charge_power_window_seconds": 180.0,
+        "auto_learn_charge_power_max_age_seconds": 21600.0,
         "auto_start_delay_seconds": 10.0,
         "auto_start_surplus_watts": 2000.0,
         "auto_stop_surplus_watts": 1600.0,
@@ -87,10 +101,22 @@ def make_auto_controller_service(**overrides):
         "_last_auto_metrics": {},
         "_last_health_reason": "init",
         "_last_health_code": 0,
+        "_last_auto_state": "idle",
+        "_last_auto_state_code": 0,
+        "_time_now": lambda: 1000.0,
         "_last_battery_allow_warning": None,
         "_grid_recovery_required": False,
         "_grid_recovery_since": None,
         "_auto_high_soc_profile_active": None,
+        "learned_charge_power_watts": None,
+        "learned_charge_power_updated_at": None,
+        "learned_charge_power_state": "unknown",
+        "learned_charge_power_learning_since": None,
+        "learned_charge_power_sample_count": 0,
+        "learned_charge_power_phase": None,
+        "learned_charge_power_voltage": None,
+        "learned_charge_power_signature_mismatch_sessions": 0,
+        "learned_charge_power_signature_checked_session_started_at": None,
         "_stop_smoothed_surplus_power": None,
         "_stop_smoothed_grid_power": None,
         "_auto_mode_cutover_pending": False,
@@ -107,8 +133,8 @@ def make_auto_controller_service(**overrides):
     return SimpleNamespace(**data)
 
 
-def make_runtime_support_service(**overrides):
-    data = {
+def make_runtime_support_service(**overrides: object) -> SimpleNamespace:
+    data: dict[str, object] = {
         "poll_interval_ms": 1000,
         "deviceinstance": 60,
         "_time_now": lambda: 1000.0,
@@ -124,7 +150,12 @@ def make_runtime_support_service(**overrides):
         "_last_auto_audit_key": None,
         "_last_auto_audit_event_at": None,
         "_last_auto_audit_cleanup_at": 0.0,
+        "_last_auto_state": "idle",
+        "_last_auto_state_code": 0,
         "_last_pm_status": {"output": False},
+        "_last_pm_status_confirmed": False,
+        "_last_confirmed_pm_status": None,
+        "_last_confirmed_pm_status_at": None,
         "virtual_startstop": 0,
         "virtual_mode": 1,
         "virtual_enable": 1,
@@ -134,15 +165,21 @@ def make_runtime_support_service(**overrides):
         "started_at": 0.0,
         "_last_successful_update_at": None,
         "auto_watchdog_recovery_seconds": 60.0,
+        "auto_shelly_soft_fail_seconds": 10.0,
         "_last_recovery_attempt_at": None,
         "_recovery_attempts": 0,
+        "relay_sync_timeout_seconds": 3.0,
+        "_relay_sync_expected_state": None,
+        "_relay_sync_requested_at": None,
+        "_relay_sync_deadline_at": None,
+        "_relay_sync_failure_reported": False,
     }
     data.update(overrides)
     return SimpleNamespace(**data)
 
 
-def make_state_validation_service(**overrides):
-    data = {
+def make_state_validation_service(**overrides: object) -> SimpleNamespace:
+    data: dict[str, object] = {
         "poll_interval_ms": 200,
         "sign_of_life_minutes": 2,
         "auto_pv_max_services": 2,
@@ -154,6 +191,12 @@ def make_state_validation_service(**overrides):
         "auto_average_window_seconds": 1.0,
         "auto_min_runtime_seconds": 1.0,
         "auto_min_offtime_seconds": 1.0,
+        "auto_reference_charge_power_watts": 1900.0,
+        "auto_learn_charge_power_min_watts": 500.0,
+        "auto_learn_charge_power_alpha": 0.2,
+        "auto_learn_charge_power_start_delay_seconds": 30.0,
+        "auto_learn_charge_power_window_seconds": 180.0,
+        "auto_learn_charge_power_max_age_seconds": 21600.0,
         "auto_start_delay_seconds": 1.0,
         "auto_stop_delay_seconds": 1.0,
         "auto_input_cache_seconds": 1.0,
@@ -173,8 +216,8 @@ def make_state_validation_service(**overrides):
     return SimpleNamespace(**data)
 
 
-def make_runtime_state_service(**overrides):
-    data = {
+def make_runtime_state_service(**overrides: object) -> SimpleNamespace:
+    data: dict[str, Any] = {
         "runtime_state_path": "",
         "virtual_mode": 1,
         "virtual_autostart": 1,
@@ -183,6 +226,15 @@ def make_runtime_state_service(**overrides):
         "manual_override_until": 0.0,
         "_auto_mode_cutover_pending": False,
         "_ignore_min_offtime_once": False,
+        "learned_charge_power_watts": None,
+        "learned_charge_power_updated_at": None,
+        "learned_charge_power_state": "unknown",
+        "learned_charge_power_learning_since": None,
+        "learned_charge_power_sample_count": 0,
+        "learned_charge_power_phase": None,
+        "learned_charge_power_voltage": None,
+        "learned_charge_power_signature_mismatch_sessions": 0,
+        "learned_charge_power_signature_checked_session_started_at": None,
         "relay_last_changed_at": None,
         "relay_last_off_at": None,
         "_runtime_state_serialized": None,

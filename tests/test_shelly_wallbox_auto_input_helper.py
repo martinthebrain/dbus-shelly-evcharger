@@ -130,6 +130,7 @@ class TestShellyWallboxAutoInputHelper(unittest.TestCase):
         self.assertEqual(helper.auto_grid_poll_interval_seconds, 1.5)
         self.assertEqual(helper.auto_battery_poll_interval_seconds, 1.5)
         self.assertIn("captured_at", helper._last_snapshot_state)
+        self.assertEqual(helper._last_snapshot_state["snapshot_version"], AutoInputHelper.SNAPSHOT_SCHEMA_VERSION)
         self.assertEqual(helper._next_source_poll_at["pv"], 0.0)
         self.assertFalse(helper._refresh_scheduled)
         self.assertEqual(helper.subscription_refresh_seconds, 60.0)
@@ -187,6 +188,7 @@ class TestShellyWallboxAutoInputHelper(unittest.TestCase):
 
         self.assertEqual(payload["captured_at"], 100.0)
         self.assertEqual(payload["pv_power"], 0.0)
+        self.assertEqual(payload["snapshot_version"], AutoInputHelper.SNAPSHOT_SCHEMA_VERSION)
 
     def test_collect_snapshot_polls_battery_less_often_than_pv_and_grid(self):
         helper = self._make_helper()
@@ -205,6 +207,7 @@ class TestShellyWallboxAutoInputHelper(unittest.TestCase):
         self.assertEqual(second["battery_captured_at"], 100.0)
         self.assertEqual(second["grid_power"], -750.0)
         self.assertEqual(second["captured_at"], 102.0)
+        self.assertEqual(second["snapshot_version"], AutoInputHelper.SNAPSHOT_SCHEMA_VERSION)
         self.assertEqual(helper._get_pv_power.call_count, 2)
         self.assertEqual(helper._get_grid_power.call_count, 2)
         self.assertEqual(helper._get_battery_soc.call_count, 1)
@@ -281,6 +284,7 @@ class TestShellyWallboxAutoInputHelper(unittest.TestCase):
 
         self.assertEqual(helper._last_snapshot_state["heartbeat_at"], 130.0)
         self.assertEqual(helper._last_snapshot_state["captured_at"], 100.0)
+        self.assertEqual(helper._last_snapshot_state["snapshot_version"], AutoInputHelper.SNAPSHOT_SCHEMA_VERSION)
         self.assertEqual(helper._last_snapshot_state["pv_captured_at"], 100.0)
         self.assertEqual(helper._last_snapshot_state["battery_captured_at"], 100.0)
         self.assertEqual(helper._last_snapshot_state["grid_captured_at"], 100.0)
@@ -329,6 +333,12 @@ class TestShellyWallboxAutoInputHelper(unittest.TestCase):
         helper._get_dbus_value = MagicMock(return_value=500.0)
 
         self.assertEqual(helper._get_pv_power(), 500.0)
+
+    def test_read_ac_pv_total_ignores_non_numeric_values(self):
+        helper = self._make_helper()
+        helper._get_dbus_value = MagicMock(return_value="invalid")
+
+        self.assertEqual(helper._read_ac_pv_total(["com.victronenergy.pvinverter.http_40"]), (0.0, False))
 
     def test_helper_module_import_fallback_sets_dbus_glib_mainloop_to_none(self):
         helper_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "shelly_wallbox_auto_input_helper.py")
@@ -428,6 +438,12 @@ class TestShellyWallboxAutoInputHelper(unittest.TestCase):
 
         self.assertIn(("pv", "com.victronenergy.system", "/Dc/Pv/Power"), specs)
         self.assertNotIn(("battery", "com.victronenergy.battery.socketcan_can1", "/Soc"), specs)
+
+    def test_desired_grid_subscription_specs_returns_empty_without_grid_service(self):
+        helper = self._make_helper()
+        helper.auto_grid_service = ""
+
+        self.assertEqual(helper._desired_grid_subscription_specs(), [])
 
     def test_on_source_signal_logs_throttled_warning_on_refresh_error(self):
         helper = self._make_helper()
@@ -720,6 +736,16 @@ class TestShellyWallboxAutoInputHelper(unittest.TestCase):
 
         helper._get_dbus_value = MagicMock(return_value="bad")
         self.assertIsNone(helper._get_battery_soc())
+
+        helper._get_dbus_value = MagicMock(return_value=True)
+        self.assertIsNone(helper._get_battery_soc())
+
+        helper._get_dbus_value = MagicMock(return_value=150.0)
+        helper._warning_throttled = MagicMock()
+        helper._delay_source_retry = MagicMock()
+        self.assertIsNone(helper._get_battery_soc())
+        helper._warning_throttled.assert_called_once()
+        helper._delay_source_retry.assert_called_once_with("battery")
 
         helper._resolve_auto_battery_service = MagicMock(side_effect=RuntimeError("offline"))
         helper._invalidate_auto_battery_service = MagicMock()

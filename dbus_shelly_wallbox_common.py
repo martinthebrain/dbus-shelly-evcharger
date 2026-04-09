@@ -10,7 +10,7 @@ import math
 import os
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 PhaseMeasurements = dict[str, dict[str, float]]
 TimeWindow = tuple[int, int]
@@ -75,12 +75,94 @@ HEALTH_CODES: dict[str, int] = {
     "grid-missing": 21,
     "mode-transition": 22,
     "waiting-grid-recovery": 23,
+    "command-mismatch": 24,
+    "relay-sync-failed": 25,
 }
+
+AUTO_STATE_CODES: dict[str, int] = {
+    "idle": 0,
+    "waiting": 1,
+    "learning": 2,
+    "charging": 3,
+    "blocked": 4,
+    "recovery": 5,
+}
+RECOVERY_AUTO_REASONS = {
+    "inputs-missing",
+    "battery-soc-missing",
+    "battery-soc-missing-allowed",
+    "grid-missing",
+    "waiting-grid-recovery",
+    "shelly-offline",
+    "command-mismatch",
+    "relay-sync-failed",
+}
+BLOCKED_AUTO_REASONS = {
+    "disabled",
+    "autostart-disabled",
+    "warmup",
+    "manual-override",
+    "waiting-offtime",
+    "waiting-daytime",
+    "waiting-grid",
+    "waiting-soc",
+    "night-lock",
+    "mode-transition",
+}
+CHARGING_AUTO_REASONS = {"running", "auto-start", "auto-stop"}
+WAITING_AUTO_REASONS = {"waiting", "waiting-surplus", "averaging"}
 
 
 def _health_code(reason: str) -> int:
     """Return a numeric health code for a given reason label."""
     return HEALTH_CODES.get(reason, 99)
+
+
+def _normalize_auto_state(state: Any) -> str:
+    """Normalize broad Auto-state labels to the supported state machine values."""
+    normalized = str(state).strip().lower() if state is not None else "idle"
+    if normalized in AUTO_STATE_CODES:
+        return normalized
+    return "idle"
+
+
+def _auto_state_code(state: Any) -> int:
+    """Return the numeric code for one broad Auto-state label."""
+    return AUTO_STATE_CODES.get(_normalize_auto_state(state), 99)
+
+
+def _derive_auto_state(
+    reason: Any,
+    *,
+    relay_on: bool = False,
+    learned_charge_power_state: Any = None,
+) -> str:
+    """Collapse detailed health reasons into one explicit broad Auto state."""
+    base_reason = str(reason).replace("-cached", "") if reason is not None else "init"
+    learned_state = str(learned_charge_power_state).strip().lower() if learned_charge_power_state is not None else "unknown"
+    state_from_reason = _reason_auto_state(base_reason)
+    if state_from_reason is not None:
+        if state_from_reason == "charging" and relay_on and learned_state == "learning":
+            return "learning"
+        return state_from_reason
+    if relay_on:
+        return "learning" if learned_state == "learning" else "charging"
+    return "idle"
+
+
+def _reason_auto_state(base_reason: str) -> str | None:
+    """Return the broad Auto state implied directly by one health reason."""
+    if base_reason in RECOVERY_AUTO_REASONS:
+        return "recovery"
+    if base_reason in BLOCKED_AUTO_REASONS:
+        return "blocked"
+    if base_reason in CHARGING_AUTO_REASONS:
+        return "charging"
+    if base_reason in WAITING_AUTO_REASONS:
+        return "waiting"
+    if base_reason == "init":
+        return "idle"
+    return None
 
 
 def _age_seconds(timestamp: float | int | None, now: float | int | None = None) -> int:
@@ -89,6 +171,47 @@ def _age_seconds(timestamp: float | int | None, now: float | int | None = None) 
         return -1
     current = time.time() if now is None else float(now)
     return max(0, int(current - float(timestamp)))
+
+
+def _confirmed_relay_state_max_age_seconds(svc: Any) -> float:
+    """Return how old a confirmed relay sample may be for broad state hints."""
+    fallback_candidates = [5.0]
+    worker_poll_seconds = getattr(svc, "_worker_poll_interval_seconds", None)
+    if worker_poll_seconds is not None:
+        try:
+            worker_poll_seconds = float(worker_poll_seconds)
+        except (TypeError, ValueError):
+            worker_poll_seconds = None
+        if worker_poll_seconds is not None and worker_poll_seconds > 0:
+            fallback_candidates.append(worker_poll_seconds * 2.0)
+    relay_sync_timeout_seconds = getattr(svc, "relay_sync_timeout_seconds", None)
+    if relay_sync_timeout_seconds is not None:
+        try:
+            relay_sync_timeout_seconds = float(relay_sync_timeout_seconds)
+        except (TypeError, ValueError):
+            relay_sync_timeout_seconds = None
+        if relay_sync_timeout_seconds is not None and relay_sync_timeout_seconds > 0:
+            fallback_candidates.append(relay_sync_timeout_seconds)
+    return max(1.0, min(fallback_candidates))
+
+
+def _fresh_confirmed_relay_output(svc: Any, now: float | int | None = None) -> bool | None:
+    """Return a fresh confirmed relay output, or ``None`` when the state is unknown."""
+    current = time.time() if now is None else float(now)
+    max_age_seconds = _confirmed_relay_state_max_age_seconds(svc)
+    pm_status = getattr(svc, "_last_confirmed_pm_status", None)
+    captured_at = getattr(svc, "_last_confirmed_pm_status_at", None)
+    if pm_status is None and bool(getattr(svc, "_last_pm_status_confirmed", False)):
+        pm_status = getattr(svc, "_last_pm_status", None)
+        captured_at = getattr(svc, "_last_pm_status_at", None)
+    if not (isinstance(pm_status, dict) and "output" in pm_status and captured_at is not None):
+        return None
+    age_seconds = current - float(captured_at)
+    if age_seconds < -1.0:
+        return None
+    if age_seconds > max_age_seconds:
+        return None
+    return bool(cast(dict[str, Any], pm_status).get("output"))
 
 
 def read_version(file_name: str) -> str:
@@ -139,12 +262,12 @@ def phase_values(
 
 def normalize_phase(phase: Any) -> str:
     """Normalize phase configuration values and validate them."""
-    phase = str(phase).strip().upper()
-    if phase == "1P":
+    phase_name = str(phase).strip().upper()
+    if phase_name == "1P":
         return "L1"
-    if phase not in ("L1", "L2", "L3", "3P"):
-        raise ValueError(f"Invalid Phase '{phase}'. Use L1, L2, L3 or 3P.")
-    return phase
+    if phase_name not in ("L1", "L2", "L3", "3P"):
+        raise ValueError(f"Invalid Phase '{phase_name}'. Use L1, L2, L3 or 3P.")
+    return phase_name
 
 
 def normalize_mode(mode: Any) -> int:

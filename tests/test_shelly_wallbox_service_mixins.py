@@ -154,13 +154,13 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service._resolve_pm_status_for_update({"pm_status": {}}, 100.0)
         service._publish_offline_update(100.0)
         service._extract_pm_measurements({"output": True})
-        service._resolve_cached_input_value(1.0, 90.0, "_last", "_last_at", 100.0)
-        service._resolve_auto_inputs({"captured_at": 100.0}, 100.0)
-        service._log_auto_relay_change(True, False, 2000.0, 55.0, -1800.0)
-        service._apply_relay_decision(True, False, 100.0)
-        service._derive_status_code(True, 2000.0)
-        service._publish_online_update({"output": True}, 100.0)
-        service._complete_update_cycle(True)
+        service._resolve_cached_input_value(1.0, 90.0, "_last", "_last_at", 100.0, max_age_seconds=30.0)
+        service._resolve_auto_inputs({"captured_at": 100.0}, 100.0, True)
+        service._log_auto_relay_change(True)
+        service._apply_relay_decision(True, False, {"output": False}, 0.0, 0.0, 100.0, True)
+        service._derive_status_code(True, 2000.0, True)
+        service._publish_online_update(2, 1.5, True, 2000.0, 230.0, 100.0)
+        service._complete_update_cycle(True, 100.0, True, 2000.0, 8.7, 2, 2500.0, 55.0, -1800.0)
         service._sign_of_life()
         service._update()
 
@@ -175,20 +175,32 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         controller.resolve_pm_status_for_update.assert_called_once_with(service, {"pm_status": {}}, 100.0)
         controller.publish_offline_update.assert_called_once_with(100.0)
         controller.extract_pm_measurements.assert_called_once_with(service, {"output": True})
-        controller.resolve_cached_input_value.assert_called_once_with(service, 1.0, 90.0, "_last", "_last_at", 100.0)
-        controller.resolve_auto_inputs.assert_called_once_with({"captured_at": 100.0}, 100.0)
-        controller.log_auto_relay_change.assert_called_once_with(
+        controller.resolve_cached_input_value.assert_called_once_with(
+            service,
+            1.0,
+            90.0,
+            "_last",
+            "_last_at",
+            100.0,
+            max_age_seconds=30.0,
+        )
+        controller.resolve_auto_inputs.assert_called_once_with({"captured_at": 100.0}, 100.0, True)
+        controller.log_auto_relay_change.assert_called_once_with(service, True)
+        controller.apply_relay_decision.assert_called_once_with(True, False, {"output": False}, 0.0, 0.0, 100.0, True)
+        controller.derive_status_code.assert_called_once_with(service, True, 2000.0, True)
+        controller.publish_online_update.assert_called_once_with(2, 1.5, True, 2000.0, 230.0, 100.0)
+        controller.complete_update_cycle.assert_called_once_with(
             service,
             True,
-            False,
+            100.0,
+            True,
             2000.0,
+            8.7,
+            2,
+            2500.0,
             55.0,
             -1800.0,
         )
-        controller.apply_relay_decision.assert_called_once_with(True, False, 100.0)
-        controller.derive_status_code.assert_called_once_with(service, True, 2000.0)
-        controller.publish_online_update.assert_called_once_with({"output": True}, 100.0)
-        controller.complete_update_cycle.assert_called_once_with(service, True)
         controller.sign_of_life.assert_called_once_with()
         controller.update.assert_called_once_with()
 
