@@ -2,7 +2,7 @@
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 from dbus_shelly_wallbox_ports import AutoDecisionPort, DbusInputPort, UpdateCyclePort, WriteControllerPort
@@ -156,11 +156,11 @@ class TestWallboxPorts(unittest.TestCase):
 
         port = WriteControllerPort(service)
         port.virtual_mode = 2
-        port.virtual_autostart = "0"
+        port.virtual_autostart = cast(Any, "0")
         port.virtual_enable = 5
-        port.virtual_startstop = "bad"
-        port.auto_mode_cutover_pending = 1
-        port.ignore_min_offtime_once = 0
+        port.virtual_startstop = cast(Any, "bad")
+        port.auto_mode_cutover_pending = cast(Any, 1)
+        port.ignore_min_offtime_once = cast(Any, 0)
         self.assertEqual(service.virtual_mode, 1)
         self.assertEqual(service.virtual_autostart, 0)
         self.assertEqual(service.virtual_enable, 1)
@@ -644,10 +644,10 @@ class TestWallboxPorts(unittest.TestCase):
         self.assertEqual(port.virtual_autostart, 1)
         self.assertEqual(port.virtual_enable, 1)
         self.assertEqual(port.virtual_startstop, 0)
-        port.virtual_mode = "5"
-        port.virtual_autostart = "0"
+        port.virtual_mode = cast(Any, "5")
+        port.virtual_autostart = cast(Any, "0")
         port.virtual_enable = 7
-        port.virtual_startstop = "bad"
+        port.virtual_startstop = cast(Any, "bad")
         self.assertEqual(service.virtual_mode, 2)
         self.assertEqual(service.virtual_autostart, 0)
         self.assertEqual(service.virtual_enable, 1)
@@ -711,11 +711,11 @@ class TestWallboxPorts(unittest.TestCase):
 
         port = UpdateCyclePort(service)
         port.last_status = 2
-        port._startup_manual_target = 1
-        port.virtual_mode = "5"
-        port.virtual_startstop = "0"
+        port._startup_manual_target = cast(Any, 1)
+        port.virtual_mode = cast(Any, "5")
+        port.virtual_startstop = cast(Any, "0")
         port.virtual_enable = 7
-        port._last_pm_status_confirmed = 1
+        port._last_pm_status_confirmed = cast(Any, 1)
         port.learned_charge_power_state = "stable"
         self.assertEqual(service.last_status, 2)
         self.assertTrue(service._startup_manual_target)
