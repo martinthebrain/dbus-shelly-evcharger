@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import unittest
 from collections import deque
+from collections.abc import Callable
+from functools import partial
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 from dbus_shelly_wallbox_ports import WriteControllerPort
@@ -11,17 +14,48 @@ from dbus_shelly_wallbox_write_snapshot import _snapshot_dbus_paths
 
 class TestDbusWriteController(unittest.TestCase):
     @staticmethod
-    def _publish_side_effect(service):
-        def _publish(path, value, _now=None, force=False, **_kwargs):
+    def _normalize_mode(value: object) -> int:
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float, str)):
+            return int(value)
+        return 0
+
+    @staticmethod
+    def _normalize_mode_5_to_2(value: object) -> int:
+        mode = TestDbusWriteController._normalize_mode(value)
+        return 2 if mode == 5 else mode
+
+    @staticmethod
+    def _mode_uses_auto_logic(mode: object) -> bool:
+        return TestDbusWriteController._normalize_mode(mode) in (1, 2)
+
+    @staticmethod
+    def _clear_auto_samples(service: Any) -> None:
+        service.auto_samples.clear()
+
+    @staticmethod
+    def _state_summary() -> str:
+        return "state"
+
+    @staticmethod
+    def _publish_side_effect(service: Any) -> Callable[..., bool]:
+        def _publish(
+            path: str,
+            value: object,
+            _now: float | None = None,
+            force: bool = False,
+            **_kwargs: object,
+        ) -> bool:
             service._dbusservice[path] = value
             return force
 
         return _publish
 
-    def test_snapshot_dbus_paths_returns_empty_mapping_without_dbusservice(self):
+    def test_snapshot_dbus_paths_returns_empty_mapping_without_dbusservice(self) -> None:
         self.assertEqual(_snapshot_dbus_paths(SimpleNamespace(), ("/Mode",)), {})
 
-    def test_handle_mode_write_manual_to_auto_queues_clean_cutover(self):
+    def test_handle_mode_write_manual_to_auto_queues_clean_cutover(self) -> None:
         service = SimpleNamespace(
             virtual_mode=0,
             virtual_autostart=1,
@@ -35,9 +69,9 @@ class TestDbusWriteController(unittest.TestCase):
             _ignore_min_offtime_once=False,
             _dbusservice={"/Mode": 0, "/StartStop": 1, "/Enable": 0},
             _time_now=MagicMock(return_value=200.0),
-            _normalize_mode=lambda value: int(value),
-            _mode_uses_auto_logic=lambda mode: int(mode) in (1, 2),
-            _clear_auto_samples=lambda: service.auto_samples.clear(),
+            _normalize_mode=self._normalize_mode,
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
+            _clear_auto_samples=MagicMock(),
             _queue_relay_command=MagicMock(),
             _publish_local_pm_status=MagicMock(),
             _peek_pending_relay_command=MagicMock(return_value=(None, None)),
@@ -45,9 +79,10 @@ class TestDbusWriteController(unittest.TestCase):
             _get_worker_snapshot=MagicMock(return_value={"pv_power": 10, "battery_soc": 50, "grid_power": -10}),
             _update_worker_snapshot=MagicMock(),
             _publish_dbus_path=MagicMock(),
-            _state_summary=lambda: "state",
+            _state_summary=self._state_summary,
             _save_runtime_state=MagicMock(),
         )
+        service._clear_auto_samples = partial(self._clear_auto_samples, service)
         service._publish_dbus_path.side_effect = self._publish_side_effect(service)
 
         controller = DbusWriteController(WriteControllerPort(service))
@@ -67,7 +102,7 @@ class TestDbusWriteController(unittest.TestCase):
         self.assertEqual(service._dbusservice["/Enable"], 1)
         service._save_runtime_state.assert_called_once()
 
-    def test_handle_mode_write_manual_to_auto_uses_best_known_relay_state_for_cutover(self):
+    def test_handle_mode_write_manual_to_auto_uses_best_known_relay_state_for_cutover(self) -> None:
         service = SimpleNamespace(
             virtual_mode=0,
             virtual_autostart=1,
@@ -81,9 +116,9 @@ class TestDbusWriteController(unittest.TestCase):
             _ignore_min_offtime_once=False,
             _dbusservice={"/Mode": 0, "/StartStop": 0, "/Enable": 0},
             _time_now=MagicMock(return_value=200.0),
-            _normalize_mode=lambda value: int(value),
-            _mode_uses_auto_logic=lambda mode: int(mode) in (1, 2),
-            _clear_auto_samples=lambda: service.auto_samples.clear(),
+            _normalize_mode=self._normalize_mode,
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
+            _clear_auto_samples=MagicMock(),
             _queue_relay_command=MagicMock(),
             _publish_local_pm_status=MagicMock(),
             _peek_pending_relay_command=MagicMock(return_value=(None, None)),
@@ -92,9 +127,10 @@ class TestDbusWriteController(unittest.TestCase):
             _get_worker_snapshot=MagicMock(return_value={"pm_status": {"output": True}, "pm_confirmed": True}),
             _update_worker_snapshot=MagicMock(),
             _publish_dbus_path=MagicMock(),
-            _state_summary=lambda: "state",
+            _state_summary=self._state_summary,
             _save_runtime_state=MagicMock(),
         )
+        service._clear_auto_samples = partial(self._clear_auto_samples, service)
         service._publish_dbus_path.side_effect = self._publish_side_effect(service)
 
         controller = DbusWriteController(WriteControllerPort(service))
@@ -105,7 +141,7 @@ class TestDbusWriteController(unittest.TestCase):
         service._queue_relay_command.assert_called_once_with(False, 200.0)
         service._publish_local_pm_status.assert_called_once_with(False, 200.0)
 
-    def test_handle_mode_write_manual_to_auto_honors_pending_relay_command_for_cutover(self):
+    def test_handle_mode_write_manual_to_auto_honors_pending_relay_command_for_cutover(self) -> None:
         service = SimpleNamespace(
             virtual_mode=0,
             virtual_autostart=1,
@@ -119,9 +155,9 @@ class TestDbusWriteController(unittest.TestCase):
             _ignore_min_offtime_once=False,
             _dbusservice={"/Mode": 0, "/StartStop": 0, "/Enable": 0},
             _time_now=MagicMock(return_value=200.0),
-            _normalize_mode=lambda value: int(value),
-            _mode_uses_auto_logic=lambda mode: int(mode) in (1, 2),
-            _clear_auto_samples=lambda: service.auto_samples.clear(),
+            _normalize_mode=self._normalize_mode,
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
+            _clear_auto_samples=MagicMock(),
             _queue_relay_command=MagicMock(),
             _publish_local_pm_status=MagicMock(),
             _peek_pending_relay_command=MagicMock(return_value=(True, 150.0)),
@@ -129,9 +165,10 @@ class TestDbusWriteController(unittest.TestCase):
             _get_worker_snapshot=MagicMock(return_value={"pm_status": {"output": False}}),
             _update_worker_snapshot=MagicMock(),
             _publish_dbus_path=MagicMock(),
-            _state_summary=lambda: "state",
+            _state_summary=self._state_summary,
             _save_runtime_state=MagicMock(),
         )
+        service._clear_auto_samples = partial(self._clear_auto_samples, service)
         service._publish_dbus_path.side_effect = self._publish_side_effect(service)
 
         controller = DbusWriteController(WriteControllerPort(service))
@@ -142,7 +179,7 @@ class TestDbusWriteController(unittest.TestCase):
         service._queue_relay_command.assert_called_once_with(False, 200.0)
         service._publish_local_pm_status.assert_called_once_with(False, 200.0)
 
-    def test_handle_mode_write_manual_to_auto_queues_cutover_when_relay_state_is_unknown(self):
+    def test_handle_mode_write_manual_to_auto_queues_cutover_when_relay_state_is_unknown(self) -> None:
         service = SimpleNamespace(
             virtual_mode=0,
             virtual_autostart=1,
@@ -156,9 +193,9 @@ class TestDbusWriteController(unittest.TestCase):
             _ignore_min_offtime_once=False,
             _dbusservice={"/Mode": 0, "/StartStop": 0, "/Enable": 0},
             _time_now=MagicMock(return_value=200.0),
-            _normalize_mode=lambda value: int(value),
-            _mode_uses_auto_logic=lambda mode: int(mode) in (1, 2),
-            _clear_auto_samples=lambda: service.auto_samples.clear(),
+            _normalize_mode=self._normalize_mode,
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
+            _clear_auto_samples=MagicMock(),
             _queue_relay_command=MagicMock(),
             _publish_local_pm_status=MagicMock(),
             _peek_pending_relay_command=MagicMock(return_value=(None, None)),
@@ -168,9 +205,10 @@ class TestDbusWriteController(unittest.TestCase):
             _get_worker_snapshot=MagicMock(return_value={"pm_status": None, "pm_confirmed": False}),
             _update_worker_snapshot=MagicMock(),
             _publish_dbus_path=MagicMock(),
-            _state_summary=lambda: "state",
+            _state_summary=self._state_summary,
             _save_runtime_state=MagicMock(),
         )
+        service._clear_auto_samples = partial(self._clear_auto_samples, service)
         service._publish_dbus_path.side_effect = self._publish_side_effect(service)
 
         controller = DbusWriteController(WriteControllerPort(service))
@@ -181,7 +219,7 @@ class TestDbusWriteController(unittest.TestCase):
         service._queue_relay_command.assert_called_once_with(False, 200.0)
         service._publish_local_pm_status.assert_called_once_with(False, 200.0)
 
-    def test_handle_mode_write_manual_to_auto_skips_cutover_when_relay_is_confirmed_off(self):
+    def test_handle_mode_write_manual_to_auto_skips_cutover_when_relay_is_confirmed_off(self) -> None:
         service = SimpleNamespace(
             virtual_mode=0,
             virtual_autostart=1,
@@ -195,9 +233,9 @@ class TestDbusWriteController(unittest.TestCase):
             _ignore_min_offtime_once=True,
             _dbusservice={"/Mode": 0, "/StartStop": 1, "/Enable": 0},
             _time_now=MagicMock(return_value=200.0),
-            _normalize_mode=lambda value: int(value),
-            _mode_uses_auto_logic=lambda mode: int(mode) in (1, 2),
-            _clear_auto_samples=lambda: service.auto_samples.clear(),
+            _normalize_mode=self._normalize_mode,
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
+            _clear_auto_samples=MagicMock(),
             _queue_relay_command=MagicMock(),
             _publish_local_pm_status=MagicMock(),
             _peek_pending_relay_command=MagicMock(return_value=(None, None)),
@@ -218,9 +256,10 @@ class TestDbusWriteController(unittest.TestCase):
             ),
             _update_worker_snapshot=MagicMock(),
             _publish_dbus_path=MagicMock(),
-            _state_summary=lambda: "state",
+            _state_summary=self._state_summary,
             _save_runtime_state=MagicMock(),
         )
+        service._clear_auto_samples = partial(self._clear_auto_samples, service)
         service._publish_dbus_path.side_effect = self._publish_side_effect(service)
 
         controller = DbusWriteController(WriteControllerPort(service))
@@ -233,7 +272,7 @@ class TestDbusWriteController(unittest.TestCase):
         service._queue_relay_command.assert_not_called()
         service._publish_local_pm_status.assert_not_called()
 
-    def test_snapshot_write_state_skips_non_mapping_dbusservice_objects(self):
+    def test_snapshot_write_state_skips_non_mapping_dbusservice_objects(self) -> None:
         service = SimpleNamespace(
             _dbusservice=object(),
             _dbus_publish_state={"/Mode": {"value": 0}},
@@ -245,7 +284,7 @@ class TestDbusWriteController(unittest.TestCase):
         self.assertNotIn("_dbusservice", snapshot["mappings"])
         self.assertIn("_dbus_publish_state", snapshot["mappings"])
 
-    def test_handle_enable_write_in_manual_mode_switches_relay(self):
+    def test_handle_enable_write_in_manual_mode_switches_relay(self) -> None:
         service = SimpleNamespace(
             virtual_mode=0,
             virtual_startstop=0,
@@ -254,11 +293,11 @@ class TestDbusWriteController(unittest.TestCase):
             manual_override_until=0.0,
             _dbusservice={"/StartStop": 0, "/Enable": 0},
             _time_now=MagicMock(return_value=100.0),
-            _mode_uses_auto_logic=lambda mode: int(mode) in (1, 2),
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
             _queue_relay_command=MagicMock(),
             _publish_local_pm_status=MagicMock(),
             _publish_dbus_path=MagicMock(),
-            _state_summary=lambda: "state",
+            _state_summary=self._state_summary,
             _save_runtime_state=MagicMock(),
         )
         service._publish_dbus_path.side_effect = self._publish_side_effect(service)
@@ -276,7 +315,7 @@ class TestDbusWriteController(unittest.TestCase):
         self.assertEqual(service._dbusservice["/Enable"], 1)
         service._save_runtime_state.assert_called_once()
 
-    def test_handle_mode_write_keeps_in_flight_cutover_state_after_relay_side_effects_start(self):
+    def test_handle_mode_write_keeps_in_flight_cutover_state_after_relay_side_effects_start(self) -> None:
         service = SimpleNamespace(
             virtual_mode=0,
             virtual_autostart=1,
@@ -306,19 +345,19 @@ class TestDbusWriteController(unittest.TestCase):
             _dbusservice={"/Mode": 0, "/StartStop": 1, "/Enable": 0},
             _dbus_publish_state={"/Mode": {"value": 0, "updated_at": 150.0}},
             _time_now=MagicMock(return_value=200.0),
-            _normalize_mode=lambda value: int(value),
-            _mode_uses_auto_logic=lambda mode: int(mode) in (1, 2),
-            _clear_auto_samples=lambda: service.auto_samples.clear(),
+            _normalize_mode=self._normalize_mode,
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
+            _clear_auto_samples=MagicMock(),
             _publish_local_pm_status=MagicMock(side_effect=RuntimeError("publish failed")),
             _peek_pending_relay_command=MagicMock(return_value=(None, None)),
             _get_worker_snapshot=MagicMock(return_value={"pv_power": 10, "battery_soc": 50, "grid_power": -10}),
             _update_worker_snapshot=MagicMock(),
             _publish_dbus_path=MagicMock(),
-            _state_summary=lambda: "state",
+            _state_summary=self._state_summary,
             _save_runtime_state=MagicMock(),
         )
 
-        def _queue_side_effect(relay_on, current_time):
+        def _queue_side_effect(relay_on: bool, current_time: float) -> None:
             service._pending_relay_state = bool(relay_on)
             service._pending_relay_requested_at = current_time
             service._relay_sync_expected_state = bool(relay_on)
@@ -327,6 +366,7 @@ class TestDbusWriteController(unittest.TestCase):
             service._relay_sync_failure_reported = False
 
         service._queue_relay_command = MagicMock(side_effect=_queue_side_effect)
+        service._clear_auto_samples = partial(self._clear_auto_samples, service)
         service._publish_dbus_path.side_effect = self._publish_side_effect(service)
 
         controller = DbusWriteController(WriteControllerPort(service))
@@ -352,7 +392,7 @@ class TestDbusWriteController(unittest.TestCase):
         self.assertEqual(service._dbusservice["/Enable"], 1)
         service._save_runtime_state.assert_called_once()
 
-    def test_handle_write_rolls_back_when_failure_happens_before_relay_side_effects(self):
+    def test_handle_write_rolls_back_when_failure_happens_before_relay_side_effects(self) -> None:
         service = SimpleNamespace(
             virtual_mode=0,
             virtual_autostart=0,
@@ -367,7 +407,7 @@ class TestDbusWriteController(unittest.TestCase):
             _dbusservice={"/AutoStart": 0},
             _time_now=MagicMock(return_value=100.0),
             _publish_dbus_path=MagicMock(side_effect=RuntimeError("fail")),
-            _state_summary=lambda: "state",
+            _state_summary=self._state_summary,
             _save_runtime_state=MagicMock(),
         )
 
@@ -376,7 +416,7 @@ class TestDbusWriteController(unittest.TestCase):
         self.assertFalse(controller.handle_write("/AutoStart", 1))
         self.assertEqual(service.virtual_autostart, 0)
 
-    def test_restore_write_state_recovers_values_deques_and_mappings_from_non_container_targets(self):
+    def test_restore_write_state_recovers_values_deques_and_mappings_from_non_container_targets(self) -> None:
         service = SimpleNamespace(
             scalar_value=0.0,
             sample_buffer=None,
@@ -396,9 +436,9 @@ class TestDbusWriteController(unittest.TestCase):
         self.assertEqual(list(service.sample_buffer), [(1.0, 2.0, 3.0)])
         self.assertEqual(service.mapping_state, {"mode": 1})
 
-    def test_restore_write_state_ignores_dbus_restore_errors(self):
-        class FailingDbusService(dict):
-            def __setitem__(self, key, value):
+    def test_restore_write_state_ignores_dbus_restore_errors(self) -> None:
+        class FailingDbusService(dict[str, object]):
+            def __setitem__(self, key: str, value: object) -> None:
                 raise RuntimeError("dbus write failed")
 
         service = SimpleNamespace(_dbusservice=FailingDbusService())
@@ -412,7 +452,7 @@ class TestDbusWriteController(unittest.TestCase):
 
         DbusWriteController._restore_write_state(service, snapshot)
 
-    def test_handle_mode_write_returns_true_when_save_fails_after_relay_side_effects_started(self):
+    def test_handle_mode_write_returns_true_when_save_fails_after_relay_side_effects_started(self) -> None:
         service = SimpleNamespace(
             virtual_mode=0,
             virtual_autostart=1,
@@ -432,18 +472,19 @@ class TestDbusWriteController(unittest.TestCase):
             _relay_sync_failure_reported=False,
             _dbusservice={"/Mode": 0, "/StartStop": 1, "/Enable": 0},
             _time_now=MagicMock(return_value=200.0),
-            _normalize_mode=lambda value: int(value),
-            _mode_uses_auto_logic=lambda mode: int(mode) in (1, 2),
-            _clear_auto_samples=lambda: service.auto_samples.clear(),
+            _normalize_mode=self._normalize_mode,
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
+            _clear_auto_samples=MagicMock(),
             _queue_relay_command=MagicMock(),
             _publish_local_pm_status=MagicMock(return_value={"output": False}),
             _peek_pending_relay_command=MagicMock(return_value=(None, None)),
             _get_worker_snapshot=MagicMock(return_value={"pv_power": 10, "battery_soc": 50, "grid_power": -10}),
             _update_worker_snapshot=MagicMock(),
             _publish_dbus_path=MagicMock(),
-            _state_summary=lambda: "state",
+            _state_summary=self._state_summary,
             _save_runtime_state=MagicMock(side_effect=RuntimeError("save failed")),
         )
+        service._clear_auto_samples = partial(self._clear_auto_samples, service)
         service._publish_dbus_path.side_effect = self._publish_side_effect(service)
         controller = DbusWriteController(WriteControllerPort(service))
 
@@ -453,7 +494,7 @@ class TestDbusWriteController(unittest.TestCase):
         service._queue_relay_command.assert_called_once_with(False, 200.0)
         service._publish_local_pm_status.assert_called_once_with(False, 200.0)
 
-    def test_handle_autostart_write_restores_dbus_path_when_save_fails_before_relay_side_effects(self):
+    def test_handle_autostart_write_restores_dbus_path_when_save_fails_before_relay_side_effects(self) -> None:
         service = SimpleNamespace(
             virtual_mode=0,
             virtual_autostart=0,
@@ -469,7 +510,7 @@ class TestDbusWriteController(unittest.TestCase):
             _dbus_publish_state={"/AutoStart": {"value": 0, "updated_at": 10.0}},
             _time_now=MagicMock(return_value=200.0),
             _publish_dbus_path=MagicMock(),
-            _state_summary=lambda: "state",
+            _state_summary=self._state_summary,
             _save_runtime_state=MagicMock(side_effect=RuntimeError("save failed")),
         )
         service._publish_dbus_path.side_effect = self._publish_side_effect(service)
@@ -481,7 +522,7 @@ class TestDbusWriteController(unittest.TestCase):
         self.assertEqual(service._dbusservice["/AutoStart"], 0)
         self.assertEqual(service._dbus_publish_state["/AutoStart"]["value"], 0)
 
-    def test_mode_autostart_current_and_error_paths(self):
+    def test_mode_autostart_current_and_error_paths(self) -> None:
         service = SimpleNamespace(
             virtual_mode=5,
             virtual_autostart=0,
@@ -498,17 +539,18 @@ class TestDbusWriteController(unittest.TestCase):
             virtual_set_current=10.0,
             _dbusservice={"/Mode": 5, "/StartStop": 0, "/Enable": 0, "/AutoStart": 0, "/SetCurrent": 10.0},
             _time_now=MagicMock(return_value=42.0),
-            _normalize_mode=lambda value: 2 if int(value) == 5 else int(value),
-            _mode_uses_auto_logic=lambda mode: int(mode) in (1, 2),
-            _clear_auto_samples=lambda: service.auto_samples.clear(),
+            _normalize_mode=self._normalize_mode_5_to_2,
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
+            _clear_auto_samples=MagicMock(),
             _queue_relay_command=MagicMock(),
             _publish_local_pm_status=MagicMock(),
             _get_worker_snapshot=MagicMock(return_value={"pv_power": 10, "battery_soc": 50, "grid_power": -10}),
             _update_worker_snapshot=MagicMock(),
             _publish_dbus_path=MagicMock(),
-            _state_summary=lambda: "state",
+            _state_summary=self._state_summary,
             _save_runtime_state=MagicMock(),
         )
+        service._clear_auto_samples = partial(self._clear_auto_samples, service)
         service._publish_dbus_path.side_effect = self._publish_side_effect(service)
         controller = DbusWriteController(WriteControllerPort(service))
 
@@ -535,7 +577,7 @@ class TestDbusWriteController(unittest.TestCase):
         self.assertEqual(service.virtual_autostart, 1)
         service._save_runtime_state.assert_not_called()
 
-    def test_startstop_and_enable_in_auto_mode_cover_off_and_on_paths(self):
+    def test_startstop_and_enable_in_auto_mode_cover_off_and_on_paths(self) -> None:
         service = SimpleNamespace(
             virtual_mode=1,
             virtual_startstop=0,
@@ -544,11 +586,11 @@ class TestDbusWriteController(unittest.TestCase):
             manual_override_until=0.0,
             _dbusservice={"/StartStop": 0, "/Enable": 0},
             _time_now=MagicMock(return_value=100.0),
-            _mode_uses_auto_logic=lambda mode: int(mode) in (1, 2),
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
             _queue_relay_command=MagicMock(),
             _publish_local_pm_status=MagicMock(),
             _publish_dbus_path=MagicMock(),
-            _state_summary=lambda: "state",
+            _state_summary=self._state_summary,
             _save_runtime_state=MagicMock(),
         )
         service._publish_dbus_path.side_effect = self._publish_side_effect(service)
@@ -569,12 +611,12 @@ class TestDbusWriteController(unittest.TestCase):
         self.assertTrue(controller.handle_write("/Enable", 0))
         service._queue_relay_command.assert_called_once_with(False, 100.0)
 
-    def test_mode_transition_and_publish_helpers_cover_remaining_branches(self):
+    def test_mode_transition_and_publish_helpers_cover_remaining_branches(self) -> None:
         service = SimpleNamespace(
             virtual_mode=1,
             virtual_startstop=0,
             virtual_enable=1,
-            _mode_uses_auto_logic=lambda mode: int(mode) in (1, 2),
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
             _publish_dbus_path=MagicMock(),
         )
         controller = DbusWriteController(WriteControllerPort(service))

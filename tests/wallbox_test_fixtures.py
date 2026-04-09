@@ -3,13 +3,14 @@ from __future__ import annotations
 
 from collections import deque
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 from dbus_shelly_wallbox_auto_policy import AutoPolicy, AutoStopEwmaPolicy, AutoThresholdProfile
 
 
-def make_auto_metrics(**overrides):
-    metrics = {
+def make_auto_metrics(**overrides: object) -> dict[str, object]:
+    metrics: dict[str, object] = {
         "state": "waiting",
         "surplus": 850.0,
         "grid": -900.0,
@@ -26,7 +27,7 @@ def make_auto_metrics(**overrides):
     return metrics
 
 
-def make_auto_policy(**overrides):
+def make_auto_policy(**overrides: object) -> AutoPolicy:
     policy = AutoPolicy(
         normal_profile=AutoThresholdProfile(1850.0, 1350.0),
         high_soc_profile=AutoThresholdProfile(1650.0, 800.0),
@@ -51,8 +52,8 @@ def make_auto_policy(**overrides):
     return policy
 
 
-def make_auto_controller_service(**overrides):
-    data = {
+def make_auto_controller_service(**overrides: object) -> SimpleNamespace:
+    data: dict[str, object] = {
         "auto_samples": deque(),
         "auto_average_window_seconds": 30.0,
         "relay_last_changed_at": None,
@@ -132,8 +133,8 @@ def make_auto_controller_service(**overrides):
     return SimpleNamespace(**data)
 
 
-def make_runtime_support_service(**overrides):
-    data = {
+def make_runtime_support_service(**overrides: object) -> SimpleNamespace:
+    data: dict[str, object] = {
         "poll_interval_ms": 1000,
         "deviceinstance": 60,
         "_time_now": lambda: 1000.0,
@@ -177,8 +178,8 @@ def make_runtime_support_service(**overrides):
     return SimpleNamespace(**data)
 
 
-def make_state_validation_service(**overrides):
-    data = {
+def make_state_validation_service(**overrides: object) -> SimpleNamespace:
+    data: dict[str, object] = {
         "poll_interval_ms": 200,
         "sign_of_life_minutes": 2,
         "auto_pv_max_services": 2,
@@ -215,8 +216,8 @@ def make_state_validation_service(**overrides):
     return SimpleNamespace(**data)
 
 
-def make_runtime_state_service(**overrides):
-    data = {
+def make_runtime_state_service(**overrides: object) -> SimpleNamespace:
+    data: dict[str, Any] = {
         "runtime_state_path": "",
         "virtual_mode": 1,
         "virtual_autostart": 1,

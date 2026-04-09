@@ -149,11 +149,10 @@ class DbusWriteController:
         auto_mode_active: bool | None = None,
     ) -> None:
         """Force-publish StartStop and Enable after a control-path write."""
-        if auto_mode_active is None:
-            auto_mode_active = svc._mode_uses_auto_logic(svc.virtual_mode)
+        resolved_auto_mode_active = svc._mode_uses_auto_logic(svc.virtual_mode) if auto_mode_active is None else auto_mode_active
         svc._publish_dbus_path(
             "/StartStop",
-            cls._startstop_value_for_mode(svc, auto_mode_active),
+            cls._startstop_value_for_mode(svc, resolved_auto_mode_active),
             current_time,
             force=True,
         )

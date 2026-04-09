@@ -25,6 +25,9 @@ ErrorState = dict[str, int]
 FailureState = dict[str, bool]
 DefaultFactory = Callable[[], Any]
 
+# Tests patch these module-level symbols directly to exercise failure paths.
+_TEST_PATCH_EXPORTS = (logging, os, dbus, write_text_atomically)
+
 
 from dbus_shelly_wallbox_runtime_audit import _RuntimeSupportAuditMixin
 from dbus_shelly_wallbox_runtime_health import _RuntimeSupportHealthMixin

@@ -7,44 +7,21 @@ service. It periodically writes a compact JSON snapshot that the main process
 can consume safely, even if DBus becomes slow or temporarily inconsistent.
 """
 
-import configparser
-import json
-import logging
-import os
-import signal
-import sys
 import time
-import xml.etree.ElementTree as xml_et
-from functools import partial
-
-import dbus
-from dbus_shelly_wallbox_shared import (
-    AUTO_INPUT_SNAPSHOT_SCHEMA_VERSION,
-    compact_json,
-    configured_grid_paths,
-    coerce_dbus_numeric,
-    discovery_cache_valid,
-    first_matching_prefixed_service,
-    grid_values_complete_enough,
-    prefixed_service_names,
-    should_assume_zero_pv,
-    sum_dbus_numeric,
-    write_text_atomically,
-)
-from gi.repository import GLib
+from typing import Any
 
 
 
 class _AutoInputHelperSnapshotMixin:
     @staticmethod
-    def _default_source_poll_schedule():
+    def _default_source_poll_schedule() -> dict[str, float]:
         return {
             "pv": 0.0,
             "battery": 0.0,
             "grid": 0.0,
         }
 
-    def _ensure_poll_state(self):
+    def _ensure_poll_state(self: Any) -> None:
         """Initialize runtime state for tests or partially constructed instances."""
         base_poll_interval = max(0.2, getattr(self, "poll_interval_seconds", 1.0))
         for attr_name in (
@@ -77,7 +54,7 @@ class _AutoInputHelperSnapshotMixin:
             value = default() if callable(default) else default
             setattr(self, attr_name, value)
 
-    def _collect_snapshot(self, now=None):
+    def _collect_snapshot(self: Any, now: float | None = None) -> dict[str, object]:
         """Collect only the due Auto inputs and keep the last snapshot state for the others."""
         self._ensure_poll_state()
         current = time.time() if now is None else float(now)
@@ -107,7 +84,7 @@ class _AutoInputHelperSnapshotMixin:
         self._last_snapshot_state = dict(snapshot)
         return snapshot
 
-    def _set_source_value(self, source_name, value, now=None):
+    def _set_source_value(self: Any, source_name: str, value: object, now: float | None = None) -> None:
         """Update one source in the snapshot and write it to RAM."""
         self._ensure_poll_state()
         current = time.time() if now is None else float(now)
@@ -129,7 +106,7 @@ class _AutoInputHelperSnapshotMixin:
         self._last_snapshot_state = snapshot
         self._write_snapshot(snapshot)
 
-    def _heartbeat_snapshot(self):
+    def _heartbeat_snapshot(self: Any) -> bool:
         """Keep the RAM snapshot fresh without re-reading DBus values."""
         self._ensure_poll_state()
         current = time.time()
@@ -140,7 +117,7 @@ class _AutoInputHelperSnapshotMixin:
         self._write_snapshot(snapshot)
         return not self._stop_requested
 
-    def _refresh_source(self, source_name, now=None):
+    def _refresh_source(self: Any, source_name: str, now: float | None = None) -> None:
         """Refresh exactly one source on startup or when its DBus signal fires."""
         current = time.time() if now is None else float(now)
         if source_name == "pv":
@@ -153,13 +130,13 @@ class _AutoInputHelperSnapshotMixin:
             return
         self._set_source_value(source_name, value, current)
 
-    def _refresh_all_sources(self, now=None):
+    def _refresh_all_sources(self: Any, now: float | None = None) -> None:
         """Refresh all Auto inputs once, for startup or service topology changes."""
         current = time.time() if now is None else float(now)
         for source_name in ("pv", "battery", "grid"):
             self._refresh_source(source_name, current)
 
-    def _validation_poll(self):
+    def _validation_poll(self: Any) -> bool:
         """Fallback poll to recover from silent subscription failures."""
         self._refresh_all_sources()
         return not self._stop_requested

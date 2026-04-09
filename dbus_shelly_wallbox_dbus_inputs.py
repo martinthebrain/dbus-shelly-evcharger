@@ -3,23 +3,14 @@
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import Any
 
 import dbus
-from dbus_shelly_wallbox_shared import (
-    coerce_dbus_numeric,
-    configured_grid_paths,
-    discovery_cache_valid,
-    first_matching_prefixed_service,
-    grid_values_complete_enough,
-    prefixed_service_names,
-    should_assume_zero_pv,
-    sum_dbus_numeric,
-)
 from dbus_shelly_wallbox_dbus_inputs_pv import _DbusInputPvMixin
 from dbus_shelly_wallbox_dbus_inputs_storage import _DbusInputStorageMixin
+
+_TEST_PATCH_EXPORTS = (dbus, time)
 
 
 class DbusInputController(_DbusInputPvMixin, _DbusInputStorageMixin):

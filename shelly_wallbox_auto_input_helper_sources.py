@@ -7,20 +7,13 @@ service. It periodically writes a compact JSON snapshot that the main process
 can consume safely, even if DBus becomes slow or temporarily inconsistent.
 """
 
-import configparser
-import json
 import logging
-import os
-import signal
-import sys
 import time
 import xml.etree.ElementTree as xml_et
-from functools import partial
+from typing import Any, cast
 
 import dbus
 from dbus_shelly_wallbox_shared import (
-    AUTO_INPUT_SNAPSHOT_SCHEMA_VERSION,
-    compact_json,
     configured_grid_paths,
     coerce_dbus_numeric,
     discovery_cache_valid,
@@ -29,47 +22,49 @@ from dbus_shelly_wallbox_shared import (
     prefixed_service_names,
     should_assume_zero_pv,
     sum_dbus_numeric,
-    write_text_atomically,
 )
-from gi.repository import GLib
 
 
 
 class _AutoInputHelperSourceMixin:
-    def _get_dbus_value(self, service_name, path):
+    def _get_dbus_value(self: Any, service_name: str, path: str) -> float | int | None:
         """Read one DBus value with a small retry on reconnect."""
-        last_error = None
+        last_error: Exception | None = None
         for attempt in range(2):
             try:
                 obj = self._get_system_bus().get_object(service_name, path)
                 interface = dbus.Interface(obj, "com.victronenergy.BusItem")
                 value = interface.GetValue(timeout=self.dbus_method_timeout_seconds)
-                return coerce_dbus_numeric(value)
+                numeric_value = coerce_dbus_numeric(value)
+                return cast(float | int | None, numeric_value)
             except Exception as error:  # pylint: disable=broad-except
                 last_error = error
                 self._reset_system_bus()
                 if attempt == 0:
                     logging.debug("DBus read retry for %s %s after error: %s", service_name, path, error)
+        assert last_error is not None
         raise last_error
 
-    def _get_dbus_child_nodes(self, service_name, path):
+    def _get_dbus_child_nodes(self: Any, service_name: str, path: str) -> list[str]:
         """Return child nodes below a DBus path via introspection."""
-        last_error = None
+        last_error: Exception | None = None
         for attempt in range(2):
             try:
                 obj = self._get_system_bus().get_object(service_name, path)
                 interface = dbus.Interface(obj, "org.freedesktop.DBus.Introspectable")
                 xml_data = interface.Introspect(timeout=self.dbus_method_timeout_seconds)
                 root = xml_et.fromstring(str(xml_data))
-                return [node.attrib.get("name") for node in root.findall("node") if node.attrib.get("name")]
+                child_nodes = [str(name) for node in root.findall("node") if (name := node.attrib.get("name"))]
+                return child_nodes
             except Exception as error:  # pylint: disable=broad-except
                 last_error = error
                 self._reset_system_bus()
                 if attempt == 0:
                     logging.debug("DBus introspection retry for %s %s after error: %s", service_name, path, error)
+        assert last_error is not None
         raise last_error
 
-    def _list_dbus_services(self):
+    def _list_dbus_services(self: Any) -> list[str]:
         """Return all DBus service names with a small backoff on failure."""
         now = time.time()
         if now < self._dbus_list_backoff_until:
@@ -96,21 +91,21 @@ class _AutoInputHelperSourceMixin:
             )
             return []
 
-    def _source_retry_ready(self, key):
+    def _source_retry_ready(self: Any, key: str) -> bool:
         """Return True when a source may be queried again."""
         return time.time() >= float(self._source_retry_after.get(key, 0.0))
 
-    def _delay_source_retry(self, key):
+    def _delay_source_retry(self: Any, key: str) -> None:
         """Delay retries briefly after a failing source read."""
         delay = max(1.0, self.auto_dbus_backoff_base_seconds or 5.0)
         self._source_retry_after[key] = time.time() + delay
 
-    def _invalidate_auto_pv_services(self):
+    def _invalidate_auto_pv_services(self: Any) -> None:
         """Force the next PV lookup to re-scan DBus services."""
-        self._resolved_auto_pv_services = []
+        setattr(self, "_resolved_auto_pv_services", [])
         self._auto_pv_last_scan = 0.0
 
-    def _resolve_auto_pv_services(self):
+    def _resolve_auto_pv_services(self: Any) -> list[str]:
         """Resolve AC PV services from config or DBus discovery."""
         if self.auto_pv_service:
             return [self.auto_pv_service]
@@ -132,7 +127,7 @@ class _AutoInputHelperSourceMixin:
         self._auto_pv_last_scan = now
         return list(self._resolved_auto_pv_services)
 
-    def _resolved_pv_service_names(self):
+    def _resolved_pv_service_names(self: Any) -> tuple[list[str], bool]:
         """Return resolved AC PV services plus the discovery-empty hint."""
         try:
             service_names = self._resolve_auto_pv_services()
@@ -142,7 +137,7 @@ class _AutoInputHelperSourceMixin:
         no_auto_ac_services_found = not self.auto_pv_service and not service_names
         return service_names, no_auto_ac_services_found
 
-    def _read_ac_pv_total(self, service_names):
+    def _read_ac_pv_total(self: Any, service_names: list[str]) -> tuple[float, bool]:
         """Return accumulated AC PV power and whether any numeric value was seen."""
         total = 0.0
         seen_value = False
@@ -160,7 +155,7 @@ class _AutoInputHelperSourceMixin:
             seen_value = True
         return total, seen_value
 
-    def _read_dc_pv_power(self):
+    def _read_dc_pv_power(self: Any) -> float | None:
         """Return numeric DC PV power when configured and readable."""
         if not self.auto_use_dc_pv:
             return None
@@ -176,7 +171,7 @@ class _AutoInputHelperSourceMixin:
             return None
         return sum_dbus_numeric(dc_value)
 
-    def _get_pv_power(self):
+    def _get_pv_power(self: Any) -> float | None:
         """Read total PV power from auto-discovered AC PV plus optional DC PV."""
         if not self._source_retry_ready("pv"):
             return None
@@ -188,7 +183,8 @@ class _AutoInputHelperSourceMixin:
             seen_value = True
 
         if seen_value:
-            return total
+            total_power: float = total
+            return total_power
         if should_assume_zero_pv(
             self.auto_pv_service,
             service_names,
@@ -200,26 +196,27 @@ class _AutoInputHelperSourceMixin:
         self._delay_source_retry("pv")
         return None
 
-    def _invalidate_auto_battery_service(self):
+    def _invalidate_auto_battery_service(self: Any) -> None:
         """Force the next battery lookup to re-scan DBus services."""
         self._resolved_auto_battery_service = None
         self._auto_battery_last_scan = 0.0
 
-    def _battery_service_has_soc(self, service_name):
+    def _battery_service_has_soc(self: Any, service_name: str) -> bool:
         """Return whether the candidate battery service currently exposes SOC."""
         try:
             return self._get_dbus_value(service_name, self.auto_battery_soc_path) is not None
         except Exception:
             return False
 
-    def _resolve_auto_battery_service(self):
+    def _resolve_auto_battery_service(self: Any) -> str:
         """Resolve battery service from config or DBus discovery."""
         if self.auto_battery_service:
             try:
                 if self._get_dbus_value(self.auto_battery_service, self.auto_battery_soc_path) is not None:
                     self._resolved_auto_battery_service = self.auto_battery_service
                     self._auto_battery_last_scan = time.time()
-                    return self._resolved_auto_battery_service
+                    resolved_override: str = self._resolved_auto_battery_service
+                    return resolved_override
             except Exception:
                 pass
         now = time.time()
@@ -229,7 +226,8 @@ class _AutoInputHelperSourceMixin:
             self.auto_battery_scan_interval_seconds,
             now,
         ):
-            return self._resolved_auto_battery_service
+            cached_service: str = self._resolved_auto_battery_service
+            return cached_service
         service_name = first_matching_prefixed_service(
             self._list_dbus_services(),
             self.auto_battery_service_prefix,
@@ -238,10 +236,11 @@ class _AutoInputHelperSourceMixin:
         if service_name is not None:
             self._resolved_auto_battery_service = service_name
             self._auto_battery_last_scan = now
-            return self._resolved_auto_battery_service
+            resolved_service: str = self._resolved_auto_battery_service
+            return resolved_service
         raise ValueError(f"No DBus service found with prefix '{self.auto_battery_service_prefix}'")
 
-    def _get_battery_soc(self):
+    def _get_battery_soc(self: Any) -> float | None:
         """Read battery SOC from the resolved battery service."""
         if not self._source_retry_ready("battery"):
             return None
@@ -269,7 +268,7 @@ class _AutoInputHelperSourceMixin:
             self._delay_source_retry("battery")
             return None
 
-    def _get_grid_power(self):
+    def _get_grid_power(self: Any) -> float | None:
         """Read summed grid power from per-phase DBus paths."""
         if not self._source_retry_ready("grid"):
             return None

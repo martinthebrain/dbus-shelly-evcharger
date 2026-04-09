@@ -10,9 +10,37 @@ from tests.wallbox_test_fixtures import make_auto_metrics, make_runtime_support_
 
 
 class TestRuntimeSupportController(unittest.TestCase):
-    def test_runtime_and_worker_state_helpers_cover_defaults_snapshot_and_retries(self):
+    @staticmethod
+    def _age_zero(_captured_at: float | int | None, _now: float | int | None) -> int:
+        return 0
+
+    @staticmethod
+    def _age_five(_captured_at: float | int | None, _now: float | int | None) -> int:
+        return 5
+
+    @staticmethod
+    def _health_zero(_reason: str) -> int:
+        return 0
+
+    @staticmethod
+    def _health_nine(_reason: str) -> int:
+        return 9
+
+    @staticmethod
+    def _health_ten(_reason: str) -> int:
+        return 10
+
+    @staticmethod
+    def _never_stale(_now: float) -> bool:
+        return False
+
+    @staticmethod
+    def _always_stale(_now: float) -> bool:
+        return True
+
+    def test_runtime_and_worker_state_helpers_cover_defaults_snapshot_and_retries(self) -> None:
         service = make_runtime_support_service(_time_now=lambda: 100.0)
-        controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 5, lambda *_args, **_kwargs: 9)
+        controller = RuntimeSupportController(service, self._age_five, self._health_nine)
 
         controller.initialize_runtime_support()
         controller.init_worker_state()
@@ -31,7 +59,7 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertIsNone(service._auto_input_snapshot_version)
 
         partial_service = SimpleNamespace(poll_interval_ms=500, deviceinstance=61)
-        partial_controller = RuntimeSupportController(partial_service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+        partial_controller = RuntimeSupportController(partial_service, self._age_zero, self._health_zero)
         partial_controller.ensure_worker_state()
         partial_controller.ensure_observability_state()
         self.assertEqual(partial_service.auto_input_snapshot_path, "/run/dbus-shelly-wallbox-auto-61.json")
@@ -43,10 +71,11 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertIsNone(partial_service._auto_input_snapshot_last_captured_at)
         self.assertIsNone(partial_service._auto_input_snapshot_version)
 
-        snapshot = {"captured_at": 1.0, "pm_status": {"output": True}}
+        pm_status: dict[str, object] = {"output": True}
+        snapshot: dict[str, object] = {"captured_at": 1.0, "pm_status": pm_status}
         partial_service._ensure_worker_state = MagicMock()
         partial_controller.set_worker_snapshot(snapshot)
-        snapshot["pm_status"]["output"] = False
+        pm_status["output"] = False
         self.assertTrue(partial_service._worker_snapshot["pm_status"]["output"])
 
         partial_controller.update_worker_snapshot(grid_power=-500.0)
@@ -68,9 +97,9 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertFalse(partial_controller.source_retry_ready("dbus", 100.0))
         self.assertTrue(partial_controller.source_retry_ready("dbus", 106.0))
 
-    def test_worker_snapshot_contract_normalizes_pm_invariants(self):
+    def test_worker_snapshot_contract_normalizes_pm_invariants(self) -> None:
         partial_service = SimpleNamespace(poll_interval_ms=500, deviceinstance=61, _time_now=lambda: 100.0)
-        controller = RuntimeSupportController(partial_service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+        controller = RuntimeSupportController(partial_service, self._age_zero, self._health_zero)
         controller.ensure_worker_state()
         partial_service._ensure_worker_state = MagicMock()
 
@@ -95,7 +124,7 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertEqual(snapshot["pm_status"], {"output": True})
         self.assertTrue(snapshot["pm_confirmed"])
 
-    def test_audit_helpers_and_watchdog_cover_remaining_branches(self):
+    def test_audit_helpers_and_watchdog_cover_remaining_branches(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/auto.log"
             service = make_runtime_support_service(
@@ -113,7 +142,7 @@ class TestRuntimeSupportController(unittest.TestCase):
                 auto_watchdog_recovery_seconds=0.0,
                 _last_recovery_attempt_at=990.0,
             )
-            controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 10, lambda *_args, **_kwargs: 0)
+            controller = RuntimeSupportController(service, self._age_zero, self._health_ten)
 
             self.assertEqual(controller._relay_state_for_audit(service), 0)
             self.assertIn("surplus=na", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
@@ -134,7 +163,7 @@ class TestRuntimeSupportController(unittest.TestCase):
             )
             self.assertFalse(controller.is_update_stale(1000.0))
             self.assertTrue(controller._watchdog_recovery_suppressed(service, 1000.0))
-            service._is_update_stale = lambda now: False
+            service._is_update_stale = self._never_stale
             controller.watchdog_recover(1000.0)
             service._reset_system_bus.assert_not_called()
 
@@ -160,11 +189,11 @@ class TestRuntimeSupportController(unittest.TestCase):
             service.auto_watchdog_recovery_seconds = 5.0
             service._last_recovery_attempt_at = None
             service.started_at = 0.0
-            service._is_update_stale = lambda now: True
+            service._is_update_stale = self._always_stale
             controller.watchdog_recover(20.0)
             service._reset_system_bus.assert_called_once_with()
 
-    def test_audit_prefers_last_confirmed_relay_state_over_local_placeholder(self):
+    def test_audit_prefers_last_confirmed_relay_state_over_local_placeholder(self) -> None:
         service = make_runtime_support_service(
             _last_pm_status={"output": True},
             _last_pm_status_confirmed=False,
@@ -172,12 +201,12 @@ class TestRuntimeSupportController(unittest.TestCase):
             _last_confirmed_pm_status_at=95.0,
             virtual_startstop=1,
         )
-        controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+        controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
 
         self.assertEqual(controller._relay_state_for_audit(service), 0)
         self.assertIn("relay=0", controller._format_auto_audit_line(service, "waiting", False, 100.0))
 
-    def test_audit_normalizes_state_and_sanitizes_invalid_threshold_metrics(self):
+    def test_audit_normalizes_state_and_sanitizes_invalid_threshold_metrics(self) -> None:
         service = make_runtime_support_service(
             _last_auto_state="odd-state",
             _last_auto_state_code=99,
@@ -194,7 +223,7 @@ class TestRuntimeSupportController(unittest.TestCase):
                 "threshold_mode": 4,
             },
         )
-        controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+        controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
 
         line = controller._format_auto_audit_line(service, "waiting", False, 100.0)
         audit_key = controller._auto_audit_key(service, "waiting", False)
@@ -213,19 +242,19 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertIsNone(audit_key[13])
         self.assertIsNone(audit_key[14])
 
-    def test_audit_ignores_stale_confirmed_relay_state_instead_of_virtual_placeholder(self):
+    def test_audit_ignores_stale_confirmed_relay_state_instead_of_virtual_placeholder(self) -> None:
         service = make_runtime_support_service(
             _time_now=lambda: 100.0,
             _last_confirmed_pm_status={"output": True},
             _last_confirmed_pm_status_at=80.0,
             virtual_startstop=1,
         )
-        controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+        controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
 
         self.assertEqual(controller._relay_state_for_audit(service), 0)
         self.assertIn("relay=0", controller._format_auto_audit_line(service, "waiting", False, 100.0))
 
-    def test_audit_and_watchdog_early_returns_cover_remaining_branches(self):
+    def test_audit_and_watchdog_early_returns_cover_remaining_branches(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/auto.log"
             with open(path, "w", encoding="utf-8") as handle:
@@ -238,9 +267,9 @@ class TestRuntimeSupportController(unittest.TestCase):
                 _last_pm_status=None,
                 _last_auto_metrics={"surplus": None, "grid": None, "soc": None},
                 _last_recovery_attempt_at=995.0,
-                _is_update_stale=lambda now: True,
+                _is_update_stale=self._always_stale,
             )
-            controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 10, lambda *_args, **_kwargs: 0)
+            controller = RuntimeSupportController(service, self._age_zero, self._health_ten)
 
             controller._cleanup_auto_audit_log(1000.0)
             with open(path, "r", encoding="utf-8") as handle:
@@ -252,12 +281,12 @@ class TestRuntimeSupportController(unittest.TestCase):
             controller.watchdog_recover(1000.0)
             service._reset_system_bus.assert_not_called()
 
-    def test_warning_throttled_logs_once_per_interval(self):
+    def test_warning_throttled_logs_once_per_interval(self) -> None:
         service = SimpleNamespace(
             _ensure_observability_state=MagicMock(),
             _warning_state={},
         )
-        controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+        controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
 
         with patch("dbus_shelly_wallbox_runtime_support.time.time", side_effect=[100.0, 105.0, 131.0]):
             with patch("dbus_shelly_wallbox_runtime_support.logging.warning") as warning_mock:
@@ -269,11 +298,11 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertEqual(warning_mock.call_count, 2)
         self.assertEqual(service._warning_state["worker-failed"], 131.0)
 
-    def test_bucket_metric_returns_raw_value_when_step_is_not_positive(self):
+    def test_bucket_metric_returns_raw_value_when_step_is_not_positive(self) -> None:
         self.assertEqual(RuntimeSupportController._bucket_metric(1.23, step=0.0), 1.23)
         self.assertIsNone(RuntimeSupportController._bucket_metric(None, step=50.0))
 
-    def test_write_auto_audit_event_deduplicates_identical_reason_within_repeat_window(self):
+    def test_write_auto_audit_event_deduplicates_identical_reason_within_repeat_window(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/auto-reasons.log"
             current_time = [1000.0]
@@ -283,7 +312,7 @@ class TestRuntimeSupportController(unittest.TestCase):
                 _last_auto_metrics=make_auto_metrics(),
             )
 
-            controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+            controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
             controller.write_auto_audit_event("waiting-surplus", cached=False)
             current_time[0] = 1005.0
             service._last_auto_metrics = {
@@ -306,7 +335,7 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertIn("reason=waiting-surplus", lines[0])
 
-    def test_write_auto_audit_event_repeats_same_reason_after_repeat_window(self):
+    def test_write_auto_audit_event_repeats_same_reason_after_repeat_window(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/auto-reasons.log"
             current_time = [1000.0]
@@ -316,7 +345,7 @@ class TestRuntimeSupportController(unittest.TestCase):
                 _last_auto_metrics=make_auto_metrics(),
             )
 
-            controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+            controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
             controller.write_auto_audit_event("waiting-surplus", cached=False)
             current_time[0] = 1031.0
             service._last_auto_metrics = {
@@ -339,7 +368,7 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertEqual(len(lines), 2)
         self.assertTrue(all("reason=waiting-surplus" in line for line in lines))
 
-    def test_write_auto_audit_event_repeats_same_reason_when_threshold_bucket_changes(self):
+    def test_write_auto_audit_event_repeats_same_reason_when_threshold_bucket_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/auto-reasons.log"
             current_time = [1000.0]
@@ -354,7 +383,7 @@ class TestRuntimeSupportController(unittest.TestCase):
                 ),
             )
 
-            controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+            controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
             controller.write_auto_audit_event("waiting-surplus", cached=False)
             current_time[0] = 1005.0
             service._last_auto_metrics = make_auto_metrics(
@@ -374,7 +403,7 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertIn("threshold_scale=1.000", lines[0])
         self.assertIn("threshold_scale=1.200", lines[1])
 
-    def test_write_auto_audit_event_prunes_old_entries_by_age(self):
+    def test_write_auto_audit_event_prunes_old_entries_by_age(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/auto-reasons.log"
             current_time = [1000.0]
@@ -385,7 +414,7 @@ class TestRuntimeSupportController(unittest.TestCase):
                 _last_auto_metrics=make_auto_metrics(),
             )
 
-            controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+            controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
             controller.write_auto_audit_event("waiting-surplus", cached=False)
 
             current_time[0] = 2000.0
@@ -398,7 +427,7 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertIn("reason=waiting-grid", payload)
         self.assertIn("cached=1", payload)
 
-    def test_write_auto_audit_event_includes_stop_reason_detail(self):
+    def test_write_auto_audit_event_includes_stop_reason_detail(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/auto-reasons.log"
             service = make_runtime_support_service(
@@ -423,7 +452,7 @@ class TestRuntimeSupportController(unittest.TestCase):
                     surplus_volatility=520.0,
                 ),
             )
-            controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+            controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
             controller.write_auto_audit_event("auto-stop", cached=False)
 
             with open(path, "r", encoding="utf-8") as handle:
@@ -442,12 +471,12 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertIn("stop_alpha_stage=volatile", payload)
         self.assertIn("surplus_volatility=520W", payload)
 
-    def test_auto_audit_reason_detail_ignores_non_string_stop_reasons(self):
+    def test_auto_audit_reason_detail_ignores_non_string_stop_reasons(self) -> None:
         service = make_runtime_support_service(auto_stop_condition_reason=1)
 
         self.assertIsNone(RuntimeSupportController._auto_audit_reason_detail(service, "auto-stop"))
 
-    def test_write_auto_audit_event_deduplicates_by_stop_reason_detail(self):
+    def test_write_auto_audit_event_deduplicates_by_stop_reason_detail(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/auto-reasons.log"
             current_time = [1000.0]
@@ -467,7 +496,7 @@ class TestRuntimeSupportController(unittest.TestCase):
                 ),
             )
 
-            controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+            controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
             controller.write_auto_audit_event("auto-stop", cached=False)
             current_time[0] = 1005.0
             service.auto_stop_condition_reason = "auto-stop-soc"
@@ -491,21 +520,21 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertIn("detail=grid", payload)
         self.assertIn("detail=soc", payload)
 
-    def test_write_auto_audit_event_ignores_unwritable_log_path(self):
+    def test_write_auto_audit_event_ignores_unwritable_log_path(self) -> None:
         service = make_runtime_support_service(
             _time_now=lambda: 1000.0,
             auto_audit_log_path="/root/forbidden/auto-reasons.log",
             _last_auto_metrics=make_auto_metrics(),
         )
 
-        controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+        controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
         with patch("dbus_shelly_wallbox_runtime_support.os.makedirs", side_effect=PermissionError("nope")):
             controller.write_auto_audit_event("waiting-surplus", cached=False)
 
         self.assertIsNone(service._last_auto_audit_key)
         self.assertIsNone(service._last_auto_audit_event_at)
 
-    def test_write_auto_audit_event_retries_identical_reason_after_failed_write(self):
+    def test_write_auto_audit_event_retries_identical_reason_after_failed_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/auto-reasons.log"
             current_time = [1000.0]
@@ -515,7 +544,7 @@ class TestRuntimeSupportController(unittest.TestCase):
                 _last_auto_metrics=make_auto_metrics(),
             )
 
-            controller = RuntimeSupportController(service, lambda *_args, **_kwargs: 0, lambda *_args, **_kwargs: 0)
+            controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
             with patch("dbus_shelly_wallbox_runtime_support.os.makedirs", side_effect=PermissionError("nope")):
                 controller.write_auto_audit_event("waiting-surplus", cached=False)
 

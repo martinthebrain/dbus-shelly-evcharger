@@ -5,15 +5,12 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, cast
 
 import dbus
 from dbus_shelly_wallbox_shared import (
     coerce_dbus_numeric,
-    configured_grid_paths,
     discovery_cache_valid,
-    first_matching_prefixed_service,
-    grid_values_complete_enough,
     prefixed_service_names,
     should_assume_zero_pv,
     sum_dbus_numeric,
@@ -25,12 +22,14 @@ class _DbusInputPvMixin(_ComposableControllerMixin):
     @staticmethod
     def _coerce_dbus_value(value: Any) -> float | int | None:
         """Convert raw DBus values to numbers where possible."""
-        return coerce_dbus_numeric(value)
+        coerced_value = coerce_dbus_numeric(value)
+        return cast(float | int | None, coerced_value)
 
     @staticmethod
     def _numeric_sum(value: Any) -> float | None:
         """Return a usable numeric sum for scalar or sequence power values."""
-        return sum_dbus_numeric(value)
+        numeric_sum = sum_dbus_numeric(value)
+        return numeric_sum
 
     @staticmethod
     def _mark_dbus_success(svc: Any) -> None:
@@ -40,7 +39,7 @@ class _DbusInputPvMixin(_ComposableControllerMixin):
 
     def _source_retry_ready(self, source_key: str, now: float) -> bool:
         """Return whether a logical input source may currently be queried."""
-        return self.service._source_retry_ready(source_key, now)
+        return cast(bool, self.service._source_retry_ready(source_key, now))
 
     def _mark_source_recovery(self, source_key: str, message: str, *args: Any) -> None:
         """Record that one logical input source has recovered."""
@@ -151,7 +150,7 @@ class _DbusInputPvMixin(_ComposableControllerMixin):
             svc.auto_pv_scan_interval_seconds,
             now,
         ):
-            return svc._resolved_auto_pv_services
+            return cast(list[str], svc._resolved_auto_pv_services)
 
         service_names = prefixed_service_names(
             svc._list_dbus_services(),
@@ -164,7 +163,8 @@ class _DbusInputPvMixin(_ComposableControllerMixin):
         logging.debug("Auto PV services resolved: %s", svc._resolved_auto_pv_services)
         if not svc._resolved_auto_pv_services:
             raise ValueError(f"No DBus service found with prefix '{svc.auto_pv_service_prefix}'")
-        return svc._resolved_auto_pv_services
+        resolved_services: list[str] = svc._resolved_auto_pv_services
+        return resolved_services
 
     def _resolve_pv_service_names(self) -> tuple[list[str], bool]:
         """Resolve current AC PV service names and whether auto-discovery found none."""
@@ -262,13 +262,14 @@ class _DbusInputPvMixin(_ComposableControllerMixin):
     ) -> bool:
         """Return whether missing PV data should be treated as 0 W."""
         svc = self.service
-        return should_assume_zero_pv(
+        assume_zero = should_assume_zero_pv(
             svc.auto_pv_service,
             service_names,
             no_auto_ac_services_found,
             svc.auto_use_dc_pv,
             dc_value,
         )
+        return assume_zero
 
     def _handle_missing_pv_power(
         self,

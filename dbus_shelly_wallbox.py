@@ -7,10 +7,16 @@ assembles the service class from smaller controllers/mixins and then delegates
  startup and main-loop setup to the bootstrap helpers.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import sys
+import threading
 import time
+from collections.abc import Callable
+from os import stat_result
+from typing import TYPE_CHECKING, Any
 
 import dbus
 
@@ -53,6 +59,23 @@ from dbus_shelly_wallbox_service_bindings import (
 )
 from dbus_shelly_wallbox_state import ServiceStateController
 
+if TYPE_CHECKING:
+    FormatterMap = dict[str, Callable[[Any, Any], str] | None]
+
+__all__ = [
+    "ShellyWallboxService",
+    "main",
+    "dbus",
+    "gobject",
+    "mode_uses_auto_logic",
+    "month_in_ranges",
+    "month_window",
+    "normalize_mode",
+    "normalize_phase",
+    "parse_hhmm",
+    "phase_values",
+]
+
 
 class ShellyWallboxService(StatePublishMixin, RuntimeHelperMixin, DbusAutoLogicMixin, UpdateCycleMixin):
     """Expose a Shelly relay meter as a Venus OS EV charger tile."""
@@ -66,16 +89,21 @@ class ShellyWallboxService(StatePublishMixin, RuntimeHelperMixin, DbusAutoLogicM
     _read_version_func = staticmethod(read_version)
     _gobject_module = gobject
     _script_path_value = __file__
-    _formatter_bundle = {
+    _formatter_bundle: "FormatterMap" = {
         "kwh": _kwh,
         "a": _a,
         "w": _w,
         "v": _v,
         "status": _status_label,
     }
+    _state_controller: ServiceStateController
+    _bootstrap_controller: ServiceBootstrapController
+    _system_bus: Any
+    _system_bus_state: threading.local
+    _system_bus_generation: int
 
     @staticmethod
-    def _safe_float(value, default=0.0):
+    def _safe_float(value: Any, default: float = 0.0) -> float:
         """Convert values defensively to float."""
         try:
             if value is None:
@@ -85,7 +113,7 @@ class ShellyWallboxService(StatePublishMixin, RuntimeHelperMixin, DbusAutoLogicM
             return float(default)
 
     @staticmethod
-    def _time_now():
+    def _time_now() -> float:
         """Return the current wall-clock time.
 
         This wrapper keeps time-based tests stable even when helper logic is
@@ -93,7 +121,7 @@ class ShellyWallboxService(StatePublishMixin, RuntimeHelperMixin, DbusAutoLogicM
         """
         return time.time()
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize configuration, DBus service, and runtime state."""
         self._state_controller = ServiceStateController(self, normalize_mode)
         self._bootstrap_controller = ServiceBootstrapController(
@@ -113,7 +141,7 @@ class ShellyWallboxService(StatePublishMixin, RuntimeHelperMixin, DbusAutoLogicM
         self._bootstrap_controller.initialize_service()
 
     @staticmethod
-    def _auto_input_helper_path():
+    def _auto_input_helper_path() -> str:
         """Return the helper script path used for Auto input collection."""
         return os.path.join(
             os.path.dirname(os.path.realpath(__file__)),
@@ -121,7 +149,7 @@ class ShellyWallboxService(StatePublishMixin, RuntimeHelperMixin, DbusAutoLogicM
         )
 
     @staticmethod
-    def _stat_path(path):
+    def _stat_path(path: str) -> stat_result:
         """Return `os.stat(path)`.
 
         Kept as a wrapper so tests can continue patching the main module.
@@ -129,12 +157,12 @@ class ShellyWallboxService(StatePublishMixin, RuntimeHelperMixin, DbusAutoLogicM
         return os.stat(path)
 
     @staticmethod
-    def _load_json_file(path):
+    def _load_json_file(path: str) -> Any:
         """Load a JSON file using the main module's patched `open` when needed."""
         with open(path, "r", encoding="utf-8") as handle:
             return json.load(handle)
 
-    def _get_system_bus(self):
+    def _get_system_bus(self) -> Any:
         """Get the system DBus for the current thread.
 
         dbus-python connections are safer when they are not shared across
@@ -153,7 +181,8 @@ class ShellyWallboxService(StatePublishMixin, RuntimeHelperMixin, DbusAutoLogicM
             self._system_bus = cached_bus
         return cached_bus
 
-def main():
+
+def main() -> None:
     """Entrypoint for running as a service."""
     run_service_main(ShellyWallboxService, ShellyWallboxService._config_path(), gobject)
 

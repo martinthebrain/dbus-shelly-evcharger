@@ -12,7 +12,7 @@ from dbus_shelly_wallbox_auto_policy import (
 
 
 class TestAutoPolicy(unittest.TestCase):
-    def test_ewma_policy_clamps_negative_volatility_bounds(self):
+    def test_ewma_policy_clamps_negative_volatility_bounds(self) -> None:
         policy = AutoStopEwmaPolicy(
             base_alpha=0.35,
             stable_alpha=0.55,
@@ -26,11 +26,11 @@ class TestAutoPolicy(unittest.TestCase):
         self.assertEqual(policy.volatility_low_watts, 0.0)
         self.assertEqual(policy.volatility_high_watts, 0.0)
 
-    def test_percentage_helper_clamps_out_of_range_values(self):
+    def test_percentage_helper_clamps_out_of_range_values(self) -> None:
         self.assertEqual(AutoPolicy._clamp_percentage(120.0, "AutoMinSoc"), 100.0)
         self.assertEqual(AutoPolicy._clamp_percentage(-5.0, "AutoResumeSoc"), 0.0)
 
-    def test_learn_charge_policy_clamps_invalid_values(self):
+    def test_learn_charge_policy_clamps_invalid_values(self) -> None:
         policy = AutoLearnChargePowerPolicy(
             enabled=True,
             reference_power_watts=-1.0,
@@ -50,7 +50,7 @@ class TestAutoPolicy(unittest.TestCase):
         self.assertEqual(policy.window_seconds, 0.0)
         self.assertEqual(policy.max_age_seconds, 0.0)
 
-    def test_auto_policy_from_config_reads_learning_settings(self):
+    def test_auto_policy_from_config_reads_learning_settings(self) -> None:
         parser = configparser.ConfigParser()
         parser.read_dict(
             {
@@ -76,7 +76,7 @@ class TestAutoPolicy(unittest.TestCase):
         self.assertEqual(policy.learn_charge_power.window_seconds, 120.0)
         self.assertEqual(policy.learn_charge_power.max_age_seconds, 1800.0)
 
-    def test_learn_charge_policy_warns_about_semantically_odd_values(self):
+    def test_learn_charge_policy_warns_about_semantically_odd_values(self) -> None:
         policy = AutoLearnChargePowerPolicy(
             enabled=True,
             reference_power_watts=1900.0,
@@ -104,7 +104,7 @@ class TestAutoPolicy(unittest.TestCase):
             warning_messages,
         )
 
-    def test_learn_charge_policy_skips_semantic_warnings_when_learning_is_disabled(self):
+    def test_learn_charge_policy_skips_semantic_warnings_when_learning_is_disabled(self) -> None:
         policy = AutoLearnChargePowerPolicy(
             enabled=False,
             reference_power_watts=1900.0,
@@ -120,7 +120,7 @@ class TestAutoPolicy(unittest.TestCase):
 
         warning_mock.assert_not_called()
 
-    def test_auto_policy_warns_about_small_hysteresis_relationships(self):
+    def test_auto_policy_warns_about_small_hysteresis_relationships(self) -> None:
         policy = AutoPolicy(
             normal_profile=AutoThresholdProfile(1500.0, 1420.0),
             high_soc_profile=AutoThresholdProfile(1200.0, 1140.0),

@@ -9,8 +9,6 @@ state back to Venus OS.
 
 from __future__ import annotations
 
-import logging
-import math
 from typing import Any
 from dbus_shelly_wallbox_split_mixins import _ComposableControllerMixin
 
@@ -37,7 +35,9 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
         publish_local_pm_status = getattr(svc, "_publish_local_pm_status", None)
         if callable(publish_local_pm_status):
             try:
-                return publish_local_pm_status(relay_on, now)
+                published = publish_local_pm_status(relay_on, now)
+                if isinstance(published, dict):
+                    return published
             except Exception as error:  # pylint: disable=broad-except
                 svc._warning_throttled(
                     "startup-manual-target-placeholder-failed",
@@ -157,7 +157,7 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
         )
         changed |= svc._publish_config_paths(startstop_display, now)
         changed |= svc._publish_diagnostic_paths(now)
-        return changed
+        return bool(changed)
 
     @staticmethod
     def _total_phase_current(phase_data: dict[str, dict[str, float]]) -> float:
@@ -189,7 +189,7 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
             now,
         )
         svc._save_runtime_state()
-        return changed
+        return bool(changed)
 
     @staticmethod
     def prepare_update_cycle(svc: Any, now: float) -> Any:

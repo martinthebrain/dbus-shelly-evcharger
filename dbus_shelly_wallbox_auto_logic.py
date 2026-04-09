@@ -12,24 +12,17 @@ into many small helper methods. The high-level behavior is:
 
 from __future__ import annotations
 
-from collections.abc import Callable
-import logging
-import math
 import time
-from datetime import datetime
-from typing import Any, Deque
-
-from dbus_shelly_wallbox_auto_policy import AutoPolicy, validate_auto_policy
-from dbus_shelly_wallbox_common import _auto_state_code, _derive_auto_state
-
-AutoSample = tuple[float, float, float]
-AutoDecision = bool | object
-MonthWindow = tuple[tuple[int, int], tuple[int, int]]
-
 
 from dbus_shelly_wallbox_auto_logic_decisions import _AutoDecisionDecisionMixin
 from dbus_shelly_wallbox_auto_logic_gates import _AutoDecisionGatesMixin
 from dbus_shelly_wallbox_auto_logic_samples import _AutoDecisionSamplesMixin
+from dbus_shelly_wallbox_auto_logic_types import NO_RELAY_DECISION, RelayDecisionState
+
+# Tests patch `dbus_shelly_wallbox_auto_logic.time.time` to cover default clock paths.
+_TEST_PATCH_EXPORTS = (time,)
+
+__all__ = ("AutoDecisionWorkflowMixin", "NO_RELAY_DECISION", "RelayDecisionState")
 
 
 class AutoDecisionWorkflowMixin(

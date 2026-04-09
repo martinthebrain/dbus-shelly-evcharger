@@ -1,21 +1,27 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Helpers for throttled DBus publishing in the Shelly wallbox service."""
 
+import logging
 import time
+from typing import Any, Callable, Mapping, Sequence, TypeAlias, cast
 
 from dbus_shelly_wallbox_contracts import displayable_confirmed_read_timestamp, normalized_auto_state_pair
+
+PublishStateEntry: TypeAlias = dict[str, Any]
+PhaseMeasurement: TypeAlias = dict[str, float]
+PhaseData: TypeAlias = dict[str, PhaseMeasurement]
 
 
 class DbusPublishController:
     """Publish Shelly wallbox DBus paths with simple change and interval throttling."""
 
-    PHASE_NAMES = ("L1", "L2", "L3")
+    PHASE_NAMES: tuple[str, str, str] = ("L1", "L2", "L3")
 
-    def __init__(self, service, age_seconds_func):
-        self.service = service
+    def __init__(self, service: Any, age_seconds_func: Callable[[Any, float], float]) -> None:
+        self.service: Any = service
         self._age_seconds = age_seconds_func
 
-    def ensure_state(self):
+    def ensure_state(self) -> None:
         """Initialize DBus publish throttling helpers for tests or partial instances."""
         if not hasattr(self.service, "_dbus_publish_state"):
             self.service._dbus_publish_state = {}
@@ -24,7 +30,14 @@ class DbusPublishController:
         if not hasattr(self.service, "_dbus_slow_publish_interval_seconds"):
             self.service._dbus_slow_publish_interval_seconds = 5.0
 
-    def publish_path(self, path, value, now=None, interval_seconds=None, force=False):
+    def publish_path(
+        self,
+        path: str,
+        value: Any,
+        now: float | None = None,
+        interval_seconds: float | None = None,
+        force: bool = False,
+    ) -> bool:
         """Publish a DBus path immediately, on change, or with a minimum interval."""
         self.ensure_state()
         current = time.time() if now is None else float(now)
@@ -36,9 +49,16 @@ class DbusPublishController:
         self.service._dbus_publish_state[path] = {"value": value, "updated_at": current}
         return True
 
-    def _publish_decision(self, path, value, current, interval_seconds, force):
+    def _publish_decision(
+        self,
+        path: str,
+        value: Any,
+        current: float,
+        interval_seconds: float | None,
+        force: bool,
+    ) -> tuple[bool, PublishStateEntry | None]:
         """Return whether one path should be written plus its current publish-state entry."""
-        entry = self.service._dbus_publish_state.get(path)
+        entry = cast(PublishStateEntry | None, self.service._dbus_publish_state.get(path))
         last_value = None if entry is None else entry.get("value")
         last_updated_at = None if entry is None else entry.get("updated_at")
         should_write = force or entry is None
@@ -53,7 +73,7 @@ class DbusPublishController:
                     should_write = (current - float(last_updated_at)) >= float(interval_seconds)
         return should_write, entry
 
-    def _publish_group_failure(self, group_name, failed_paths, current):
+    def _publish_group_failure(self, group_name: str, failed_paths: Sequence[str], current: float) -> None:
         """Record one DBus publish-group failure without raising into the caller."""
         mark_failure = getattr(self.service, "_mark_failure", None)
         if callable(mark_failure):
@@ -69,8 +89,6 @@ class DbusPublishController:
             )
         else:
             # Fallback for narrow unit-test doubles that only expose the publisher.
-            import logging
-
             logging.warning(
                 "DBus publish group %s failed for paths %s at %.3f",
                 group_name,
@@ -78,7 +96,7 @@ class DbusPublishController:
                 current,
             )
 
-    def _restore_group_publish_state(self, staged_entries):
+    def _restore_group_publish_state(self, staged_entries: Mapping[str, PublishStateEntry | None]) -> None:
         """Best-effort restore of local DBus publish bookkeeping after a failed group publish."""
         for path, entry in staged_entries.items():
             if entry is None:
@@ -86,13 +104,20 @@ class DbusPublishController:
             else:
                 self.service._dbus_publish_state[path] = dict(entry)
 
-    def _publish_values_transactional(self, group_name, values, now, interval_seconds=None, force=False):
+    def _publish_values_transactional(
+        self,
+        group_name: str,
+        values: Mapping[str, Any],
+        now: float | None,
+        interval_seconds: float | None = None,
+        force: bool = False,
+    ) -> bool:
         """Publish one DBus path group with shared best-effort rollback and failure reporting."""
         self.ensure_state()
         current = time.time() if now is None else float(now)
-        staged_values = []
-        staged_entries = {}
-        original_service_values = {}
+        staged_values: list[tuple[str, Any]] = []
+        staged_entries: dict[str, PublishStateEntry | None] = {}
+        original_service_values: dict[str, tuple[bool, Any]] = {}
 
         for path, value in values.items():
             should_write, entry = self._publish_decision(path, value, current, interval_seconds, force)
@@ -109,8 +134,8 @@ class DbusPublishController:
             return False
 
         changed = False
-        failed_paths = []
-        published_paths = []
+        failed_paths: list[str] = []
+        published_paths: list[str] = []
         for path, value in staged_values:
             try:
                 self.service._dbusservice[path] = value
@@ -127,6 +152,10 @@ class DbusPublishController:
         for path in published_paths:
             had_original, original_value = original_service_values.get(path, (False, None))
             if not had_original:
+                try:
+                    del self.service._dbusservice[path]
+                except Exception:  # pylint: disable=broad-except
+                    pass
                 continue
             try:
                 self.service._dbusservice[path] = original_value
@@ -136,7 +165,13 @@ class DbusPublishController:
         self._publish_group_failure(group_name, failed_paths, current)
         return False
 
-    def _publish_values(self, values, now, interval_seconds=None, force=False):
+    def _publish_values(
+        self,
+        values: Mapping[str, Any],
+        now: float | None,
+        interval_seconds: float | None = None,
+        force: bool = False,
+    ) -> bool:
         """Publish a group of DBus values with shared throttling rules."""
         return self._publish_values_transactional(
             "generic",
@@ -146,18 +181,24 @@ class DbusPublishController:
             force=force,
         )
 
-    def bump_update_index(self, now=None):
+    def bump_update_index(self, now: float | None = None) -> None:
         """Increment UpdateIndex when a set of published values changed."""
         self.ensure_state()
         current = time.time() if now is None else float(now)
-        index = self.service._dbusservice["/UpdateIndex"] + 1
+        index = int(self.service._dbusservice["/UpdateIndex"]) + 1
         next_index = 0 if index > 255 else index
         self.service._dbusservice["/UpdateIndex"] = next_index
         self.service._dbus_publish_state["/UpdateIndex"] = {"value": next_index, "updated_at": current}
 
-    def _live_measurement_values(self, power, voltage, total_current, phase_data):
+    def _live_measurement_values(
+        self,
+        power: float,
+        voltage: float,
+        total_current: float,
+        phase_data: PhaseData,
+    ) -> dict[str, float]:
         """Return fast-moving AC measurement values keyed by DBus path."""
-        values = {
+        values: dict[str, float] = {
             "/Ac/Power": power,
             "/Ac/Voltage": voltage,
             "/Ac/Current": total_current,
@@ -169,7 +210,14 @@ class DbusPublishController:
             values[f"/Ac/{phase_name}/Voltage"] = phase_data[phase_name]["voltage"]
         return values
 
-    def publish_live_measurements(self, power, voltage, total_current, phase_data, now):
+    def publish_live_measurements(
+        self,
+        power: float,
+        voltage: float,
+        total_current: float,
+        phase_data: PhaseData,
+        now: float | None,
+    ) -> bool:
         """Publish fast-changing AC measurements once per second."""
         self.ensure_state()
         return self._publish_values_transactional(
@@ -179,7 +227,13 @@ class DbusPublishController:
             interval_seconds=self.service._dbus_live_publish_interval_seconds,
         )
 
-    def _energy_time_values(self, energy_forward, phase_energies, charging_time, session_energy):
+    def _energy_time_values(
+        self,
+        energy_forward: float,
+        phase_energies: Mapping[str, float],
+        charging_time: int,
+        session_energy: float,
+    ) -> dict[str, float | int]:
         """Return slower-moving energy and time values keyed by DBus path."""
         return {
             "/Ac/Energy/Forward": energy_forward,
@@ -191,7 +245,14 @@ class DbusPublishController:
             "/Session/Time": charging_time,
         }
 
-    def publish_energy_time_measurements(self, energy_forward, phase_energies, charging_time, session_energy, now):
+    def publish_energy_time_measurements(
+        self,
+        energy_forward: float,
+        phase_energies: Mapping[str, float],
+        charging_time: int,
+        session_energy: float,
+        now: float | None,
+    ) -> bool:
         """Publish energy and time related values at most every five seconds."""
         self.ensure_state()
         return self._publish_values_transactional(
@@ -201,7 +262,7 @@ class DbusPublishController:
             interval_seconds=self.service._dbus_slow_publish_interval_seconds,
         )
 
-    def _config_values(self, startstop_display):
+    def _config_values(self, startstop_display: int) -> dict[str, float | int]:
         """Return mode and control values keyed by DBus path."""
         return {
             "/Mode": int(self.service.virtual_mode),
@@ -213,14 +274,14 @@ class DbusPublishController:
             "/MaxCurrent": self.service.max_current,
         }
 
-    def publish_config_paths(self, startstop_display, now):
+    def publish_config_paths(self, startstop_display: int, now: float | None) -> bool:
         """Publish configuration-like EV charger paths only when they change."""
         self.ensure_state()
         return self._publish_values_transactional("config", self._config_values(startstop_display), now)
 
-    def _diagnostic_counter_values(self, now):
+    def _diagnostic_counter_values(self, now: float) -> dict[str, str | int]:
         """Return change-driven diagnostic counters keyed by DBus path."""
-        error_state = self.service._error_state
+        error_state = cast(dict[str, Any], self.service._error_state)
         auto_state, auto_state_code = normalized_auto_state_pair(
             getattr(self.service, "_last_auto_state", "idle"),
             getattr(self.service, "_last_auto_state_code", 0),
@@ -249,7 +310,7 @@ class DbusPublishController:
             "/Auto/RecoveryAttempts": int(self.service._recovery_attempts),
         }
 
-    def _diagnostic_age_values(self, now):
+    def _diagnostic_age_values(self, now: float) -> dict[str, float]:
         """Return slower-changing age-like diagnostic values keyed by DBus path."""
         svc = self.service
         stale_base = (
@@ -273,7 +334,7 @@ class DbusPublishController:
             "/Auto/StaleSeconds": self._age_seconds(stale_base, now),
         }
 
-    def publish_diagnostic_paths(self, now):
+    def publish_diagnostic_paths(self, now: float) -> bool:
         """Publish diagnostics on change, except age-like values every five seconds."""
         self.ensure_state()
         changed = self._publish_values_transactional("diagnostic-counters", self._diagnostic_counter_values(now), now)

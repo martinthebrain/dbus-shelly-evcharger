@@ -8,29 +8,15 @@ can consume safely, even if DBus becomes slow or temporarily inconsistent.
 """
 
 import configparser
-import json
 import logging
 import os
 import signal
 import sys
 import time
-import xml.etree.ElementTree as xml_et
-from functools import partial
+from typing import Any
 
 import dbus
-from dbus_shelly_wallbox_shared import (
-    AUTO_INPUT_SNAPSHOT_SCHEMA_VERSION,
-    compact_json,
-    configured_grid_paths,
-    coerce_dbus_numeric,
-    discovery_cache_valid,
-    first_matching_prefixed_service,
-    grid_values_complete_enough,
-    prefixed_service_names,
-    should_assume_zero_pv,
-    sum_dbus_numeric,
-    write_text_atomically,
-)
+from dbus_shelly_wallbox_shared import AUTO_INPUT_SNAPSHOT_SCHEMA_VERSION, compact_json, write_text_atomically
 from gi.repository import GLib
 
 try:
@@ -39,7 +25,10 @@ except Exception:  # pylint: disable=broad-except
     dbus_glib_mainloop = None
 
 
-def _as_bool(value, default=False):
+_TEST_PATCH_EXPORTS = (dbus, GLib, time)
+
+
+def _as_bool(value: object, default: bool = False) -> bool:
     """Parse a config-style truthy value."""
     if value is None:
         return bool(default)
@@ -58,7 +47,7 @@ class AutoInputHelper(
 ):
     SNAPSHOT_SCHEMA_VERSION = AUTO_INPUT_SNAPSHOT_SCHEMA_VERSION
 
-    def __init__(self, config_path, snapshot_path=None, parent_pid=None):
+    def __init__(self, config_path: str, snapshot_path: str | None = None, parent_pid: object = None) -> None:
         parser = configparser.ConfigParser()
         loaded = parser.read(config_path)
         if not loaded or "DEFAULT" not in parser:
@@ -66,7 +55,8 @@ class AutoInputHelper(
 
         self.config_path = config_path
         self.config = parser["DEFAULT"]
-        self.parent_pid = int(parent_pid) if parent_pid is not None else None
+        parsed_parent_pid = int(parent_pid) if isinstance(parent_pid, (str, int)) else None
+        self.parent_pid: int | None = parsed_parent_pid
         # The helper uses a shared base poll interval but allows slower battery
         # polling to reduce unnecessary DBus traffic on systems where SOC values
         # change much less frequently than PV or grid power.
@@ -153,29 +143,29 @@ class AutoInputHelper(
         self._auto_pv_last_scan = 0.0
         self._resolved_auto_battery_service = None
         self._auto_battery_last_scan = 0.0
-        self._source_retry_after = {}
-        self._warning_state = {}
-        self._last_payload = None
-        self._last_snapshot_state = self._empty_snapshot()
+        self._source_retry_after: dict[str, float] = {}
+        self._warning_state: dict[str, float] = {}
+        self._last_payload: str | None = None
+        self._last_snapshot_state: dict[str, float | int | None] = self._empty_snapshot()
         self._next_source_poll_at = {
             "pv": 0.0,
             "battery": 0.0,
             "grid": 0.0,
         }
-        self._signal_matches = {}
-        self._monitored_specs = {}
+        self._signal_matches: dict[tuple[str, str, str], Any] = {}
+        self._monitored_specs: dict[tuple[str, str, str], dict[str, str]] = {}
         self._refresh_scheduled = False
-        self._main_loop = None
+        self._main_loop: Any = None
         self._stop_requested = False
 
-    def _handle_signal(self, signum, _frame):
+    def _handle_signal(self, signum: int, _frame: object) -> None:
         """Stop the helper cleanly when asked."""
         logging.info("Auto input helper received signal %s", signum)
         self._stop_requested = True
         if self._main_loop is not None:
             GLib.idle_add(self._main_loop.quit)
 
-    def _derive_subscription_refresh_seconds(self):
+    def _derive_subscription_refresh_seconds(self) -> float:
         """Return a slow service refresh interval for DBus subscription bookkeeping."""
         candidates = [60.0]
         for value in (
@@ -186,16 +176,22 @@ class AutoInputHelper(
                 candidates.append(value)
         return max(5.0, min(candidates))
 
-    def _parent_alive(self):
+    def _parent_alive(self) -> bool:
         """Return False when the parent process is gone."""
         if self.parent_pid is None:
             return True
         try:
-            return os.getppid() == self.parent_pid
+            return bool(os.getppid() == self.parent_pid)
         except Exception:  # pylint: disable=broad-except
             return False
 
-    def _warning_throttled(self, key, interval_seconds, message, *args):
+    def _warning_throttled(
+        self,
+        key: str,
+        interval_seconds: float,
+        message: str,
+        *args: object,
+    ) -> None:
         """Log a warning only once per interval for a given issue."""
         now = time.time()
         last_logged = self._warning_state.get(key)
@@ -204,7 +200,7 @@ class AutoInputHelper(
             self._warning_state[key] = now
 
     @staticmethod
-    def _empty_snapshot(captured_at=None):
+    def _empty_snapshot(captured_at: float | None = None) -> dict[str, float | int | None]:
         """Return an empty helper snapshot payload."""
         return {
             "snapshot_version": AutoInputHelper.SNAPSHOT_SCHEMA_VERSION,
@@ -218,7 +214,7 @@ class AutoInputHelper(
             "grid_power": None,
         }
 
-    def _write_snapshot(self, payload):
+    def _write_snapshot(self, payload: dict[str, object]) -> None:
         """Persist the helper snapshot atomically in RAM."""
         normalized_payload = dict(payload)
         normalized_payload.setdefault("snapshot_version", self.SNAPSHOT_SCHEMA_VERSION)
@@ -228,7 +224,7 @@ class AutoInputHelper(
         write_text_atomically(self.snapshot_path, serialized)
         self._last_payload = serialized
 
-    def run(self):
+    def run(self) -> None:
         """Main helper loop using DBus subscriptions plus a small RAM heartbeat."""
         if dbus_glib_mainloop is None:
             raise RuntimeError("dbus.mainloop.glib is required for the auto input helper")
@@ -260,11 +256,12 @@ class AutoInputHelper(
         GLib.timeout_add(max(5000, int(self.validation_poll_seconds * 1000)), self._validation_poll)
         GLib.timeout_add(max(1000, int(self.subscription_refresh_seconds * 1000)), self._refresh_subscriptions_timer)
         GLib.timeout_add(1000, self._parent_watchdog)
+        assert self._main_loop is not None
         self._main_loop.run()
         logging.info("Auto input helper stopping pid=%s", os.getpid())
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
     argv = list(sys.argv[1:] if argv is None else argv)
     config_path = argv[0] if argv else os.path.join(

@@ -7,12 +7,13 @@ from collections.abc import Callable
 from typing import Any
 
 from dbus_shelly_wallbox_auto_logic import AutoDecisionWorkflowMixin
+from dbus_shelly_wallbox_auto_logic_types import NO_RELAY_DECISION
 
 
 class AutoDecisionController(AutoDecisionWorkflowMixin):
     """Thin public facade for the internal Auto-mode decision workflow."""
 
-    _NO_DECISION = object()
+    _NO_DECISION = NO_RELAY_DECISION
 
     def __init__(
         self,

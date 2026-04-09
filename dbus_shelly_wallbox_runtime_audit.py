@@ -11,12 +11,8 @@ from __future__ import annotations
 from collections.abc import Callable
 import logging
 import os
-import threading
 import time
-from typing import Any
-
-import dbus
-import requests
+from typing import Any, cast
 
 from dbus_shelly_wallbox_common import _fresh_confirmed_relay_output
 from dbus_shelly_wallbox_contracts import (
@@ -35,10 +31,19 @@ DefaultFactory = Callable[[], Any]
 
 
 class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
+    @staticmethod
+    def _callable_time_or_none(time_func: Any) -> float | None:
+        """Return one numeric current time when a service helper provides it."""
+        if not callable(time_func):
+            return None
+        raw_value = time_func()
+        if not isinstance(raw_value, (int, float)):
+            return None
+        return float(raw_value)
+
     def _normalized_worker_snapshot(self, snapshot: WorkerSnapshot) -> WorkerSnapshot:
         """Return one worker snapshot normalized to the internal PM invariants."""
-        time_now = getattr(self.service, "_time_now", None)
-        current = float(time_now()) if callable(time_now) else None
+        current = self._callable_time_or_none(getattr(self.service, "_time_now", None))
         return normalized_worker_snapshot(snapshot, now=current)
 
     def ensure_worker_state(self) -> None:
@@ -67,7 +72,7 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
         svc = self.service
         svc._ensure_worker_state()
         with svc._worker_snapshot_lock:
-            return self.clone_worker_snapshot(svc._worker_snapshot)
+            return cast(WorkerSnapshot, self.clone_worker_snapshot(svc._worker_snapshot))
 
     def ensure_observability_state(self) -> None:
         """Initialize observability state for tests or partially constructed instances."""
@@ -76,8 +81,7 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
     @staticmethod
     def _relay_state_for_audit(svc: Any) -> int:
         """Return the best-known relay state for audit output."""
-        time_now = getattr(svc, "_time_now", None)
-        current_time = float(time_now()) if callable(time_now) else None
+        current_time = _RuntimeSupportAuditMixin._callable_time_or_none(getattr(svc, "_time_now", None))
         relay_on = _fresh_confirmed_relay_output(svc, current_time)
         return int(bool(relay_on))
 

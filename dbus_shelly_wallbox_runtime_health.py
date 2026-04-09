@@ -8,52 +8,52 @@ auto-audit logging, and safe persistence of runtime-only state.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import logging
-import os
-import threading
 import time
 from typing import Any
-
-import dbus
-import requests
-
-from dbus_shelly_wallbox_shared import write_text_atomically
 from dbus_shelly_wallbox_split_mixins import _ComposableControllerMixin
-
-WorkerSnapshot = dict[str, Any]
-ErrorState = dict[str, int]
-FailureState = dict[str, bool]
-DefaultFactory = Callable[[], Any]
 
 
 
 class _RuntimeSupportHealthMixin(_ComposableControllerMixin):
+    @staticmethod
+    def _float_attr(value: Any, default: float = 0.0) -> float:
+        """Return one runtime attribute as float with a safe fallback."""
+        return float(value) if isinstance(value, (int, float)) else float(default)
+
     def is_update_stale(self, now: float | None = None) -> bool:
         """Return True when no successful full update was completed recently."""
         svc = self.service
         svc._ensure_observability_state()
         current = time.time() if now is None else float(now)
-        if svc.auto_watchdog_stale_seconds <= 0:
+        stale_seconds = self._float_attr(getattr(svc, "auto_watchdog_stale_seconds", 0.0))
+        if stale_seconds <= 0:
             return False
-        if svc._last_successful_update_at is None:
-            return (current - svc.started_at) > svc.auto_watchdog_stale_seconds
-        return (current - svc._last_successful_update_at) > svc.auto_watchdog_stale_seconds
+        last_successful_update_at = getattr(svc, "_last_successful_update_at", None)
+        if not isinstance(last_successful_update_at, (int, float)):
+            return (current - self._float_attr(getattr(svc, "started_at", 0.0))) > stale_seconds
+        return (current - float(last_successful_update_at)) > stale_seconds
 
     @staticmethod
     def _watchdog_base_timestamp(svc: Any) -> float:
         """Return the timestamp used as the stale-age origin."""
-        return svc._last_successful_update_at if svc._last_successful_update_at is not None else svc.started_at
+        last_successful_update_at = getattr(svc, "_last_successful_update_at", None)
+        if isinstance(last_successful_update_at, (int, float)):
+            return float(last_successful_update_at)
+        return _RuntimeSupportHealthMixin._float_attr(getattr(svc, "started_at", 0.0))
 
     @staticmethod
     def _watchdog_recovery_suppressed(svc: Any, now: float) -> bool:
         """Return whether watchdog recovery is currently rate-limited."""
-        if svc.auto_watchdog_recovery_seconds <= 0 and svc._last_recovery_attempt_at is not None:
-            return True
-        return (
-            svc._last_recovery_attempt_at is not None
-            and (now - svc._last_recovery_attempt_at) < svc.auto_watchdog_recovery_seconds
+        recovery_seconds = _RuntimeSupportHealthMixin._float_attr(
+            getattr(svc, "auto_watchdog_recovery_seconds", 0.0)
         )
+        last_recovery_attempt_at = getattr(svc, "_last_recovery_attempt_at", None)
+        if recovery_seconds <= 0 and isinstance(last_recovery_attempt_at, (int, float)):
+            return True
+        return isinstance(last_recovery_attempt_at, (int, float)) and (
+            now - float(last_recovery_attempt_at)
+        ) < recovery_seconds
 
     @staticmethod
     def _perform_watchdog_reset(svc: Any) -> None:

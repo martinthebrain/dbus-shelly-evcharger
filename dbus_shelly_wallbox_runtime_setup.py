@@ -8,23 +8,15 @@ auto-audit logging, and safe persistence of runtime-only state.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-import logging
-import os
 import threading
 import time
 from typing import Any
 
 import dbus
 import requests
-
-from dbus_shelly_wallbox_shared import write_text_atomically
 from dbus_shelly_wallbox_split_mixins import _ComposableControllerMixin
 
 WorkerSnapshot = dict[str, Any]
-ErrorState = dict[str, int]
-FailureState = dict[str, bool]
-DefaultFactory = Callable[[], Any]
 
 
 

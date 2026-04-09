@@ -16,7 +16,6 @@ from dbus_shelly_wallbox_update_cycle_learning_support import _UpdateCycleLearni
 class _UpdateCycleLearningMixin(_UpdateCycleLearningSupportMixin):
     def refresh_learned_charge_power_state(self, now: float) -> bool:
         """Refresh the coarse learned-power state outside active learning samples."""
-        svc = self.service
         learned_power = self._stored_positive_learned_charge_power()
         if learned_power is None:
             return self._clear_learning_tracking()
@@ -130,15 +129,18 @@ class _UpdateCycleLearningMixin(_UpdateCycleLearningSupportMixin):
 
     def _stored_learning_state(self) -> str:
         """Return the normalized stored learned-power state."""
-        return self._normalize_learned_charge_power_state(
-            getattr(self.service, "learned_charge_power_state", "unknown")
+        return str(
+            self._normalize_learned_charge_power_state(
+                getattr(self.service, "learned_charge_power_state", "unknown")
+            )
         )
 
     def _stored_learning_phase_signature(self) -> str | None:
         """Return the normalized stored phase signature."""
-        return self._normalize_learned_charge_power_phase(
+        normalized = self._normalize_learned_charge_power_phase(
             getattr(self.service, "learned_charge_power_phase", None)
         )
+        return None if normalized is None else str(normalized)
 
     def _learning_signature_context(self) -> tuple[float | None, int, float | None]:
         """Return stored learning signature metadata."""
@@ -161,7 +163,8 @@ class _UpdateCycleLearningMixin(_UpdateCycleLearningSupportMixin):
         """Mark stored learning as stale while preserving its signatures."""
         svc = self.service
         voltage_signature, signature_mismatch_sessions, checked_session_started_at = self._learning_signature_context()
-        return self._set_learning_tracking(
+        return bool(
+            self._set_learning_tracking(
             svc,
             state="stale",
             learned_power=learned_power,
@@ -172,6 +175,7 @@ class _UpdateCycleLearningMixin(_UpdateCycleLearningSupportMixin):
             voltage_signature=voltage_signature,
             signature_mismatch_sessions=signature_mismatch_sessions,
             checked_session_started_at=checked_session_started_at,
+            )
         )
 
     def _should_restore_stable_learning(self, current_state: str) -> bool:
@@ -205,7 +209,8 @@ class _UpdateCycleLearningMixin(_UpdateCycleLearningSupportMixin):
         """Keep the current learned-power tracking state unchanged."""
         svc = self.service
         voltage_signature, signature_mismatch_sessions, checked_session_started_at = self._learning_signature_context()
-        return self._set_learning_tracking(
+        return bool(
+            self._set_learning_tracking(
             svc,
             state=current_state,
             learned_power=learned_power,
@@ -216,4 +221,5 @@ class _UpdateCycleLearningMixin(_UpdateCycleLearningSupportMixin):
             voltage_signature=voltage_signature,
             signature_mismatch_sessions=signature_mismatch_sessions,
             checked_session_started_at=checked_session_started_at,
+            )
         )

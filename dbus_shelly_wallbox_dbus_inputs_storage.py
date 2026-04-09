@@ -5,18 +5,13 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import cast
 
-import dbus
 from dbus_shelly_wallbox_shared import (
-    coerce_dbus_numeric,
     configured_grid_paths,
     discovery_cache_valid,
     first_matching_prefixed_service,
     grid_values_complete_enough,
-    prefixed_service_names,
-    should_assume_zero_pv,
-    sum_dbus_numeric,
 )
 from dbus_shelly_wallbox_split_mixins import _ComposableControllerMixin
 
@@ -36,7 +31,8 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
         if not svc.auto_battery_service:
             return None
         if self._battery_service_has_soc(svc.auto_battery_service):
-            return svc.auto_battery_service
+            battery_service: str = svc.auto_battery_service
+            return battery_service
         logging.debug(
             "Auto battery service override %s missing SOC, falling back to prefix scan.",
             svc.auto_battery_service,
@@ -52,7 +48,7 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
             svc.auto_battery_scan_interval_seconds,
             now,
         ):
-            return svc._resolved_auto_battery_service
+            return cast(str | None, svc._resolved_auto_battery_service)
         return None
 
     def _scan_auto_battery_service(self, now: float) -> str:
@@ -67,7 +63,8 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
             svc._resolved_auto_battery_service = service_name
             svc._auto_battery_last_scan = now
             logging.debug("Auto battery service resolved: %s", svc._resolved_auto_battery_service)
-            return svc._resolved_auto_battery_service
+            resolved_service: str = svc._resolved_auto_battery_service
+            return resolved_service
         raise ValueError(f"No DBus service found with prefix '{svc.auto_battery_service_prefix}'")
 
     def resolve_auto_battery_service(self) -> str:
@@ -101,7 +98,7 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
             self._mark_source_recovery("battery", "Battery SOC readings recovered")
             return float(value)
         except Exception as error:  # pylint: disable=broad-except
-            return self._handle_source_failure(
+            return cast(float | None, self._handle_source_failure(
                 "battery",
                 now,
                 "battery-missing",
@@ -110,11 +107,10 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
                 svc.auto_battery_service or svc.auto_battery_service_prefix,
                 svc.auto_battery_soc_path,
                 error,
-            )
+            ))
 
     def get_grid_power(self) -> float | None:
         """Read and sum grid power from per-phase paths."""
-        svc = self.service
         now = time.time()
         if not self._source_retry_ready("grid", now):
             return None
@@ -127,7 +123,8 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
     def _configured_grid_paths(self) -> list[str]:
         """Return the configured per-phase grid DBus paths."""
         svc = self.service
-        return configured_grid_paths(svc.auto_grid_l1_path, svc.auto_grid_l2_path, svc.auto_grid_l3_path)
+        grid_paths = configured_grid_paths(svc.auto_grid_l1_path, svc.auto_grid_l2_path, svc.auto_grid_l3_path)
+        return grid_paths
 
     def _read_grid_phase_values(self, configured_paths: list[str]) -> tuple[float, bool, list[str]]:
         """Read all configured grid phase paths and track missing values."""
@@ -155,11 +152,12 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
 
     def _grid_values_complete_enough(self, seen_value: bool, missing_paths: list[str]) -> bool:
         """Return whether the available grid phase values are sufficient for control."""
-        return grid_values_complete_enough(
+        complete_enough = grid_values_complete_enough(
             seen_value,
             missing_paths,
             self.service.auto_grid_require_all_phases,
         )
+        return complete_enough
 
     def _handle_missing_grid_values(self, seen_value: bool, missing_paths: list[str], now: float) -> float | None:
         """Handle incomplete or unreadable grid data."""
@@ -170,14 +168,14 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
                 svc.auto_grid_service,
                 ", ".join(missing_paths),
             )
-        return self._handle_source_failure(
+        return cast(float | None, self._handle_source_failure(
             "grid",
             now,
             "grid-missing",
             svc.auto_pv_scan_interval_seconds,
             "Auto mode could not read grid power from %s.",
             svc.auto_grid_service,
-        )
+        ))
 
     def _finalize_grid_power(
         self,

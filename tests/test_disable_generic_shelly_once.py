@@ -20,6 +20,7 @@ class TestDisableGenericShellyOnce(unittest.TestCase):
 
     def test_matches_device_uses_mac_without_ip(self):
         self.assertTrue(matches_device("98A316712F3C", "192.168.178.77", "98A316712F3C", "", "98A316712F3C"))
+        self.assertTrue(matches_device("98A316712F3C", "192.168.178.77", "98:A3:16:71:2F:3C", "", "98-A3-16-71-2F-3C"))
         self.assertFalse(matches_device("OTHER", "192.168.178.76", "OTHER", "", "98A316712F3C"))
         self.assertFalse(matches_device("OTHER", "192.168.178.76", "OTHER", "", ""))
 
@@ -56,7 +57,7 @@ class TestDisableGenericShellyOnce(unittest.TestCase):
                 "GenericShellyAllowPersistentDisable=yes\n"
                 "GenericShellyService= com.example.shelly \n"
                 "GenericShellyDisableIp=\n"
-                "GenericShellyDisableMac=aa:bb:cc:dd:ee:ff\n"
+                "GenericShellyDisableMac=aa-bb cc:dd:ee:ff\n"
                 "GenericShellyDisableChannel=0\n"
                 "GenericShellyDisableDelaySeconds=-5\n"
             )
@@ -70,6 +71,32 @@ class TestDisableGenericShellyOnce(unittest.TestCase):
         self.assertEqual(settings["target_mac"], "AABBCCDDEEFF")
         self.assertEqual(settings["channel"], 1)
         self.assertEqual(settings["delay_seconds"], 0.0)
+
+    def test_load_settings_uses_default_service_when_override_is_blank(self):
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini") as handle:
+            handle.write(
+                "[DEFAULT]\n"
+                "Host=192.168.178.76\n"
+                "GenericShellyService=   \n"
+            )
+            handle.flush()
+            settings = load_settings(handle.name)
+
+        self.assertEqual(settings["service"], "com.victronenergy.shelly")
+
+    def test_load_settings_falls_back_for_invalid_numeric_values(self):
+        with tempfile.NamedTemporaryFile("w+", suffix=".ini") as handle:
+            handle.write(
+                "[DEFAULT]\n"
+                "Host=192.168.178.76\n"
+                "GenericShellyDisableChannel=abc\n"
+                "GenericShellyDisableDelaySeconds=never\n"
+            )
+            handle.flush()
+            settings = load_settings(handle.name)
+
+        self.assertEqual(settings["channel"], 1)
+        self.assertEqual(settings["delay_seconds"], 180.0)
 
     def test_get_system_bus_prefers_session_bus_when_available(self):
         with patch.dict(os.environ, {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/test-bus"}, clear=True):

@@ -17,7 +17,15 @@ from tests.wallbox_test_fixtures import make_runtime_state_service, make_state_v
 
 
 class TestServiceStateController(unittest.TestCase):
-    def test_config_path_and_coercion_helpers_and_state_summary(self):
+    @staticmethod
+    def _normalize_mode(value: object) -> int:
+        if isinstance(value, bool):
+            return 0
+        if isinstance(value, (int, float, str)):
+            return int(value)
+        return 0
+
+    def test_config_path_and_coercion_helpers_and_state_summary(self) -> None:
         service = SimpleNamespace(
             virtual_mode=1,
             virtual_enable=0,
@@ -28,7 +36,7 @@ class TestServiceStateController(unittest.TestCase):
             _last_auto_state="waiting",
             _last_health_reason="running",
         )
-        controller = ServiceStateController(service, int)
+        controller = ServiceStateController(service, self._normalize_mode)
 
         self.assertTrue(controller.config_path().endswith("config.shelly_wallbox.ini"))
         self.assertEqual(controller.coerce_runtime_int("7"), 7)
@@ -47,22 +55,26 @@ class TestServiceStateController(unittest.TestCase):
         self.assertIn("auto_state=waiting", controller.state_summary())
         self.assertIn("health=running", controller.state_summary())
 
-    def test_load_runtime_state_missing_file_and_load_config_success(self):
+    def test_load_runtime_state_missing_file_and_load_config_success(self) -> None:
         service = SimpleNamespace(runtime_state_path="/tmp/does-not-exist.json")
-        controller = ServiceStateController(service, int)
+        controller = ServiceStateController(service, self._normalize_mode)
         controller.load_runtime_state()
 
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
             handle.write("[DEFAULT]\nHost=192.168.1.20\n")
             config_path = handle.name
-        self.addCleanup(lambda: os.path.exists(config_path) and os.unlink(config_path))
+        def _cleanup_config() -> None:
+            if os.path.exists(config_path):
+                os.unlink(config_path)
+
+        self.addCleanup(_cleanup_config)
 
         with patch.object(ServiceStateController, "config_path", return_value=config_path):
             config = controller.load_config()
 
         self.assertEqual(config["DEFAULT"]["Host"], "192.168.1.20")
 
-    def test_validate_runtime_config_clamps_invalid_values(self):
+    def test_validate_runtime_config_clamps_invalid_values(self) -> None:
         service = make_state_validation_service(
             poll_interval_ms=0,
             sign_of_life_minutes=0,
@@ -108,7 +120,7 @@ class TestServiceStateController(unittest.TestCase):
             auto_stop_surplus_watts=2400,
         )
 
-        controller = ServiceStateController(service, int)
+        controller = ServiceStateController(service, self._normalize_mode)
         controller.validate_runtime_config()
 
         self.assertEqual(service.poll_interval_ms, 100)
@@ -133,7 +145,7 @@ class TestServiceStateController(unittest.TestCase):
         self.assertEqual(service.auto_resume_soc, 100.0)
         self.assertEqual(service.auto_stop_surplus_watts, 1500)
 
-    def test_validate_runtime_config_keeps_valid_values_and_clamps_audit_settings(self):
+    def test_validate_runtime_config_keeps_valid_values_and_clamps_audit_settings(self) -> None:
         service = make_state_validation_service(
             auto_grid_recovery_start_seconds=1.0,
             auto_stop_surplus_delay_seconds=1.0,
@@ -154,7 +166,7 @@ class TestServiceStateController(unittest.TestCase):
             auto_high_soc_stop_surplus_watts=2400,
         )
 
-        controller = ServiceStateController(service, int)
+        controller = ServiceStateController(service, self._normalize_mode)
         controller.validate_runtime_config()
 
         self.assertEqual(service.auto_audit_log_max_age_hours, 168.0)
@@ -165,7 +177,7 @@ class TestServiceStateController(unittest.TestCase):
         self.assertEqual(service.auto_stop_surplus_watts, 1100)
         self.assertEqual(service.auto_high_soc_stop_surplus_watts, 1650)
 
-    def test_validate_runtime_config_clamps_structured_auto_policy_and_syncs_attrs(self):
+    def test_validate_runtime_config_clamps_structured_auto_policy_and_syncs_attrs(self) -> None:
         service = make_state_validation_service(
             auto_policy=AutoPolicy(
                 normal_profile=AutoThresholdProfile(1850.0, 2400.0),
@@ -197,7 +209,7 @@ class TestServiceStateController(unittest.TestCase):
             ),
         )
 
-        controller = ServiceStateController(service, int)
+        controller = ServiceStateController(service, self._normalize_mode)
         controller.validate_runtime_config()
 
         self.assertEqual(service.auto_policy.normal_profile.stop_surplus_watts, 1850.0)
@@ -225,7 +237,7 @@ class TestServiceStateController(unittest.TestCase):
         self.assertEqual(service.auto_learn_charge_power_window_seconds, 0.0)
         self.assertEqual(service.auto_learn_charge_power_max_age_seconds, 0.0)
 
-    def test_validate_runtime_config_legacy_auto_thresholds_clamp_release_and_volatility_order(self):
+    def test_validate_runtime_config_legacy_auto_thresholds_clamp_release_and_volatility_order(self) -> None:
         service = make_state_validation_service(
             auto_min_soc=35.0,
             auto_resume_soc=40.0,
@@ -239,13 +251,13 @@ class TestServiceStateController(unittest.TestCase):
             auto_stop_surplus_volatility_high_watts=100.0,
         )
 
-        controller = ServiceStateController(service, int)
+        controller = ServiceStateController(service, self._normalize_mode)
         controller.validate_runtime_config()
 
         self.assertEqual(service.auto_high_soc_release_threshold, 55.0)
         self.assertEqual(service.auto_stop_surplus_volatility_high_watts, 200.0)
 
-    def test_runtime_state_roundtrip_restores_ram_values(self):
+    def test_runtime_state_roundtrip_restores_ram_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/state.json"
             service = SimpleNamespace(
@@ -271,7 +283,7 @@ class TestServiceStateController(unittest.TestCase):
                 _runtime_state_serialized=None,
                 _last_health_reason="init",
             )
-            controller = ServiceStateController(service, lambda value: int(value))
+            controller = ServiceStateController(service, self._normalize_mode)
 
             controller.save_runtime_state()
 
@@ -331,7 +343,7 @@ class TestServiceStateController(unittest.TestCase):
             self.assertEqual(service.relay_last_changed_at, 111.0)
             self.assertEqual(service.relay_last_off_at, 112.0)
 
-    def test_load_runtime_state_normalizes_unknown_learned_power_state_values(self):
+    def test_load_runtime_state_normalizes_unknown_learned_power_state_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/state.json"
             with open(path, "w", encoding="utf-8") as handle:
@@ -354,7 +366,7 @@ class TestServiceStateController(unittest.TestCase):
                 )
 
             service = make_runtime_state_service(runtime_state_path=path)
-            controller = ServiceStateController(service, lambda value: int(value))
+            controller = ServiceStateController(service, self._normalize_mode)
             controller.load_runtime_state()
 
             self.assertFalse(service._ignore_min_offtime_once)
@@ -362,7 +374,7 @@ class TestServiceStateController(unittest.TestCase):
             self.assertEqual(service.learned_charge_power_sample_count, 2)
             self.assertIsNone(service.learned_charge_power_phase)
 
-    def test_load_runtime_state_discards_future_historical_timestamps(self):
+    def test_load_runtime_state_discards_future_historical_timestamps(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/state.json"
             with open(path, "w", encoding="utf-8") as handle:
@@ -386,7 +398,7 @@ class TestServiceStateController(unittest.TestCase):
 
             service = make_runtime_state_service(runtime_state_path=path)
             service._time_now = lambda: 100.0
-            controller = ServiceStateController(service, lambda value: int(value))
+            controller = ServiceStateController(service, self._normalize_mode)
             controller.load_runtime_state()
 
             self.assertEqual(service.manual_override_until, 150.0)
@@ -396,7 +408,7 @@ class TestServiceStateController(unittest.TestCase):
             self.assertIsNone(service.relay_last_changed_at)
             self.assertIsNone(service.relay_last_off_at)
 
-    def test_load_runtime_state_discards_negative_learned_power_and_voltage(self):
+    def test_load_runtime_state_discards_negative_learned_power_and_voltage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/state.json"
             with open(path, "w", encoding="utf-8") as handle:
@@ -418,7 +430,7 @@ class TestServiceStateController(unittest.TestCase):
 
             service = make_runtime_state_service(runtime_state_path=path)
             service._time_now = lambda: 100.0
-            controller = ServiceStateController(service, lambda value: int(value))
+            controller = ServiceStateController(service, self._normalize_mode)
             controller.load_runtime_state()
 
             self.assertIsNone(service.learned_charge_power_watts)
@@ -426,9 +438,9 @@ class TestServiceStateController(unittest.TestCase):
             self.assertEqual(service.learned_charge_power_sample_count, 0)
             self.assertEqual(service.learned_charge_power_signature_mismatch_sessions, 0)
 
-    def test_save_runtime_state_skips_empty_path_deduplicates_and_warns_on_failure(self):
+    def test_save_runtime_state_skips_empty_path_deduplicates_and_warns_on_failure(self) -> None:
         service = make_runtime_state_service()
-        controller = ServiceStateController(service, int)
+        controller = ServiceStateController(service, self._normalize_mode)
         controller.save_runtime_state()
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -445,13 +457,13 @@ class TestServiceStateController(unittest.TestCase):
                     controller.save_runtime_state()
                 warning_mock.assert_called_once()
 
-    def test_load_runtime_state_handles_missing_path_invalid_json_and_load_config_errors(self):
+    def test_load_runtime_state_handles_missing_path_invalid_json_and_load_config_errors(self) -> None:
         service = make_runtime_state_service(
             virtual_mode=0,
             virtual_enable=0,
             virtual_startstop=1,
         )
-        controller = ServiceStateController(service, lambda value: int(value))
+        controller = ServiceStateController(service, self._normalize_mode)
         controller.load_runtime_state()
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -465,7 +477,7 @@ class TestServiceStateController(unittest.TestCase):
 
         parser = tempfile.TemporaryDirectory()
         self.addCleanup(parser.cleanup)
-        missing_config_controller = ServiceStateController(service, int)
+        missing_config_controller = ServiceStateController(service, self._normalize_mode)
         with patch.object(ServiceStateController, "config_path", return_value=os.path.join(parser.name, "missing.ini")):
             with self.assertRaises(ValueError):
                 missing_config_controller.load_config()

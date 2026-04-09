@@ -3,13 +3,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import os
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Callable
 
 from dbus_shelly_wallbox_contracts import paired_optional_values, timestamp_not_future, valid_battery_soc
 from dbus_shelly_wallbox_shared import AUTO_INPUT_SNAPSHOT_SCHEMA_VERSION
@@ -35,11 +34,11 @@ class AutoInputSupervisor:
         }
     )
 
-    def __init__(self, service):
+    def __init__(self, service: Any) -> None:
         self.service = service
 
     @staticmethod
-    def _coerce_snapshot_timestamp(value):
+    def _coerce_snapshot_timestamp(value: Any) -> float | None:
         """Convert optional snapshot timestamps to floats."""
         if value is None:
             return None
@@ -53,7 +52,7 @@ class AutoInputSupervisor:
             return None
         return normalized
 
-    def _snapshot_mtime_ns(self, path):
+    def _snapshot_mtime_ns(self, path: str) -> int | None:
         """Return the current snapshot mtime or None when the file is absent."""
         svc = self.service
         try:
@@ -63,7 +62,7 @@ class AutoInputSupervisor:
             return None
         return getattr(stat_result, "st_mtime_ns", int(stat_result.st_mtime * 1_000_000_000))
 
-    def _load_snapshot_dict(self, path):
+    def _load_snapshot_dict(self, path: str) -> dict[str, Any] | None:
         """Load and validate the helper JSON snapshot."""
         svc = self.service
         try:
@@ -82,12 +81,12 @@ class AutoInputSupervisor:
         return self._validate_snapshot_dict(path, snapshot)
 
     @classmethod
-    def _coerce_snapshot_number(cls, value):
+    def _coerce_snapshot_number(cls, value: Any) -> float | None:
         """Convert optional snapshot numeric values to floats."""
         return cls._coerce_snapshot_timestamp(value)
 
     @classmethod
-    def _validate_snapshot_version(cls, value):
+    def _validate_snapshot_version(cls, value: Any) -> int | None:
         """Return the normalized snapshot schema version, or None when invalid."""
         if isinstance(value, bool):
             return None
@@ -97,7 +96,13 @@ class AutoInputSupervisor:
             return None
         return version
 
-    def _invalid_snapshot(self, warning_key, path, message, *args):
+    def _invalid_snapshot(
+        self,
+        warning_key: str,
+        path: str,
+        message: str,
+        *args: object,
+    ) -> dict[str, Any] | None:
         """Emit one throttled schema warning and abort snapshot ingestion."""
         svc = self.service
         svc._warning_throttled(
@@ -109,7 +114,15 @@ class AutoInputSupervisor:
         )
         return None
 
-    def _normalize_snapshot_fields(self, path, snapshot, normalized, keys, coercer, field_type):
+    def _normalize_snapshot_fields(
+        self,
+        path: str,
+        snapshot: dict[str, Any],
+        normalized: dict[str, Any],
+        keys: tuple[str, ...],
+        coercer: Callable[[Any], float | None],
+        field_type: str,
+    ) -> bool:
         """Normalize a set of snapshot fields and reject invalid values."""
         for key in keys:
             normalized_value = coercer(snapshot.get(key))
@@ -126,7 +139,11 @@ class AutoInputSupervisor:
             normalized[key] = normalized_value
         return True
 
-    def _validate_snapshot_temporal_order(self, path, normalized):
+    def _validate_snapshot_temporal_order(
+        self,
+        path: str,
+        normalized: dict[str, Any],
+    ) -> dict[str, Any] | None:
         """Validate required snapshot timestamps and their ordering."""
         if normalized["captured_at"] is None or normalized["heartbeat_at"] is None:
             return self._invalid_snapshot(
@@ -142,7 +159,11 @@ class AutoInputSupervisor:
             )
         return normalized
 
-    def _validate_source_timestamps(self, path, normalized):
+    def _validate_source_timestamps(
+        self,
+        path: str,
+        normalized: dict[str, Any],
+    ) -> dict[str, Any] | None:
         """Validate per-source timestamps against the enclosing snapshot times."""
         for key in ("pv_captured_at", "battery_captured_at", "grid_captured_at"):
             timestamp = normalized.get(key)
@@ -157,7 +178,11 @@ class AutoInputSupervisor:
                 )
         return normalized
 
-    def _validate_source_value_timestamp_pairs(self, path, normalized):
+    def _validate_source_value_timestamp_pairs(
+        self,
+        path: str,
+        normalized: dict[str, Any],
+    ) -> dict[str, Any] | None:
         """Require per-source values and their timestamps to appear together."""
         for source_key in self.SNAPSHOT_SOURCE_KEYS:
             timestamp_key = f"{source_key}_captured_at"
@@ -175,7 +200,12 @@ class AutoInputSupervisor:
             )
         return normalized
 
-    def _validate_snapshot_battery_soc(self, path, snapshot, normalized):
+    def _validate_snapshot_battery_soc(
+        self,
+        path: str,
+        snapshot: dict[str, Any],
+        normalized: dict[str, Any],
+    ) -> dict[str, Any] | None:
         """Validate runtime SOC values after numeric coercion."""
         battery_soc = normalized.get("battery_soc")
         if valid_battery_soc(battery_soc):
@@ -187,35 +217,43 @@ class AutoInputSupervisor:
             snapshot.get("battery_soc"),
         )
 
-    def _validate_snapshot_shape(self, path, snapshot):
+    def _validate_snapshot_shape(self, path: str, snapshot: Any) -> int | None:
         """Validate object shape, required keys, and schema version."""
         if not isinstance(snapshot, dict):
-            return self._invalid_snapshot(
+            self._invalid_snapshot(
                 "auto-input-helper-invalid",
                 path,
                 "Auto input helper snapshot %s is not a JSON object",
             )
+            return None
 
         missing_keys = sorted(self.SNAPSHOT_REQUIRED_KEYS.difference(snapshot))
         if missing_keys:
-            return self._invalid_snapshot(
+            self._invalid_snapshot(
                 "auto-input-helper-schema-invalid",
                 path,
                 "Auto input helper snapshot %s is missing required keys: %s",
                 ", ".join(missing_keys),
             )
+            return None
 
         version = self._validate_snapshot_version(snapshot.get("snapshot_version"))
         if version != self.SNAPSHOT_SCHEMA_VERSION:
-            return self._invalid_snapshot(
+            self._invalid_snapshot(
                 "auto-input-helper-version-invalid",
                 path,
                 "Auto input helper snapshot %s has unsupported snapshot_version=%s",
                 snapshot.get("snapshot_version"),
             )
+            return None
         return version
 
-    def _normalize_snapshot_payload(self, path, snapshot, version):
+    def _normalize_snapshot_payload(
+        self,
+        path: str,
+        snapshot: dict[str, Any],
+        version: int,
+    ) -> dict[str, Any] | None:
         """Normalize timestamp and numeric fields inside one snapshot."""
         normalized = dict(snapshot)
         normalized["snapshot_version"] = version
@@ -239,20 +277,25 @@ class AutoInputSupervisor:
             return None
         return normalized
 
-    def _validate_snapshot_semantics(self, path, snapshot, normalized):
+    def _validate_snapshot_semantics(
+        self,
+        path: str,
+        snapshot: dict[str, Any],
+        normalized: dict[str, Any],
+    ) -> dict[str, Any] | None:
         """Validate relationships between already-normalized snapshot fields."""
-        normalized = self._validate_snapshot_temporal_order(path, normalized)
-        if normalized is None:
+        normalized_temporal = self._validate_snapshot_temporal_order(path, normalized)
+        if normalized_temporal is None:
             return None
-        normalized = self._validate_source_value_timestamp_pairs(path, normalized)
-        if normalized is None:
+        normalized_pairs = self._validate_source_value_timestamp_pairs(path, normalized_temporal)
+        if normalized_pairs is None:
             return None
-        normalized = self._validate_source_timestamps(path, normalized)
-        if normalized is None:
+        normalized_timestamps = self._validate_source_timestamps(path, normalized_pairs)
+        if normalized_timestamps is None:
             return None
-        return self._validate_snapshot_battery_soc(path, snapshot, normalized)
+        return self._validate_snapshot_battery_soc(path, snapshot, normalized_timestamps)
 
-    def _validate_snapshot_dict(self, path, snapshot):
+    def _validate_snapshot_dict(self, path: str, snapshot: Any) -> dict[str, Any] | None:
         """Validate schema/version and normalize the helper JSON snapshot."""
         version = self._validate_snapshot_shape(path, snapshot)
         if version is None:
@@ -262,7 +305,11 @@ class AutoInputSupervisor:
             return None
         return self._validate_snapshot_semantics(path, snapshot, normalized)
 
-    def _snapshot_freshness(self, snapshot, current):
+    def _snapshot_freshness(
+        self,
+        snapshot: dict[str, Any],
+        current: float,
+    ) -> tuple[float | None, float | None, bool]:
         """Extract normalized snapshot timestamps and stale state."""
         svc = self.service
         captured_at = self._coerce_snapshot_timestamp(snapshot.get("captured_at"))
@@ -273,7 +320,7 @@ class AutoInputSupervisor:
         return captured_at, freshness_timestamp, stale
 
     @classmethod
-    def _empty_snapshot_fields(cls):
+    def _empty_snapshot_fields(cls) -> dict[str, Any]:
         """Return the per-source snapshot fields cleared for stale snapshots."""
         fields: dict[str, Any] = {}
         for source_key in cls.SNAPSHOT_SOURCE_KEYS:
@@ -283,7 +330,7 @@ class AutoInputSupervisor:
         return fields
 
     @classmethod
-    def _snapshot_value_fields(cls, snapshot):
+    def _snapshot_value_fields(cls, snapshot: dict[str, Any]) -> dict[str, Any]:
         """Return live per-source fields copied from the helper snapshot."""
         fields: dict[str, Any] = {}
         for source_key in cls.SNAPSHOT_SOURCE_KEYS:
@@ -293,14 +340,20 @@ class AutoInputSupervisor:
         return fields
 
     @classmethod
-    def _normalize_source_timestamps(cls, fields):
+    def _normalize_source_timestamps(cls, fields: dict[str, Any]) -> dict[str, Any]:
         """Normalize optional per-source timestamps to float-or-None."""
         for source_key in cls.SNAPSHOT_SOURCE_KEYS:
             timestamp_key = f"{source_key}_captured_at"
             fields[timestamp_key] = cls._coerce_snapshot_timestamp(fields[timestamp_key])
         return fields
 
-    def _build_snapshot_fields(self, snapshot, current, captured_at, stale):
+    def _build_snapshot_fields(
+        self,
+        snapshot: dict[str, Any],
+        current: float,
+        captured_at: float | None,
+        stale: bool,
+    ) -> dict[str, Any]:
         """Build the worker snapshot payload applied to the main service."""
         svc = self.service
         fields = {
@@ -311,7 +364,13 @@ class AutoInputSupervisor:
         fields.update(self._normalize_source_timestamps(source_fields))
         return fields
 
-    def _apply_snapshot(self, mtime_ns, freshness_timestamp, current, fields):
+    def _apply_snapshot(
+        self,
+        mtime_ns: int | None,
+        freshness_timestamp: float | None,
+        current: float,
+        fields: dict[str, Any],
+    ) -> None:
         """Update service-side snapshot bookkeeping and publish fresh fields."""
         svc = self.service
         svc._auto_input_snapshot_mtime_ns = mtime_ns
@@ -320,7 +379,7 @@ class AutoInputSupervisor:
         svc._auto_input_snapshot_version = fields.get("snapshot_version")
         svc._update_worker_snapshot(**fields)
 
-    def stop_helper(self, force=False):
+    def stop_helper(self, force: bool = False) -> None:
         """Ask the helper process to stop, or kill it if it is already hung."""
         svc = self.service
         svc._ensure_worker_state()
@@ -339,7 +398,7 @@ class AutoInputSupervisor:
         except Exception as error:  # pylint: disable=broad-except
             logging.debug("Unable to stop auto input helper pid=%s: %s", getattr(process, "pid", "na"), error)
 
-    def spawn_helper(self, now=None):
+    def spawn_helper(self, now: float | None = None) -> None:
         """Start the separate helper process that reads PV/grid/battery from DBus."""
         svc = self.service
         svc._ensure_worker_state()
@@ -362,7 +421,7 @@ class AutoInputSupervisor:
             svc.auto_input_snapshot_path,
         )
 
-    def _helper_snapshot_age(self, current):
+    def _helper_snapshot_age(self, current: float) -> float | None:
         """Return helper freshness age based on the last seen snapshot or startup time."""
         svc = self.service
         if svc._auto_input_snapshot_last_seen is not None:
@@ -371,7 +430,7 @@ class AutoInputSupervisor:
             return current - float(svc._auto_input_helper_last_start_at)
         return None
 
-    def _handle_stale_running_helper(self, process, current, snapshot_age):
+    def _handle_stale_running_helper(self, process: Any, current: float, snapshot_age: float | None) -> bool:
         """Schedule graceful or forced restarts for stale helper processes."""
         svc = self.service
         if snapshot_age is None or snapshot_age <= svc.auto_input_helper_stale_seconds:
@@ -389,7 +448,7 @@ class AutoInputSupervisor:
             svc._stop_auto_input_helper(force=True)
         return True
 
-    def _handle_existing_helper_process(self, process, current):
+    def _handle_existing_helper_process(self, process: Any, current: float) -> bool:
         """Handle the running or exited helper process and report whether we are done."""
         svc = self.service
         return_code = process.poll()
@@ -408,15 +467,21 @@ class AutoInputSupervisor:
         svc._auto_input_helper_restart_requested_at = None
         return False
 
-    def _helper_restart_cooldown_active(self, current):
+    def _helper_restart_cooldown_active(self, current: float) -> bool:
         """Return whether helper restart backoff is still active."""
         svc = self.service
-        return (
+        return bool(
             svc._auto_input_helper_last_start_at > 0
             and (current - svc._auto_input_helper_last_start_at) < svc.auto_input_helper_restart_seconds
         )
 
-    def _snapshot_timestamps_valid(self, path, captured_at, freshness_timestamp, current):
+    def _snapshot_timestamps_valid(
+        self,
+        path: str,
+        captured_at: float | None,
+        freshness_timestamp: float | None,
+        current: float,
+    ) -> bool:
         """Return whether the new snapshot timestamps can replace the last accepted one."""
         return self._snapshot_captured_at_monotonic(path, captured_at) and self._snapshot_freshness_not_future(
             path,
@@ -424,7 +489,7 @@ class AutoInputSupervisor:
             current,
         )
 
-    def _snapshot_captured_at_monotonic(self, path, captured_at):
+    def _snapshot_captured_at_monotonic(self, path: str, captured_at: float | None) -> bool:
         """Return whether captured_at still moves monotonically forward."""
         svc = self.service
         last_captured_at = getattr(svc, "_auto_input_snapshot_last_captured_at", None)
@@ -440,7 +505,12 @@ class AutoInputSupervisor:
         )
         return False
 
-    def _snapshot_freshness_not_future(self, path, freshness_timestamp, current):
+    def _snapshot_freshness_not_future(
+        self,
+        path: str,
+        freshness_timestamp: float | None,
+        current: float,
+    ) -> bool:
         """Return whether the freshness timestamp still looks plausible."""
         if freshness_timestamp is None:
             return True
@@ -458,11 +528,15 @@ class AutoInputSupervisor:
         return False
 
     @staticmethod
-    def _snapshot_path_changed(path, mtime_ns, previous_mtime_ns):
+    def _snapshot_path_changed(path: str, mtime_ns: int | None, previous_mtime_ns: int | None) -> bool:
         """Return whether one helper snapshot path has changed on disk."""
         return bool(path) and mtime_ns is not None and previous_mtime_ns != mtime_ns
 
-    def _refresh_snapshot_payload(self, path, current):
+    def _refresh_snapshot_payload(
+        self,
+        path: str,
+        current: float,
+    ) -> tuple[int | None, float | None, dict[str, Any]] | None:
         """Load, validate, and normalize one changed helper snapshot."""
         svc = self.service
         mtime_ns = self._snapshot_mtime_ns(path)
@@ -478,7 +552,7 @@ class AutoInputSupervisor:
         fields["snapshot_version"] = snapshot["snapshot_version"]
         return mtime_ns, freshness_timestamp, fields
 
-    def _spawn_helper_with_warning(self, current):
+    def _spawn_helper_with_warning(self, current: float) -> None:
         """Start the helper and convert spawn failures into throttled warnings."""
         svc = self.service
         try:
@@ -492,7 +566,7 @@ class AutoInputSupervisor:
                 exc_info=error,
             )
 
-    def ensure_helper_process(self, now=None):
+    def ensure_helper_process(self, now: float | None = None) -> None:
         """Keep the external Auto input helper process running and restart it if stale."""
         svc = self.service
         svc._ensure_worker_state()
@@ -504,7 +578,7 @@ class AutoInputSupervisor:
             return
         self._spawn_helper_with_warning(current)
 
-    def refresh_snapshot(self, now=None):
+    def refresh_snapshot(self, now: float | None = None) -> None:
         """Load the latest Auto input snapshot from the helper's RAM-backed JSON file."""
         svc = self.service
         svc._ensure_worker_state()

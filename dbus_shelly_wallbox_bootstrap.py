@@ -17,23 +17,12 @@ import configparser
 import faulthandler
 import logging
 import os
-import platform
 import signal
 import time
-from collections import deque
 from collections.abc import Callable
+from types import FrameType
 from typing import Any
 
-from dbus_shelly_wallbox_auto_controller import AutoDecisionController
-from dbus_shelly_wallbox_auto_policy import load_auto_policy_from_config
-from dbus_shelly_wallbox_auto_input_supervisor import AutoInputSupervisor
-from dbus_shelly_wallbox_ports import AutoDecisionPort, UpdateCyclePort, WriteControllerPort
-from dbus_shelly_wallbox_publisher import DbusPublishController
-from dbus_shelly_wallbox_runtime_support import RuntimeSupportController
-from dbus_shelly_wallbox_shelly_io import ShellyIoController
-from dbus_shelly_wallbox_state import ServiceStateController
-from dbus_shelly_wallbox_update_cycle import UpdateCycleController
-from dbus_shelly_wallbox_write_controller import DbusWriteController
 from vedbus import VeDbusService
 
 
@@ -90,7 +79,7 @@ def _enable_fault_diagnostics() -> None:
 def _install_signal_logging(quit_callback: Callable[[], None] | None = None) -> None:
     """Install signal handlers that log and request a clean GLib-loop shutdown."""
 
-    def _log_signal(signum, _frame):
+    def _log_signal(signum: int, _frame: FrameType | None) -> None:
         logging.warning("Received signal %s in pid=%s", signum, os.getpid())
         if quit_callback is None:
             return
@@ -145,6 +134,8 @@ def _run_service_loop(service_class: Callable[[], Any], gobject_module: Any) -> 
 from dbus_shelly_wallbox_bootstrap_config import _ServiceBootstrapConfigMixin
 from dbus_shelly_wallbox_bootstrap_paths import _ServiceBootstrapPathMixin
 from dbus_shelly_wallbox_bootstrap_runtime import _ServiceBootstrapRuntimeMixin
+
+_TEST_PATCH_EXPORTS = (time,)
 
 
 class ServiceBootstrapController(

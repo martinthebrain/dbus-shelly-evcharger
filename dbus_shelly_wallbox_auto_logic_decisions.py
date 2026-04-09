@@ -12,20 +12,10 @@ into many small helper methods. The high-level behavior is:
 
 from __future__ import annotations
 
-from collections.abc import Callable
-import logging
-import math
-import time
-from datetime import datetime
-from typing import Any, Deque
+from typing import Any, cast
 
-from dbus_shelly_wallbox_auto_policy import AutoPolicy, validate_auto_policy
-from dbus_shelly_wallbox_common import _auto_state_code, _derive_auto_state
+from dbus_shelly_wallbox_auto_logic_types import NO_RELAY_DECISION, RelayDecisionState
 from dbus_shelly_wallbox_split_mixins import _ComposableControllerMixin
-
-AutoSample = tuple[float, float, float]
-AutoDecision = bool | object
-MonthWindow = tuple[tuple[int, int], tuple[int, int]]
 
 
 
@@ -53,7 +43,7 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
         )
 
         if stop_reason is None:
-            return self._running_result_with_health("running", cached_inputs)
+            return cast(bool, self._running_result_with_health("running", cached_inputs))
         stop_delay_seconds = svc.auto_stop_delay_seconds
         reported_reason = stop_reason
         if stop_reason == "auto-stop-surplus":
@@ -61,13 +51,16 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
             reported_reason = "auto-stop"
         elif stop_reason in ("auto-stop-grid", "auto-stop-soc"):
             reported_reason = "auto-stop"
-        return self._pending_stop_or_running(
-            now,
-            reported_reason,
-            cached_inputs,
-            "running",
-            delay_seconds=stop_delay_seconds,
-            stop_key=stop_reason,
+        return cast(
+            bool,
+            self._pending_stop_or_running(
+                now,
+                reported_reason,
+                cached_inputs,
+                "running",
+                delay_seconds=stop_delay_seconds,
+                stop_key=stop_reason,
+            ),
         )
 
     def _relay_on_stop_reason(
@@ -166,7 +159,7 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
         start_surplus_watts, _, _ = self._surplus_thresholds_for_soc(battery_soc)
         svc.auto_stop_condition_since = None
         if not svc.virtual_autostart:
-            return self._idle_result_with_health("autostart-disabled", cached_inputs)
+            return cast(bool, self._idle_result_with_health("autostart-disabled", cached_inputs))
 
         minimum_offtime_elapsed = self._minimum_offtime_elapsed(now)
         if self._relay_off_start_conditions_met(
@@ -199,35 +192,37 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
         grid_power: float | None,
         now: float,
         cached_inputs: bool,
-    ) -> tuple[AutoDecision, float | None]:
+    ) -> tuple[RelayDecisionState, float | None]:
         """Handle all early exits before rolling-average metrics are considered."""
         svc = self.service
         if not self._mode_uses_auto_logic(svc.virtual_mode):
-            return self._handle_non_auto_mode(relay_on), None
+            return RelayDecisionState.resolved(self._handle_non_auto_mode(relay_on)), None
 
         if not bool(getattr(svc, "virtual_enable", 1)):
-            return self._handle_disabled_mode(cached_inputs), None
+            return RelayDecisionState.resolved(self._handle_disabled_mode(cached_inputs)), None
 
         decision = self._handle_cutover_pending(relay_on, cached_inputs)
         if decision is not self._NO_DECISION:
-            return decision, None
+            return self._decision_state(decision), None
 
         if not self._grid_recently_read(grid_power, now):
-            return self._handle_grid_missing(relay_on, now, cached_inputs), None
+            return RelayDecisionState.resolved(self._handle_grid_missing(relay_on, now, cached_inputs)), None
 
         battery_soc, decision = self._resolve_battery_soc(battery_soc, relay_on, now, cached_inputs)
         if decision is not self._NO_DECISION:
-            return decision, None
+            return self._decision_state(decision), None
 
         decision = self._handle_grid_recovery_start_gate(relay_on, now, cached_inputs)
         if decision is not self._NO_DECISION:
-            return decision, None
+            return self._decision_state(decision), None
 
         if pv_power is None or grid_power is None:
             assert battery_soc is not None
-            return self._handle_missing_inputs(relay_on, battery_soc, grid_power, now, cached_inputs), None
+            return RelayDecisionState.resolved(
+                self._handle_missing_inputs(relay_on, battery_soc, grid_power, now, cached_inputs)
+            ), None
 
-        return self._NO_DECISION, battery_soc
+        return NO_RELAY_DECISION, battery_soc
 
     def _post_average_decision(
         self,
@@ -237,19 +232,25 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
         battery_soc: float,
         now: float,
         cached_inputs: bool,
-    ) -> tuple[AutoDecision, bool | None]:
+    ) -> tuple[RelayDecisionState, bool | None]:
         """Handle warmup/manual override gates after averages are available."""
         decision = self._handle_common_runtime_gates(relay_on, now, cached_inputs)
         if decision is not self._NO_DECISION:
-            return decision, None
-        return self._NO_DECISION, self.service._is_within_auto_daytime_window()
+            return self._decision_state(decision), None
+        return NO_RELAY_DECISION, self.service._is_within_auto_daytime_window()
 
-    def _resolved_auto_decision(self, decision: AutoDecision) -> bool | None:
-        """Return a concrete relay decision or ``None`` when evaluation must continue."""
+    def _decision_state(self, decision: bool | object) -> RelayDecisionState:
+        """Return one explicit workflow decision state from a legacy sentinel value."""
         if decision is self._NO_DECISION:
-            return None
+            return NO_RELAY_DECISION
         assert isinstance(decision, bool)
-        return decision
+        return RelayDecisionState.resolved(decision)
+
+    def _resolved_auto_decision(self, decision: RelayDecisionState) -> bool | None:
+        """Return a concrete relay decision or ``None`` when evaluation must continue."""
+        if decision.is_pending:
+            return None
+        return decision.resolved_value()
 
     def _averaged_auto_metrics(
         self,

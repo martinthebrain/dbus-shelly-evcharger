@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Compatibility facade for the wallbox service mixin modules."""
 
+from __future__ import annotations
+
 from dbus_shelly_wallbox_service_auto import DbusAutoLogicMixin
 from dbus_shelly_wallbox_service_factory import ServiceControllerFactoryMixin
 from dbus_shelly_wallbox_service_runtime import RuntimeHelperMixin

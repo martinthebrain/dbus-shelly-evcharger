@@ -41,7 +41,8 @@ class _UpdateCycleLearningSupportMixin(_ComposableControllerMixin):
 
     def _clear_learning_tracking(self) -> bool:
         """Clear the learned-power state and reset tracking metadata."""
-        return self._set_learning_tracking(
+        return bool(
+            self._set_learning_tracking(
             self.service,
             state="unknown",
             learned_power=None,
@@ -52,12 +53,13 @@ class _UpdateCycleLearningSupportMixin(_ComposableControllerMixin):
             voltage_signature=None,
             signature_mismatch_sessions=0,
             checked_session_started_at=None,
+            )
         )
 
     def _stable_sample_count(self) -> int:
         """Return the persisted sample count clamped to the stable minimum."""
         current = int(getattr(self.service, "learned_charge_power_sample_count", 0))
-        return max(self.LEARNED_POWER_STABLE_MIN_SAMPLES, current)
+        return int(max(self.LEARNED_POWER_STABLE_MIN_SAMPLES, current))
 
     def _phase_change_reset(
         self,
@@ -89,7 +91,8 @@ class _UpdateCycleLearningSupportMixin(_ComposableControllerMixin):
         checked_session_started_at: float | None,
     ) -> bool:
         """Persist one stable learned-power snapshot."""
-        return self._set_learning_tracking(
+        return bool(
+            self._set_learning_tracking(
             self.service,
             state="stable",
             learned_power=learned_power,
@@ -100,6 +103,7 @@ class _UpdateCycleLearningSupportMixin(_ComposableControllerMixin):
             voltage_signature=voltage_signature,
             signature_mismatch_sessions=signature_mismatch_sessions,
             checked_session_started_at=checked_session_started_at,
+            )
         )
 
     def _eligible_signature_session_started_at(self, relay_on: bool, now: float) -> float | None:
@@ -281,7 +285,8 @@ class _UpdateCycleLearningSupportMixin(_ComposableControllerMixin):
         current_voltage_signature: float | None,
     ) -> bool:
         """Start or restart the learning window from the current sample."""
-        return self._set_learning_tracking(
+        return bool(
+            self._set_learning_tracking(
             self.service,
             state="learning",
             learned_power=measured_power,
@@ -292,6 +297,7 @@ class _UpdateCycleLearningSupportMixin(_ComposableControllerMixin):
             voltage_signature=current_voltage_signature,
             signature_mismatch_sessions=0,
             checked_session_started_at=None,
+            )
         )
 
     def _apply_learning_progress(
@@ -323,7 +329,8 @@ class _UpdateCycleLearningSupportMixin(_ComposableControllerMixin):
                 signature_mismatch_sessions=0,
                 checked_session_started_at=charging_started_at,
             )
-        return self._set_learning_tracking(
+        return bool(
+            self._set_learning_tracking(
             self.service,
             state="learning",
             learned_power=learned_power,
@@ -334,6 +341,7 @@ class _UpdateCycleLearningSupportMixin(_ComposableControllerMixin):
             voltage_signature=learned_voltage_signature,
             signature_mismatch_sessions=0,
             checked_session_started_at=None,
+            )
         )
 
     def _apply_learning_sample(

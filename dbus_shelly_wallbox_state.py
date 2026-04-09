@@ -4,9 +4,10 @@
 import configparser
 import json
 import logging
-import math
 import os
 import time
+from typing import Any, Callable
+
 from dbus_shelly_wallbox_auto_policy import validate_auto_policy
 from dbus_shelly_wallbox_contracts import (
     finite_float_or_none,
@@ -45,16 +46,16 @@ class ServiceStateController:
         "auto_audit_log_repeat_seconds",
     )
 
-    def __init__(self, service, normalize_mode_func):
+    def __init__(self, service: Any, normalize_mode_func: Callable[[object], int]) -> None:
         self.service = service
         self._normalize_mode = normalize_mode_func
 
     @staticmethod
-    def config_path():
+    def config_path() -> str:
         """Return the path to the local Shelly wallbox config file."""
         return os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.shelly_wallbox.ini")
 
-    def state_summary(self):
+    def state_summary(self) -> str:
         """Return a compact runtime state summary for debug logging."""
         svc = self.service
         return (
@@ -69,9 +70,11 @@ class ServiceStateController:
         )
 
     @staticmethod
-    def coerce_runtime_int(value, default=0):
+    def coerce_runtime_int(value: object, default: int = 0) -> int:
         """Convert persisted runtime values to int safely."""
         if isinstance(value, bool):
+            return int(default)
+        if not isinstance(value, (str, int, float)):
             return int(default)
         try:
             return int(value)
@@ -79,12 +82,12 @@ class ServiceStateController:
             return int(default)
 
     @staticmethod
-    def coerce_runtime_float(value, default=0.0):
+    def coerce_runtime_float(value: object, default: float = 0.0) -> float:
         """Convert persisted runtime values to float safely."""
         normalized = finite_float_or_none(value)
         return float(default) if normalized is None else normalized
 
-    def current_runtime_state(self):
+    def current_runtime_state(self) -> dict[str, object]:
         """Return the volatile runtime state that should survive service restarts."""
         svc = self.service
         return {
@@ -113,19 +116,19 @@ class ServiceStateController:
             "relay_last_off_at": svc.relay_last_off_at,
         }
 
-    def _serialized_runtime_state(self):
+    def _serialized_runtime_state(self) -> str:
         """Return the normalized JSON string used for RAM-only state persistence."""
         return compact_json(self.current_runtime_state())
 
     @staticmethod
-    def _coerce_optional_runtime_float(value):
+    def _coerce_optional_runtime_float(value: object) -> float | None:
         """Convert optional persisted timestamps to float-or-None."""
         if value is None:
             return None
         return ServiceStateController.coerce_runtime_float(value)
 
     @staticmethod
-    def _coerce_optional_runtime_past_time(value, now=None):
+    def _coerce_optional_runtime_past_time(value: object, now: float | None = None) -> float | None:
         """Convert one persisted historical timestamp, rejecting implausible future values."""
         normalized = ServiceStateController._coerce_optional_runtime_float(value)
         if normalized is None:
@@ -136,16 +139,16 @@ class ServiceStateController:
         return normalized
 
     @staticmethod
-    def _normalize_learned_charge_power_state(value):
+    def _normalize_learned_charge_power_state(value: object) -> str:
         """Return one supported learned-power state string."""
         return normalize_learning_state(value)
 
     @staticmethod
-    def _normalize_learned_charge_power_phase(value):
+    def _normalize_learned_charge_power_phase(value: object) -> str | None:
         """Return one supported learned-power phase signature."""
         return normalize_learning_phase(value)
 
-    def load_runtime_state(self):
+    def load_runtime_state(self) -> None:
         """Restore volatile runtime state from a RAM-backed file if present."""
         svc = self.service
         path = getattr(svc, "runtime_state_path", "").strip()
@@ -161,7 +164,8 @@ class ServiceStateController:
             return
 
         time_now = getattr(svc, "_time_now", None)
-        current_time = time_now() if callable(time_now) else time.time()
+        raw_current_time: object = time_now() if callable(time_now) else time.time()
+        current_time = self.coerce_runtime_float(raw_current_time, time.time())
         svc.virtual_mode = self._normalize_mode(state.get("mode", svc.virtual_mode))
         svc.virtual_autostart = self.coerce_runtime_int(state.get("autostart"), svc.virtual_autostart)
         svc.virtual_enable = self.coerce_runtime_int(state.get("enable"), svc.virtual_enable)
@@ -234,7 +238,7 @@ class ServiceStateController:
         svc._runtime_state_serialized = self._serialized_runtime_state()
         logging.info("Restored runtime state from %s: %s", path, self.state_summary())
 
-    def save_runtime_state(self):
+    def save_runtime_state(self) -> None:
         """Persist volatile runtime state to a RAM-backed file without touching flash."""
         svc = self.service
         path = getattr(svc, "runtime_state_path", "").strip()
@@ -253,7 +257,7 @@ class ServiceStateController:
             logging.warning("Unable to write runtime state to %s: %s", path, error)
 
     @staticmethod
-    def _clamp_min_int(svc, attr_name, minimum, label, unit):
+    def _clamp_min_int(svc: Any, attr_name: str, minimum: int, label: str, unit: str) -> None:
         """Clamp integer-like config values to a minimum."""
         value = getattr(svc, attr_name)
         if value >= minimum:
@@ -262,7 +266,7 @@ class ServiceStateController:
         setattr(svc, attr_name, minimum)
 
     @staticmethod
-    def _clamp_non_negative_float(svc, attr_name):
+    def _clamp_non_negative_float(svc: Any, attr_name: str) -> None:
         """Clamp negative floating-point runtime settings to zero."""
         if not hasattr(svc, attr_name):
             return
@@ -273,7 +277,7 @@ class ServiceStateController:
         setattr(svc, attr_name, 0.0)
 
     @staticmethod
-    def _clamp_positive_timeout(svc, attr_name, minimum, label):
+    def _clamp_positive_timeout(svc: Any, attr_name: str, minimum: float, label: str) -> None:
         """Clamp timeout-style config values to a positive default."""
         value = getattr(svc, attr_name)
         if value > 0:
@@ -282,7 +286,7 @@ class ServiceStateController:
         setattr(svc, attr_name, minimum)
 
     @staticmethod
-    def _clamp_percentage(svc, attr_name, label):
+    def _clamp_percentage(svc: Any, attr_name: str, label: str) -> None:
         """Clamp percentage settings to the inclusive 0..100 range."""
         value = getattr(svc, attr_name)
         if 0 <= value <= 100:
@@ -290,13 +294,13 @@ class ServiceStateController:
         logging.warning("%s %s outside 0..100, clamping", label, value)
         setattr(svc, attr_name, min(100.0, max(0.0, value)))
 
-    def _clamp_interval_settings(self):
+    def _clamp_interval_settings(self) -> None:
         """Clamp all non-negative timing and retry intervals."""
         svc = self.service
         for attr_name in self.NON_NEGATIVE_INTERVAL_ATTRS:
             self._clamp_non_negative_float(svc, attr_name)
 
-    def _clamp_soc_thresholds(self):
+    def _clamp_soc_thresholds(self) -> None:
         """Clamp battery SOC thresholds and keep resume >= minimum."""
         svc = self.service
         self._clamp_percentage(svc, "auto_min_soc", "AutoMinSoc")
@@ -322,7 +326,13 @@ class ServiceStateController:
         svc.auto_resume_soc = svc.auto_min_soc
 
     @staticmethod
-    def _clamp_surplus_pair(svc, start_attr, stop_attr, start_label, stop_label):
+    def _clamp_surplus_pair(
+        svc: Any,
+        start_attr: str,
+        stop_attr: str,
+        start_label: str,
+        stop_label: str,
+    ) -> None:
         """Keep one stop surplus threshold at or below its start threshold."""
         start_value = getattr(svc, start_attr)
         stop_value = getattr(svc, stop_attr)
@@ -338,7 +348,7 @@ class ServiceStateController:
         setattr(svc, stop_attr, start_value)
 
     @staticmethod
-    def _clamp_surplus_thresholds(svc):
+    def _clamp_surplus_thresholds(svc: Any) -> None:
         """Keep all configured stop surplus thresholds at or below their start threshold."""
         ServiceStateController._clamp_surplus_pair(
             svc,
@@ -357,7 +367,7 @@ class ServiceStateController:
             )
 
     @staticmethod
-    def _clamp_fraction(svc, attr_name, label, default):
+    def _clamp_fraction(svc: Any, attr_name: str, label: str, default: float) -> None:
         """Clamp fractional smoothing values into the safe 0..1 range."""
         value = getattr(svc, attr_name)
         if 0 < value <= 1:
@@ -365,7 +375,7 @@ class ServiceStateController:
         logging.warning("%s %s outside (0,1], clamping to %s", label, value, default)
         setattr(svc, attr_name, float(default))
 
-    def validate_runtime_config(self):
+    def validate_runtime_config(self) -> None:
         """Clamp invalid runtime config values to safe defaults."""
         svc = self.service
         self._clamp_min_int(svc, "poll_interval_ms", 100, "PollIntervalMs", " ms")
@@ -380,7 +390,7 @@ class ServiceStateController:
             self._validate_legacy_auto_config(svc)
 
     @staticmethod
-    def _validate_startup_retry_config(svc):
+    def _validate_startup_retry_config(svc: Any) -> None:
         """Clamp retry counters that must stay non-negative."""
         if svc.startup_device_info_retries >= 0:
             return
@@ -390,7 +400,7 @@ class ServiceStateController:
         )
         svc.startup_device_info_retries = 0
 
-    def _validate_timeout_settings(self, svc):
+    def _validate_timeout_settings(self, svc: Any) -> None:
         """Clamp request and audit timeout-style settings."""
         timeout_specs = (
             ("shelly_request_timeout_seconds", 2.0, "ShellyRequestTimeoutSeconds"),
@@ -406,7 +416,7 @@ class ServiceStateController:
             if hasattr(svc, attr_name):
                 self._clamp_positive_timeout(svc, attr_name, default, label)
 
-    def _validate_legacy_auto_config(self, svc):
+    def _validate_legacy_auto_config(self, svc: Any) -> None:
         """Clamp legacy Auto-mode attributes when no structured policy is attached yet."""
         self._clamp_legacy_non_negative_auto_values(svc)
         self._clamp_legacy_reference_power(svc)
@@ -415,7 +425,7 @@ class ServiceStateController:
         self._clamp_legacy_fractional_values(svc)
         self._clamp_legacy_volatility_band(svc)
 
-    def _clamp_legacy_non_negative_auto_values(self, svc):
+    def _clamp_legacy_non_negative_auto_values(self, svc: Any) -> None:
         """Clamp non-negative legacy Auto settings."""
         for attr_name in (
             "auto_grid_recovery_start_seconds",
@@ -431,7 +441,7 @@ class ServiceStateController:
                 self._clamp_non_negative_float(svc, attr_name)
 
     @staticmethod
-    def _clamp_legacy_reference_power(svc):
+    def _clamp_legacy_reference_power(svc: Any) -> None:
         """Clamp the legacy adaptive-learning reference power."""
         if not hasattr(svc, "auto_reference_charge_power_watts") or svc.auto_reference_charge_power_watts > 0:
             return
@@ -441,7 +451,7 @@ class ServiceStateController:
         )
         svc.auto_reference_charge_power_watts = 1900.0
 
-    def _clamp_legacy_fractional_values(self, svc):
+    def _clamp_legacy_fractional_values(self, svc: Any) -> None:
         """Clamp smoothing and learning alpha values into the safe range."""
         fraction_specs = (
             ("auto_stop_ewma_alpha", "AutoStopEwmaAlpha", 0.35),
@@ -454,7 +464,7 @@ class ServiceStateController:
                 self._clamp_fraction(svc, attr_name, label, default)
 
     @staticmethod
-    def _clamp_legacy_volatility_band(svc):
+    def _clamp_legacy_volatility_band(svc: Any) -> None:
         """Ensure the high volatility threshold never drops below the low threshold."""
         if not (
             hasattr(svc, "auto_stop_surplus_volatility_low_watts")
@@ -469,7 +479,7 @@ class ServiceStateController:
         )
         svc.auto_stop_surplus_volatility_high_watts = svc.auto_stop_surplus_volatility_low_watts
 
-    def load_config(self):
+    def load_config(self) -> configparser.ConfigParser:
         """Load configuration or raise if the minimal settings are missing."""
         config = configparser.ConfigParser()
         config.read(self.config_path())

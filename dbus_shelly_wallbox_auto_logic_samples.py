@@ -12,12 +12,11 @@ into many small helper methods. The high-level behavior is:
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import logging
 import math
 import time
 from datetime import datetime
-from typing import Any, Deque
+from typing import Any, Deque, cast
 
 from dbus_shelly_wallbox_auto_policy import AutoPolicy, validate_auto_policy
 from dbus_shelly_wallbox_common import _auto_state_code, _derive_auto_state, _fresh_confirmed_relay_output
@@ -54,9 +53,10 @@ class _AutoDecisionSamplesMixin(_ComposableControllerMixin):
 
     def average_auto_metric(self, index: int) -> float | None:
         """Compute the mean of one field from the sample buffer."""
-        if not self.service.auto_samples:
+        samples = cast(Deque[AutoSample], self.service.auto_samples)
+        if not samples:
             return None
-        return sum(sample[index] for sample in self.service.auto_samples) / len(self.service.auto_samples)
+        return sum(sample[index] for sample in samples) / len(samples)
 
     @staticmethod
     def _smooth_metric(previous: float | None, current: float, alpha: float) -> float:
@@ -69,7 +69,9 @@ class _AutoDecisionSamplesMixin(_ComposableControllerMixin):
         """Return the current timestamp for learned-power freshness checks."""
         time_now = getattr(self.service, "_time_now", None)
         if callable(time_now):
-            return float(time_now())
+            current_time = time_now()
+            if isinstance(current_time, (int, float)):
+                return float(current_time)
         return time.time()
 
     @staticmethod

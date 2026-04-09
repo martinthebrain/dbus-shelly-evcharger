@@ -21,6 +21,7 @@ DEFAULT_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "config.shelly_wallbox.ini",
 )
+DEFAULT_GENERIC_SHELLY_SERVICE = "com.victronenergy.shelly"
 
 
 def _as_bool(value, default=False):
@@ -28,6 +29,27 @@ def _as_bool(value, default=False):
     if value is None:
         return bool(default)
     return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _as_int(value, default):
+    """Convert a config value to int, falling back for invalid input."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _as_float(value, default):
+    """Convert a config value to float, falling back for invalid input."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _normalize_mac(value):
+    """Normalize MAC-like strings for comparison."""
+    return str(value or "").replace(":", "").replace("-", "").replace(" ", "").strip().upper()
 
 
 def load_settings(config_path):
@@ -42,11 +64,11 @@ def load_settings(config_path):
     if not host:
         raise ValueError("DEFAULT Host is required in the config")
 
-    channel = int(section.get("GenericShellyDisableChannel", 1))
+    channel = _as_int(section.get("GenericShellyDisableChannel", 1), 1)
     if channel < 1:
         channel = 1
 
-    delay_seconds = float(section.get("GenericShellyDisableDelaySeconds", 180))
+    delay_seconds = _as_float(section.get("GenericShellyDisableDelaySeconds", 180), 180.0)
     if delay_seconds < 0:
         delay_seconds = 0.0
 
@@ -56,9 +78,10 @@ def load_settings(config_path):
             section.get("GenericShellyAllowPersistentDisable", "1"),
             True,
         ),
-        "service": section.get("GenericShellyService", "com.victronenergy.shelly").strip(),
+        "service": section.get("GenericShellyService", DEFAULT_GENERIC_SHELLY_SERVICE).strip()
+        or DEFAULT_GENERIC_SHELLY_SERVICE,
         "target_ip": section.get("GenericShellyDisableIp", host).strip(),
-        "target_mac": section.get("GenericShellyDisableMac", "").strip().replace(":", "").upper(),
+        "target_mac": _normalize_mac(section.get("GenericShellyDisableMac", "")),
         "channel": channel,
         "delay_seconds": delay_seconds,
     }
@@ -69,7 +92,7 @@ def matches_device(serial, ip_value, mac_value, target_ip, target_mac):
     if target_ip:
         return str(ip_value or "").strip() == target_ip
     if target_mac:
-        return str(mac_value or serial).replace(":", "").upper() == target_mac
+        return _normalize_mac(mac_value or serial) == _normalize_mac(target_mac)
     return False
 
 

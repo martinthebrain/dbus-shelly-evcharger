@@ -10,7 +10,6 @@ state back to Venus OS.
 from __future__ import annotations
 
 import logging
-import math
 from typing import Any
 from dbus_shelly_wallbox_split_mixins import _ComposableControllerMixin
 
@@ -99,7 +98,16 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         self._clear_relay_sync_tracking(svc)
         return "relay-sync-failed"
 
-    def apply_relay_decision(self, desired_relay, relay_on, pm_status, power, current, now, auto_mode_active):
+    def apply_relay_decision(
+        self,
+        desired_relay: bool,
+        relay_on: bool,
+        pm_status: dict[str, Any],
+        power: float,
+        current: float,
+        now: float,
+        auto_mode_active: bool,
+    ) -> tuple[bool, float, float, bool]:
         """Queue relay changes and update optimistic local Shelly state."""
         svc = self.service
         pm_confirmed = self._pm_status_confirmed(pm_status)
@@ -132,15 +140,23 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         return relay_on, power, current, False
 
     @staticmethod
-    def derive_status_code(svc, relay_on, power, auto_mode_active):
+    def derive_status_code(svc: Any, relay_on: bool, power: float, auto_mode_active: bool) -> int:
         """Translate relay/power state into the Venus EV charger status code."""
         if relay_on and power >= svc.charging_threshold_watts:
             return 2
         if relay_on:
-            return svc.idle_status
+            return int(svc.idle_status)
         return 4 if auto_mode_active else 6
 
-    def publish_online_update(self, status, energy_forward, relay_on, power, voltage, now):
+    def publish_online_update(
+        self,
+        status: int,
+        energy_forward: float,
+        relay_on: bool,
+        power: float,
+        voltage: float,
+        now: float,
+    ) -> bool:
         """Publish live measurements and derived runtime state for an online Shelly status."""
         svc = self.service
         phase_data = self._phase_values(power, voltage, svc.phase, svc.voltage_mode)
@@ -149,4 +165,4 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         changed = False
         changed |= svc._publish_live_measurements(power, voltage, total_current, phase_data, now)
         changed |= self.update_virtual_state(status, energy_forward, relay_on)
-        return changed
+        return bool(changed)

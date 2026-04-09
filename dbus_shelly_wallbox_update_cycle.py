@@ -214,11 +214,13 @@ class UpdateCycleController(
     def _offline_confirmed_relay_sample_fresh(cls, svc: Any, now: float, captured_at: float) -> bool:
         """Return True when one confirmed relay sample is fresh enough for offline status."""
         max_age_seconds = cls._offline_confirmed_relay_max_age_seconds(svc)
-        return timestamp_age_within(
+        return bool(
+            timestamp_age_within(
             captured_at,
             now,
             max_age_seconds,
             future_tolerance_seconds=cls.FUTURE_INPUT_TIMESTAMP_TOLERANCE_SECONDS,
+            )
         )
 
     def publish_offline_update(self, now: float) -> bool:
@@ -391,12 +393,13 @@ class UpdateCycleController(
     @staticmethod
     def _normalize_learned_charge_power_state(value: Any) -> str:
         """Return one supported learned-power state string."""
-        return normalize_learning_state(value)
+        return str(normalize_learning_state(value))
 
     @staticmethod
     def _normalize_learned_charge_power_phase(value: Any) -> str | None:
         """Return one supported phase signature for a learned charging profile."""
-        return normalize_learning_phase(value)
+        normalized = normalize_learning_phase(value)
+        return None if normalized is None else str(normalized)
 
     @staticmethod
     def _set_learning_tracking(
@@ -535,7 +538,18 @@ class UpdateCycleController(
         return (float(now) - float(updated_at)) > max_age_seconds
 
     @staticmethod
-    def complete_update_cycle(svc, changed, now, relay_on, power, current, status, pv_power, battery_soc, grid_power):
+    def complete_update_cycle(
+        svc: Any,
+        changed: bool,
+        now: float,
+        relay_on: bool,
+        power: float,
+        current: float,
+        status: int,
+        pv_power: Any,
+        battery_soc: Any,
+        grid_power: Any,
+    ) -> None:
         """Finalize a successful update cycle and log the current state."""
         if changed:
             svc._bump_update_index(now)
@@ -555,13 +569,13 @@ class UpdateCycleController(
             svc.virtual_mode,
         )
 
-    def sign_of_life(self):
+    def sign_of_life(self) -> bool:
         """Periodic heartbeat log for troubleshooting."""
         svc = self.service
         logging.info("[%s] Last '/Ac/Power': %s", svc.service_name, svc._dbusservice["/Ac/Power"])
         return True
 
-    def update(self):
+    def update(self) -> bool:
         """Periodic update loop: read Shelly, compute auto logic, update DBus."""
         svc = self.service
         try:
@@ -667,7 +681,7 @@ class UpdateCycleController(
             now,
             pm_confirmed=pm_confirmed,
         )
-        return learning_state_changed
+        return bool(learning_state_changed)
 
     def _apply_relay_sync_health(self, relay_on: bool, relay_confirmed: bool, now: float) -> None:
         """Publish one relay-sync health override when needed."""
