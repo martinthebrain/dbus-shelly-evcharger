@@ -2,10 +2,18 @@
 """Helpers for throttled DBus publishing in the Shelly wallbox service."""
 
 import logging
+import math
 import time
 from typing import Any, Callable, Mapping, Sequence, TypeAlias, cast
 
-from dbus_shelly_wallbox_contracts import displayable_confirmed_read_timestamp, normalized_auto_state_pair
+from dbus_shelly_wallbox_contracts import (
+    displayable_confirmed_read_timestamp,
+    finite_float_or_none,
+    normalized_auto_state_pair,
+    normalize_binary_flag,
+    normalize_learning_phase,
+    normalize_learning_state,
+)
 
 PublishStateEntry: TypeAlias = dict[str, Any]
 PhaseMeasurement: TypeAlias = dict[str, float]
@@ -262,14 +270,75 @@ class DbusPublishController:
             interval_seconds=self.service._dbus_slow_publish_interval_seconds,
         )
 
-    def _config_values(self, startstop_display: int) -> dict[str, float | int]:
+    def _display_uses_learned_set_current(self) -> bool:
+        """Return whether the GUI SetCurrent field should mirror the learned EVSE current."""
+        return bool(normalize_binary_flag(getattr(self.service, "display_learned_set_current", 1), 1))
+
+    def _learned_charge_power_expired_for_display(self, now: float | None) -> bool:
+        """Return True when learned charging power is too old for GUI display reuse."""
+        max_age_seconds = finite_float_or_none(
+            getattr(self.service, "auto_learn_charge_power_max_age_seconds", 21600.0)
+        )
+        if max_age_seconds is None or max_age_seconds <= 0:
+            return False
+        updated_at = finite_float_or_none(getattr(self.service, "learned_charge_power_updated_at", None))
+        if updated_at is None:
+            return True
+        current = time.time() if now is None else float(now)
+        return (current - updated_at) > max_age_seconds
+
+    def _derived_learned_set_current(self, now: float | None) -> float | None:
+        """Return one rounded display current derived from the stable learned charging power."""
+        if not self._display_uses_learned_set_current():
+            return None
+        if normalize_learning_state(getattr(self.service, "learned_charge_power_state", "unknown")) != "stable":
+            return None
+        if self._learned_charge_power_expired_for_display(now):
+            return None
+
+        learned_power = finite_float_or_none(getattr(self.service, "learned_charge_power_watts", None))
+        voltage = finite_float_or_none(getattr(self.service, "learned_charge_power_voltage", None))
+        phase = normalize_learning_phase(
+            getattr(self.service, "learned_charge_power_phase", getattr(self.service, "phase", "L1"))
+        )
+        if learned_power is None or learned_power <= 0 or voltage is None or voltage <= 0 or phase is None:
+            return None
+
+        phase_voltage = voltage
+        if phase == "3P" and str(getattr(self.service, "voltage_mode", "phase")).strip().lower() != "phase":
+            phase_voltage = phase_voltage / math.sqrt(3.0)
+        phase_count = 3.0 if phase == "3P" else 1.0
+        if phase_voltage <= 0:
+            return None
+
+        display_current = learned_power / (phase_voltage * phase_count)
+        rounded_current = finite_float_or_none(round(display_current))
+        if rounded_current is None or rounded_current <= 0:
+            return None
+
+        min_current = finite_float_or_none(getattr(self.service, "min_current", None))
+        max_current = finite_float_or_none(getattr(self.service, "max_current", None))
+        if min_current is not None:
+            rounded_current = max(rounded_current, min_current)
+        if max_current is not None and max_current > 0:
+            rounded_current = min(rounded_current, max_current)
+        return float(rounded_current)
+
+    def _display_set_current(self, now: float | None) -> float:
+        """Return the GUI-facing SetCurrent value with learned-current display fallback."""
+        learned_current = self._derived_learned_set_current(now)
+        if learned_current is not None:
+            return learned_current
+        return float(self.service.virtual_set_current)
+
+    def _config_values(self, startstop_display: int, now: float | None) -> dict[str, float | int]:
         """Return mode and control values keyed by DBus path."""
         return {
             "/Mode": int(self.service.virtual_mode),
             "/AutoStart": int(self.service.virtual_autostart),
             "/StartStop": int(startstop_display),
             "/Enable": int(self.service.virtual_enable),
-            "/SetCurrent": self.service.virtual_set_current,
+            "/SetCurrent": self._display_set_current(now),
             "/MinCurrent": self.service.min_current,
             "/MaxCurrent": self.service.max_current,
         }
@@ -277,7 +346,7 @@ class DbusPublishController:
     def publish_config_paths(self, startstop_display: int, now: float | None) -> bool:
         """Publish configuration-like EV charger paths only when they change."""
         self.ensure_state()
-        return self._publish_values_transactional("config", self._config_values(startstop_display), now)
+        return self._publish_values_transactional("config", self._config_values(startstop_display, now), now)
 
     def _diagnostic_counter_values(self, now: float) -> dict[str, str | int]:
         """Return change-driven diagnostic counters keyed by DBus path."""

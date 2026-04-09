@@ -75,6 +75,12 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
         svc.sign_of_life_minutes = int(_config_value(defaults, "SignOfLifeLog", 10))
         svc.max_current = float(_config_value(defaults, "MaxCurrent", 16))
         svc.min_current = float(_config_value(defaults, "MinCurrent", 6))
+        svc.display_learned_set_current = defaults.get("DisplayLearnedSetCurrent", "1").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
         svc.charging_threshold_watts = float(_config_value(defaults, "ChargingThresholdWatts", 100))
         svc.idle_status = int(_config_value(defaults, "IdleStatus", 6))
         svc.voltage_mode = defaults.get("ThreePhaseVoltageMode", "phase").strip().lower()

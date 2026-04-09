@@ -102,6 +102,76 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertNotIn("/Enable", service._dbus_publish_state)
         service._mark_failure.assert_called_once_with("dbus")
 
+    def test_config_values_use_stable_learned_current_by_default(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            min_current=6.0,
+            max_current=16.0,
+            learned_charge_power_state="stable",
+            learned_charge_power_watts=2990.0,
+            learned_charge_power_updated_at=95.0,
+            learned_charge_power_phase="L1",
+            learned_charge_power_voltage=230.0,
+            phase="L1",
+            voltage_mode="phase",
+            auto_learn_charge_power_max_age_seconds=21600.0,
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        values = controller._config_values(1, now=100.0)
+
+        self.assertEqual(values["/SetCurrent"], 13.0)
+
+    def test_config_values_can_disable_learned_current_display(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            min_current=6.0,
+            max_current=16.0,
+            display_learned_set_current=0,
+            learned_charge_power_state="stable",
+            learned_charge_power_watts=2990.0,
+            learned_charge_power_updated_at=95.0,
+            learned_charge_power_phase="L1",
+            learned_charge_power_voltage=230.0,
+            phase="L1",
+            voltage_mode="phase",
+            auto_learn_charge_power_max_age_seconds=21600.0,
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        values = controller._config_values(1, now=100.0)
+
+        self.assertEqual(values["/SetCurrent"], 16.0)
+
+    def test_config_values_convert_stable_three_phase_line_voltage_to_display_current(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            min_current=6.0,
+            max_current=16.0,
+            learned_charge_power_state="stable",
+            learned_charge_power_watts=10400.0,
+            learned_charge_power_updated_at=95.0,
+            learned_charge_power_phase="3P",
+            learned_charge_power_voltage=400.0,
+            phase="3P",
+            voltage_mode="line_to_line",
+            auto_learn_charge_power_max_age_seconds=21600.0,
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        values = controller._config_values(1, now=100.0)
+
+        self.assertEqual(values["/SetCurrent"], 15.0)
+
     def test_publish_transactional_removes_new_paths_when_group_write_fails(self) -> None:
         class FlakyDbusService(dict[str, int]):
             def __setitem__(self, key: str, value: int) -> None:
