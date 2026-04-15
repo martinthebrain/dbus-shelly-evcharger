@@ -77,6 +77,7 @@ HEALTH_CODES: dict[str, int] = {
     "waiting-grid-recovery": 23,
     "command-mismatch": 24,
     "relay-sync-failed": 25,
+    "charger-fault": 26,
 }
 
 AUTO_STATE_CODES: dict[str, int] = {
@@ -94,6 +95,7 @@ RECOVERY_AUTO_REASONS = {
     "grid-missing",
     "waiting-grid-recovery",
     "shelly-offline",
+    "charger-fault",
     "command-mismatch",
     "relay-sync-failed",
 }

@@ -34,7 +34,7 @@ class DbusWriteController:
 
     def __init__(self, port: Any) -> None:
         self.port = port
-        self._relay_side_effect_started = False
+        self._external_side_effect_started = False
 
     @classmethod
     def _snapshot_write_state(cls, svc: Any) -> dict[str, Any]:
@@ -56,7 +56,11 @@ class DbusWriteController:
     def _queue_relay_command(self, svc: Any, relay_on: bool, current_time: float) -> None:
         """Queue one relay command and record that write handling became irreversible."""
         svc._queue_relay_command(relay_on, current_time)
-        self._relay_side_effect_started = True
+        self._external_side_effect_started = True
+
+    def _mark_external_side_effect_started(self) -> None:
+        """Record that one external control path accepted a non-reversible action."""
+        self._external_side_effect_started = True
 
     @staticmethod
     def _publish_local_pm_status_best_effort(svc: Any, relay_on: bool, current_time: float) -> None:
@@ -164,6 +168,39 @@ class DbusWriteController:
         svc._publish_dbus_path("/Mode", svc.virtual_mode, current_time, force=True)
         DbusWriteController._publish_startstop_enable(svc, current_time, auto_mode_active)
 
+    @staticmethod
+    def _supported_phase_selection_text(svc: Any) -> str:
+        """Return the DBus-facing CSV form of supported phase selections."""
+        return ",".join(tuple(getattr(svc, "supported_phase_selections", ("P1",))))
+
+    @staticmethod
+    def _queue_phase_switch_state(
+        svc: Any,
+        requested_selection: str,
+        current_time: float,
+        *,
+        resume_relay: bool,
+    ) -> None:
+        """Record one staged phase-switch request before relay-off confirmation."""
+        svc.requested_phase_selection = requested_selection
+        svc._phase_switch_pending_selection = requested_selection
+        svc._phase_switch_state = "waiting-relay-off"
+        svc._phase_switch_requested_at = current_time
+        svc._phase_switch_stable_until = None
+        svc._phase_switch_resume_relay = bool(resume_relay)
+
+    @classmethod
+    def _publish_phase_selection_paths(cls, svc: Any, current_time: float) -> None:
+        """Force-publish phase selection state after a phase-control write."""
+        svc._publish_dbus_path("/PhaseSelection", svc.requested_phase_selection, current_time, force=True)
+        svc._publish_dbus_path("/PhaseSelectionActive", svc.active_phase_selection, current_time, force=True)
+        svc._publish_dbus_path(
+            "/SupportedPhaseSelections",
+            cls._supported_phase_selection_text(svc),
+            current_time,
+            force=True,
+        )
+
     def _apply_auto_disable(self, svc: Any, current_time: float) -> None:
         """Queue a relay-off transition after an Auto deny request."""
         self._queue_relay_command(svc, False, current_time)
@@ -173,6 +210,13 @@ class DbusWriteController:
 
     def _apply_manual_startstop_request(self, svc: Any, wanted_on: bool, current_time: float) -> None:
         """Apply direct relay control in Manual mode."""
+        if svc.charger_enable_available():
+            svc.charger_set_enabled(wanted_on)
+            self._mark_external_side_effect_started()
+            svc.virtual_startstop = 1 if wanted_on else 0
+            svc.virtual_enable = svc.virtual_startstop
+            svc.manual_override_until = current_time + svc.auto_manual_override_seconds
+            return
         self._queue_relay_command(svc, wanted_on, current_time)
         svc.virtual_startstop = 1 if wanted_on else 0
         svc.virtual_enable = svc.virtual_startstop
@@ -181,6 +225,13 @@ class DbusWriteController:
 
     def _apply_manual_enable_request(self, svc: Any, wanted_on: bool, current_time: float) -> None:
         """Apply direct enable/disable control in Manual mode."""
+        if svc.charger_enable_available():
+            svc.charger_set_enabled(wanted_on)
+            self._mark_external_side_effect_started()
+            svc.virtual_enable = 1 if wanted_on else 0
+            svc.virtual_startstop = 1 if wanted_on else 0
+            svc.manual_override_until = current_time + svc.auto_manual_override_seconds
+            return
         self._queue_relay_command(svc, wanted_on, current_time)
         svc.virtual_enable = 1 if wanted_on else 0
         svc.virtual_startstop = 1 if wanted_on else 0
@@ -267,9 +318,11 @@ class DbusWriteController:
         port = self.port
         current_time = port.time_now()
         if path == "/SetCurrent":
-            # Shelly can be shown like an EVSE, but cannot set EV charging
-            # current via CP/PWM.
-            port.virtual_set_current = float(value)
+            requested_current = float(value)
+            if port.charger_current_available():
+                port.charger_set_current(requested_current)
+                self._mark_external_side_effect_started()
+            port.virtual_set_current = requested_current
             target_value = port.virtual_set_current
         elif path == "/MaxCurrent":
             port.max_current = float(value)
@@ -278,6 +331,44 @@ class DbusWriteController:
             port.min_current = float(value)
             target_value = port.min_current
         port.publish_dbus_path(path, target_value, current_time, force=True)
+
+    def _handle_phase_selection_write(self, value: Any) -> None:
+        """Apply one phase selection when the current backend can do so safely."""
+        port = self.port
+        current_time = port.time_now()
+        requested_selection = port.normalize_phase_selection(value)
+        if requested_selection not in port.supported_phase_selections:
+            raise ValueError(
+                f"Unsupported phase selection '{value}' "
+                f"(supported: {','.join(port.supported_phase_selections)})"
+            )
+        if port.phase_selection_requires_pause() and port.relay_may_be_on_for_cutover():
+            self._queue_phase_switch_state(
+                port._service,
+                requested_selection,
+                current_time,
+                resume_relay=True,
+            )
+            self._queue_relay_command(port, False, current_time)
+            self._publish_local_pm_status_best_effort(port, False, current_time)
+            self._publish_phase_selection_paths(port, current_time)
+            logging.info(
+                "DBus write /PhaseSelection requested=%s staged=%s %s",
+                value,
+                requested_selection,
+                port.state_summary(),
+            )
+            return
+        applied_selection = port.apply_phase_selection(requested_selection)
+        port.requested_phase_selection = applied_selection
+        port.active_phase_selection = applied_selection
+        self._publish_phase_selection_paths(port, current_time)
+        logging.info(
+            "DBus write /PhaseSelection requested=%s applied=%s %s",
+            value,
+            applied_selection,
+            port.state_summary(),
+        )
 
     def _execute_write(self, path: str, value: Any) -> None:
         """Dispatch one writable DBus path to its dedicated handler."""
@@ -293,6 +384,9 @@ class DbusWriteController:
         if path == "/Enable":
             self._handle_enable_write(bool(int(value)))
             return
+        if path == "/PhaseSelection":
+            self._handle_phase_selection_write(value)
+            return
         if path in ("/SetCurrent", "/MaxCurrent", "/MinCurrent"):
             self._handle_current_setting_write(path, value)
 
@@ -300,26 +394,27 @@ class DbusWriteController:
         """Handle writable DBus path updates from Venus OS."""
         port = self.port
         snapshot = self._snapshot_write_state(port._service)
-        self._relay_side_effect_started = False
+        self._external_side_effect_started = False
         try:
             self._execute_write(path, value)
             port.save_runtime_state()
             return True
         except Exception as error:  # pylint: disable=broad-except
-            if write_failure_is_reversible(self._relay_side_effect_started):
+            if write_failure_is_reversible(self._external_side_effect_started):
                 self._restore_write_state(port._service, snapshot)
                 logging.warning("Write to %s=%s failed: %s", path, value, error, exc_info=error)
                 return False
             logging.warning(
-                "Write to %s=%s failed after relay side effects started; keeping in-flight state: %s",
+                "Write to %s=%s failed after external side effects started; keeping in-flight state: %s",
                 path,
                 value,
                 error,
                 exc_info=error,
             )
-            # Once a relay transition was accepted by the worker queue, the DBus
-            # write is no longer safely reversible. Report success so callers do
-            # not treat an in-flight transition as if it had been rejected.
+            # Once a relay or native charger command was accepted, the DBus
+            # write is no longer safely reversible. Report success so callers
+            # do not treat an in-flight external transition as if it had been
+            # rejected.
             return True
         finally:
-            self._relay_side_effect_started = False
+            self._external_side_effect_started = False

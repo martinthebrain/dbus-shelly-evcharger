@@ -135,7 +135,28 @@ class TestRuntimeSupportController(unittest.TestCase):
                 auto_audit_log_path=path,
                 auto_audit_log_max_age_hours=0.0,
                 auto_audit_log_repeat_seconds=0.0,
-                _last_auto_audit_key=("waiting", None, 0, 0, 1, 1, 1, "idle", None, None, None, None, None, None, None),
+                _last_auto_audit_key=(
+                    "waiting",
+                    None,
+                    0,
+                    0,
+                    1,
+                    1,
+                    1,
+                    "idle",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "combined",
+                    "shelly_combined",
+                    "shelly_combined",
+                    None,
+                    None,
+                ),
                 _last_auto_audit_event_at=995.0,
                 auto_watchdog_stale_seconds=0.0,
                 started_at=900.0,
@@ -435,6 +456,11 @@ class TestRuntimeSupportController(unittest.TestCase):
                 auto_audit_log_path=path,
                 _last_pm_status={"output": True},
                 virtual_startstop=1,
+                backend_mode="split",
+                meter_backend_type="template_meter",
+                switch_backend_type="template_switch",
+                charger_backend_type="template_charger",
+                _charger_target_current_amps=13.0,
                 auto_stop_condition_reason="auto-stop-surplus",
                 _last_auto_metrics=make_auto_metrics(
                     surplus=900.0,
@@ -467,6 +493,11 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertIn("learned_charge_power_state=stable", payload)
         self.assertIn("threshold_scale=1.200", payload)
         self.assertIn("threshold_mode=adaptive", payload)
+        self.assertIn("backend_mode=split", payload)
+        self.assertIn("meter_backend=template_meter", payload)
+        self.assertIn("switch_backend=template_switch", payload)
+        self.assertIn("charger_backend=template_charger", payload)
+        self.assertIn("charger_target=13.0A", payload)
         self.assertIn("stop_alpha=0.15", payload)
         self.assertIn("stop_alpha_stage=volatile", payload)
         self.assertIn("surplus_volatility=520W", payload)
@@ -557,3 +588,29 @@ class TestRuntimeSupportController(unittest.TestCase):
                 payload = handle.read()
 
         self.assertIn("reason=waiting-surplus", payload)
+
+    def test_write_auto_audit_event_repeats_same_reason_when_charger_target_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = f"{temp_dir}/auto-reasons.log"
+            current_time = [1000.0]
+            service = make_runtime_support_service(
+                _time_now=lambda: current_time[0],
+                auto_audit_log_path=path,
+                backend_mode="split",
+                charger_backend_type="template_charger",
+                _charger_target_current_amps=10.0,
+                _last_auto_metrics=make_auto_metrics(),
+            )
+
+            controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
+            controller.write_auto_audit_event("waiting-surplus", cached=False)
+            current_time[0] = 1005.0
+            service._charger_target_current_amps = 13.0
+            controller.write_auto_audit_event("waiting-surplus", cached=False)
+
+            with open(path, "r", encoding="utf-8") as handle:
+                lines = handle.readlines()
+
+        self.assertEqual(len(lines), 2)
+        self.assertIn("charger_target=10.0A", lines[0])
+        self.assertIn("charger_target=13.0A", lines[1])

@@ -21,6 +21,7 @@ from typing import Any, cast
 
 from dbus_shelly_wallbox_auto_controller import AutoDecisionController
 from dbus_shelly_wallbox_auto_input_supervisor import AutoInputSupervisor
+from dbus_shelly_wallbox_backend_factory import build_service_backends
 from dbus_shelly_wallbox_ports import AutoDecisionPort, UpdateCyclePort, WriteControllerPort
 from dbus_shelly_wallbox_publisher import DbusPublishController
 from dbus_shelly_wallbox_runtime_support import RuntimeSupportController
@@ -29,10 +30,38 @@ from dbus_shelly_wallbox_split_mixins import _ComposableControllerMixin
 from dbus_shelly_wallbox_state import ServiceStateController
 from dbus_shelly_wallbox_update_cycle import UpdateCycleController
 from dbus_shelly_wallbox_write_controller import DbusWriteController
+from dbus_shelly_wallbox_backend_types import normalize_phase_selection_tuple
 from vedbus import VeDbusService
 
 
 class _ServiceBootstrapRuntimeMixin(_ComposableControllerMixin):
+    @staticmethod
+    def _switch_backend_supported_phase_selections(svc: Any) -> tuple[str, ...]:
+        """Return normalized supported phase selections declared by the current switch backend."""
+        backend = getattr(svc, "_switch_backend", None)
+        if backend is None or not hasattr(backend, "capabilities"):
+            return ("P1",)
+        try:
+            capabilities = backend.capabilities()
+        except Exception:  # pylint: disable=broad-except
+            return ("P1",)
+        normalized = normalize_phase_selection_tuple(
+            getattr(capabilities, "supported_phase_selections", ("P1",)),
+            ("P1",),
+        )
+        return cast(tuple[str, ...], normalized)
+
+    @staticmethod
+    def _charger_backend_supported_phase_selections(svc: Any) -> tuple[str, ...]:
+        """Return normalized supported phase selections declared by the current charger backend."""
+        backend = getattr(svc, "_charger_backend", None)
+        settings = getattr(backend, "settings", None)
+        normalized = normalize_phase_selection_tuple(
+            getattr(settings, "supported_phase_selections", ("P1",)),
+            ("P1",),
+        )
+        return cast(tuple[str, ...], normalized)
+
     def initialize_controllers(self) -> None:
         """Create the controller objects used by the service runtime."""
         svc = self.service
@@ -45,6 +74,12 @@ class _ServiceBootstrapRuntimeMixin(_ComposableControllerMixin):
         )
         svc._dbus_publisher = DbusPublishController(svc, self._age_seconds)
         svc._shelly_io_controller = ShellyIoController(svc)
+        resolved_backends = build_service_backends(svc)
+        svc._backend_selection = resolved_backends.selection
+        svc._backend_bundle = resolved_backends
+        svc._meter_backend = resolved_backends.meter
+        svc._switch_backend = resolved_backends.switch
+        svc._charger_backend = resolved_backends.charger
         if not hasattr(svc, "_state_controller") or svc._state_controller is None:
             svc._state_controller = ServiceStateController(svc, self._normalize_mode)
         svc._write_controller = DbusWriteController(WriteControllerPort(svc))
@@ -59,6 +94,9 @@ class _ServiceBootstrapRuntimeMixin(_ComposableControllerMixin):
         """Initialize the writable EV charger state exposed on DBus."""
         svc = self.service
         defaults = svc.config["DEFAULT"]
+        supported_phase_selections = self._switch_backend_supported_phase_selections(svc)
+        if getattr(svc, "_switch_backend", None) is None and getattr(svc, "_charger_backend", None) is not None:
+            supported_phase_selections = self._charger_backend_supported_phase_selections(svc)
         svc.manual_override_until = 0.0
         svc.virtual_mode = self._normalize_mode(defaults.get("Mode", 0))
         svc.virtual_autostart = int(defaults.get("AutoStart", 1))
@@ -86,6 +124,9 @@ class _ServiceBootstrapRuntimeMixin(_ComposableControllerMixin):
         svc.learned_charge_power_signature_checked_session_started_at = None
         svc.relay_last_changed_at = None
         svc.relay_last_off_at = None
+        svc.supported_phase_selections = supported_phase_selections
+        svc.requested_phase_selection = supported_phase_selections[0]
+        svc.active_phase_selection = supported_phase_selections[0]
         svc._grid_recovery_required = False
         svc._grid_recovery_since = None
         svc._auto_mode_cutover_pending = False

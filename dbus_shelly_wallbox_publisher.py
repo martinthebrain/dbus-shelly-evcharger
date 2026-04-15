@@ -272,7 +272,57 @@ class DbusPublishController:
 
     def _display_uses_learned_set_current(self) -> bool:
         """Return whether the GUI SetCurrent field should mirror the learned EVSE current."""
+        charger_backend = getattr(self.service, "_charger_backend", None)
+        if charger_backend is not None and hasattr(charger_backend, "set_current"):
+            return False
         return bool(normalize_binary_flag(getattr(self.service, "display_learned_set_current", 1), 1))
+
+    def _charger_state_max_age_seconds(self) -> float:
+        """Return how fresh charger readback must be before it overrides display state."""
+        candidates = [2.0]
+        live_interval = finite_float_or_none(
+            getattr(self.service, "_dbus_live_publish_interval_seconds", 1.0)
+        )
+        if live_interval is not None and live_interval > 0.0:
+            candidates.append(float(live_interval) * 2.0)
+        soft_fail_seconds = finite_float_or_none(
+            getattr(self.service, "auto_shelly_soft_fail_seconds", 10.0)
+        )
+        if soft_fail_seconds is not None and soft_fail_seconds > 0.0:
+            candidates.append(float(soft_fail_seconds))
+        return max(1.0, min(candidates))
+
+    def _charger_state_fresh(self, now: float | None) -> bool:
+        """Return whether a native charger readback is fresh enough to drive GUI state."""
+        if getattr(self.service, "_charger_backend", None) is None:
+            return False
+        state_at = finite_float_or_none(getattr(self.service, "_last_charger_state_at", None))
+        if state_at is None:
+            return False
+        current = time.time() if now is None else float(now)
+        return abs(current - state_at) <= self._charger_state_max_age_seconds()
+
+    def _charger_enabled_readback(self, now: float | None) -> bool | None:
+        """Return fresh native charger enabled-state readback when available."""
+        if not self._charger_state_fresh(now):
+            return None
+        raw_value = getattr(self.service, "_last_charger_state_enabled", None)
+        return None if raw_value is None else bool(raw_value)
+
+    def _charger_current_readback(self, now: float | None) -> float | None:
+        """Return fresh native charger current readback when available."""
+        if not self._charger_state_fresh(now):
+            return None
+        current_amps = finite_float_or_none(getattr(self.service, "_last_charger_state_current_amps", None))
+        if current_amps is None or current_amps <= 0.0:
+            return None
+        return float(current_amps)
+
+    def _charger_text_observed(self, attribute_name: str) -> str:
+        """Return the last observed charger text field for diagnostics."""
+        raw_value = getattr(self.service, attribute_name, None)
+        text = str(raw_value).strip() if raw_value is not None else ""
+        return text
 
     def _learned_charge_power_expired_for_display(self, now: float | None) -> bool:
         """Return True when learned charging power is too old for GUI display reuse."""
@@ -326,29 +376,62 @@ class DbusPublishController:
 
     def _display_set_current(self, now: float | None) -> float:
         """Return the GUI-facing SetCurrent value with learned-current display fallback."""
+        charger_current = self._charger_current_readback(now)
+        if charger_current is not None:
+            return charger_current
         learned_current = self._derived_learned_set_current(now)
         if learned_current is not None:
             return learned_current
         return float(self.service.virtual_set_current)
 
-    def _config_values(self, startstop_display: int, now: float | None) -> dict[str, float | int]:
+    def _config_values(self, startstop_display: int, now: float | None) -> dict[str, Any]:
         """Return mode and control values keyed by DBus path."""
+        charger_enabled = self._charger_enabled_readback(now)
+        enable_display = (
+            int(bool(charger_enabled))
+            if charger_enabled is not None
+            else int(getattr(self.service, "virtual_enable", 1))
+        )
+        startstop_value = int(bool(charger_enabled)) if charger_enabled is not None else int(startstop_display)
         return {
-            "/Mode": int(self.service.virtual_mode),
-            "/AutoStart": int(self.service.virtual_autostart),
-            "/StartStop": int(startstop_display),
-            "/Enable": int(self.service.virtual_enable),
+            "/Mode": int(getattr(self.service, "virtual_mode", 0)),
+            "/AutoStart": int(getattr(self.service, "virtual_autostart", 1)),
+            "/StartStop": startstop_value,
+            "/Enable": enable_display,
+            "/PhaseSelection": str(getattr(self.service, "requested_phase_selection", "P1")),
+            "/PhaseSelectionActive": str(getattr(self.service, "active_phase_selection", "P1")),
+            "/SupportedPhaseSelections": ",".join(getattr(self.service, "supported_phase_selections", ("P1",))),
             "/SetCurrent": self._display_set_current(now),
-            "/MinCurrent": self.service.min_current,
-            "/MaxCurrent": self.service.max_current,
+            "/MinCurrent": getattr(self.service, "min_current", 0.0),
+            "/MaxCurrent": getattr(self.service, "max_current", 0.0),
         }
+
+    @staticmethod
+    def _backend_mode_value(service: Any) -> str:
+        """Return one stable backend-mode label for diagnostics."""
+        raw_value = getattr(service, "backend_mode", "combined")
+        normalized = str(raw_value).strip()
+        return normalized or "combined"
+
+    @staticmethod
+    def _backend_type_value(service: Any, attribute_name: str, default: str = "") -> str:
+        """Return one stable backend-type label for diagnostics."""
+        raw_value = getattr(service, attribute_name, default)
+        normalized = str(raw_value).strip() if raw_value is not None else ""
+        return normalized or default
+
+    @staticmethod
+    def _charger_current_target_value(service: Any) -> float:
+        """Return the last applied native-charger current target or -1 when absent."""
+        target_amps = finite_float_or_none(getattr(service, "_charger_target_current_amps", None))
+        return -1.0 if target_amps is None else float(target_amps)
 
     def publish_config_paths(self, startstop_display: int, now: float | None) -> bool:
         """Publish configuration-like EV charger paths only when they change."""
         self.ensure_state()
         return self._publish_values_transactional("config", self._config_values(startstop_display, now), now)
 
-    def _diagnostic_counter_values(self, now: float) -> dict[str, str | int]:
+    def _diagnostic_counter_values(self, now: float) -> dict[str, str | int | float]:
         """Return change-driven diagnostic counters keyed by DBus path."""
         error_state = cast(dict[str, Any], self.service._error_state)
         auto_state, auto_state_code = normalized_auto_state_pair(
@@ -358,6 +441,7 @@ class DbusPublishController:
         error_count = int(
             error_state.get("dbus", 0)
             + error_state.get("shelly", 0)
+            + error_state.get("charger", 0)
             + error_state.get("pv", 0)
             + error_state.get("battery", 0)
             + error_state.get("grid", 0)
@@ -368,13 +452,23 @@ class DbusPublishController:
             "/Auto/HealthCode": int(self.service._last_health_code),
             "/Auto/State": auto_state,
             "/Auto/StateCode": auto_state_code,
+            "/Auto/StatusSource": str(getattr(self.service, "_last_status_source", "unknown")),
+            "/Auto/BackendMode": self._backend_mode_value(self.service),
+            "/Auto/MeterBackend": self._backend_type_value(self.service, "meter_backend_type", "shelly_combined"),
+            "/Auto/SwitchBackend": self._backend_type_value(self.service, "switch_backend_type", "shelly_combined"),
+            "/Auto/ChargerBackend": self._backend_type_value(self.service, "charger_backend_type"),
+            "/Auto/ChargerStatus": self._charger_text_observed("_last_charger_state_status"),
+            "/Auto/ChargerFault": self._charger_text_observed("_last_charger_state_fault"),
+            "/Auto/ChargerFaultActive": int(bool(getattr(self.service, "_last_charger_fault_active", 0))),
             "/Auto/ErrorCount": error_count,
             "/Auto/DbusReadErrors": int(error_state.get("dbus", 0)),
             "/Auto/ShellyReadErrors": int(error_state.get("shelly", 0)),
+            "/Auto/ChargerWriteErrors": int(error_state.get("charger", 0)),
             "/Auto/PvReadErrors": int(error_state.get("pv", 0)),
             "/Auto/BatteryReadErrors": int(error_state.get("battery", 0)),
             "/Auto/GridReadErrors": int(error_state.get("grid", 0)),
             "/Auto/InputCacheHits": int(error_state.get("cache_hits", 0)),
+            "/Auto/ChargerCurrentTarget": self._charger_current_target_value(self.service),
             "/Auto/Stale": 1 if self.service._is_update_stale(now) else 0,
             "/Auto/RecoveryAttempts": int(self.service._recovery_attempts),
         }
@@ -399,6 +493,12 @@ class DbusPublishController:
             "/Auto/LastBatteryReadAge": self._age_seconds(svc._last_battery_soc_at, now),
             "/Auto/LastGridReadAge": self._age_seconds(svc._last_grid_at, now),
             "/Auto/LastDbusReadAge": self._age_seconds(svc._last_dbus_ok_at, now),
+            "/Auto/ChargerCurrentTargetAge": self._age_seconds(
+                getattr(svc, "_charger_target_current_applied_at", None), now
+            ),
+            "/Auto/LastChargerReadAge": self._age_seconds(
+                getattr(svc, "_last_charger_state_at", None), now
+            ),
             "/Auto/LastSuccessfulUpdateAge": self._age_seconds(svc._last_successful_update_at, now),
             "/Auto/StaleSeconds": self._age_seconds(stale_base, now),
         }

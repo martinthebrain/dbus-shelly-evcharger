@@ -26,6 +26,8 @@ class UpdateCyclePort(_BaseServicePort):
         "_last_health_code",
         "_last_auto_state",
         "_last_auto_state_code",
+        "_last_status_source",
+        "_last_charger_fault_active",
         "charging_started_at",
         "energy_at_start",
         "virtual_startstop",
@@ -78,6 +80,15 @@ class UpdateCyclePort(_BaseServicePort):
         "_relay_sync_requested_at",
         "_relay_sync_deadline_at",
         "_relay_sync_failure_reported",
+        "_ignore_min_offtime_once",
+        "requested_phase_selection",
+        "active_phase_selection",
+        "supported_phase_selections",
+        "_phase_switch_pending_selection",
+        "_phase_switch_state",
+        "_phase_switch_requested_at",
+        "_phase_switch_stable_until",
+        "_phase_switch_resume_relay",
     }
 
     _ALLOWED_METHODS = {
@@ -103,6 +114,8 @@ class UpdateCyclePort(_BaseServicePort):
         "_publish_local_pm_status",
         "_auto_decide_relay",
         "_state_summary",
+        "_peek_pending_relay_command",
+        "_apply_phase_selection",
     }
 
     _MUTABLE_ATTRS = {
@@ -111,6 +124,8 @@ class UpdateCyclePort(_BaseServicePort):
         "_last_health_code",
         "_last_auto_state",
         "_last_auto_state_code",
+        "_last_status_source",
+        "_last_charger_fault_active",
         "charging_started_at",
         "energy_at_start",
         "virtual_startstop",
@@ -144,6 +159,15 @@ class UpdateCyclePort(_BaseServicePort):
         "_relay_sync_requested_at",
         "_relay_sync_deadline_at",
         "_relay_sync_failure_reported",
+        "_ignore_min_offtime_once",
+        "requested_phase_selection",
+        "active_phase_selection",
+        "supported_phase_selections",
+        "_phase_switch_pending_selection",
+        "_phase_switch_state",
+        "_phase_switch_requested_at",
+        "_phase_switch_stable_until",
+        "_phase_switch_resume_relay",
     }
 
     def __init__(self, service: Any) -> None:

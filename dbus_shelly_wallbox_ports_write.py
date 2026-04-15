@@ -6,7 +6,13 @@ from __future__ import annotations
 from typing import Any, cast
 
 
+from dbus_shelly_wallbox_backend_types import (
+    PhaseSelection,
+    normalize_phase_selection,
+    normalize_phase_selection_tuple,
+)
 from dbus_shelly_wallbox_contracts import (
+    finite_float_or_none,
     non_negative_int,
     normalized_worker_snapshot,
     normalize_binary_flag,
@@ -22,6 +28,9 @@ class WriteControllerPort(_BaseServicePort):
         "virtual_startstop",
         "virtual_enable",
         "virtual_set_current",
+        "requested_phase_selection",
+        "active_phase_selection",
+        "supported_phase_selections",
         "min_current",
         "max_current",
         "auto_start_condition_since",
@@ -71,6 +80,68 @@ class WriteControllerPort(_BaseServicePort):
     @property
     def auto_manual_override_seconds(self) -> Any:
         return self._service.auto_manual_override_seconds
+
+    @property
+    def virtual_set_current(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "virtual_set_current", 0.0)) or 0.0)
+
+    @virtual_set_current.setter
+    def virtual_set_current(self, value: Any) -> None:
+        self._service.virtual_set_current = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def min_current(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "min_current", 0.0)) or 0.0)
+
+    @min_current.setter
+    def min_current(self, value: Any) -> None:
+        self._service.min_current = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def max_current(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "max_current", 0.0)) or 0.0)
+
+    @max_current.setter
+    def max_current(self, value: Any) -> None:
+        self._service.max_current = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def supported_phase_selections(self) -> tuple[str, ...]:
+        normalized: tuple[PhaseSelection, ...] = normalize_phase_selection_tuple(
+            getattr(self._service, "supported_phase_selections", ("P1",)),
+            ("P1",),
+        )
+        return normalized
+
+    @supported_phase_selections.setter
+    def supported_phase_selections(self, value: Any) -> None:
+        self._service.supported_phase_selections = normalize_phase_selection_tuple(value, ("P1",))
+
+    @property
+    def requested_phase_selection(self) -> str:
+        normalized: PhaseSelection = normalize_phase_selection(
+            getattr(self._service, "requested_phase_selection", self.supported_phase_selections[0]),
+            cast(PhaseSelection, self.supported_phase_selections[0]),
+        )
+        return str(normalized)
+
+    @requested_phase_selection.setter
+    def requested_phase_selection(self, value: Any) -> None:
+        fallback = cast(PhaseSelection, self.supported_phase_selections[0])
+        self._service.requested_phase_selection = normalize_phase_selection(value, fallback)
+
+    @property
+    def active_phase_selection(self) -> str:
+        normalized: PhaseSelection = normalize_phase_selection(
+            getattr(self._service, "active_phase_selection", self.requested_phase_selection),
+            cast(PhaseSelection, self.requested_phase_selection),
+        )
+        return str(normalized)
+
+    @active_phase_selection.setter
+    def active_phase_selection(self, value: Any) -> None:
+        fallback = cast(PhaseSelection, self.requested_phase_selection)
+        self._service.active_phase_selection = normalize_phase_selection(value, fallback)
 
     @property
     def auto_mode_cutover_pending(self) -> bool:
@@ -176,6 +247,41 @@ class WriteControllerPort(_BaseServicePort):
 
     def time_now(self) -> float:
         return float(self._service._time_now())
+
+    def charger_enable_available(self) -> bool:
+        backend = getattr(self._service, "_charger_backend", None)
+        return backend is not None and hasattr(backend, "set_enabled")
+
+    def charger_current_available(self) -> bool:
+        backend = getattr(self._service, "_charger_backend", None)
+        return backend is not None and hasattr(backend, "set_current")
+
+    def charger_set_enabled(self, enabled: bool) -> Any:
+        backend = getattr(self._service, "_charger_backend", None)
+        if backend is None or not hasattr(backend, "set_enabled"):
+            raise RuntimeError("No charger backend with set_enabled configured")
+        return backend.set_enabled(bool(enabled))
+
+    def charger_set_current(self, amps: float) -> Any:
+        backend = getattr(self._service, "_charger_backend", None)
+        if backend is None or not hasattr(backend, "set_current"):
+            raise RuntimeError("No charger backend with set_current configured")
+        return backend.set_current(float(amps))
+
+    def phase_selection_requires_pause(self) -> bool:
+        return bool(self._service._phase_selection_requires_pause())
+
+    def apply_phase_selection(self, selection: Any) -> str:
+        return cast(str, self._service._apply_phase_selection(selection))
+
+    def normalize_phase_selection(self, value: Any, default: str | None = None) -> str:
+        fallback: PhaseSelection = (
+            cast(PhaseSelection, self.supported_phase_selections[0])
+            if default is None
+            else cast(PhaseSelection, str(default))
+        )
+        normalized: PhaseSelection = normalize_phase_selection(value, fallback)
+        return str(normalized)
 
     def normalize_mode(self, value: Any) -> int:
         return int(self._service._normalize_mode(value))

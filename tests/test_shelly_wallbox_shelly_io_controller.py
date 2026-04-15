@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from dbus_shelly_wallbox_backend_types import MeterReading
 from dbus_shelly_wallbox_shelly_io import ShellyIoController
 
 
@@ -86,6 +88,466 @@ class TestShellyIoController(unittest.TestCase):
         service.rpc_call.assert_any_call("Switch.GetStatus", id=2)
         service.rpc_call.assert_any_call("Switch.Set", id=2, on=False)
         service._rpc_call_with_session.assert_called_once_with("worker-session", "Switch.GetStatus", id=2)
+
+    def test_fetch_pm_status_uses_split_backends_and_prefers_switch_state(self):
+        meter_backend = SimpleNamespace(
+            read_meter=MagicMock(
+                return_value=MeterReading(
+                    relay_on=False,
+                    power_w=2300.0,
+                    voltage_v=230.0,
+                    current_a=10.0,
+                    energy_kwh=12.5,
+                    phase_selection="P1",
+                    phase_powers_w=(2300.0, 0.0, 0.0),
+                    phase_currents_a=(10.0, 0.0, 0.0),
+                )
+            )
+        )
+        switch_backend = SimpleNamespace(
+            read_switch_state=MagicMock(return_value=SimpleNamespace(enabled=True, phase_selection="P1_P2")),
+            capabilities=MagicMock(return_value=SimpleNamespace(supported_phase_selections=("P1", "P1_P2"))),
+            set_enabled=MagicMock(),
+        )
+        service = SimpleNamespace(
+            _backend_selection=SimpleNamespace(mode="split"),
+            _meter_backend=meter_backend,
+            _switch_backend=switch_backend,
+            rpc_call=MagicMock(),
+            supported_phase_selections=("P1",),
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+        )
+
+        controller = ShellyIoController(service)
+        pm_status = controller.fetch_pm_status()
+
+        self.assertEqual(
+            pm_status,
+            {
+                "output": True,
+                "apower": 2300.0,
+                "current": 10.0,
+                "voltage": 230.0,
+                "aenergy": {"total": 12500.0},
+                "_phase_selection": "P1",
+                "_phase_powers_w": (2300.0, 0.0, 0.0),
+                "_phase_currents_a": (10.0, 0.0, 0.0),
+            },
+        )
+        meter_backend.read_meter.assert_called_once_with()
+        switch_backend.read_switch_state.assert_called_once_with()
+        switch_backend.capabilities.assert_called_once_with()
+        self.assertEqual(service.supported_phase_selections, ("P1", "P1_P2"))
+        self.assertEqual(service.requested_phase_selection, "P1")
+        self.assertEqual(service.active_phase_selection, "P1_P2")
+
+    def test_queue_relay_command_warns_when_direct_switch_breaks_over_limit_load(self):
+        switch_backend = SimpleNamespace(
+            capabilities=MagicMock(
+                return_value=SimpleNamespace(
+                    switching_mode="direct",
+                    max_direct_switch_power_w=1500.0,
+                )
+            )
+        )
+        service = SimpleNamespace(
+            _backend_selection=SimpleNamespace(mode="split"),
+            _switch_backend=switch_backend,
+            _ensure_worker_state=MagicMock(),
+            _time_now=MagicMock(return_value=100.0),
+            _relay_command_lock=threading.Lock(),
+            _pending_relay_state=None,
+            _pending_relay_requested_at=None,
+            relay_sync_timeout_seconds=2.0,
+            _relay_sync_expected_state=None,
+            _relay_sync_requested_at=None,
+            _relay_sync_deadline_at=None,
+            _relay_sync_failure_reported=False,
+            _last_pm_status={"apower": 1800.0},
+            _last_pm_status_confirmed=True,
+            _warning_throttled=MagicMock(),
+            auto_shelly_soft_fail_seconds=30.0,
+        )
+
+        controller = ShellyIoController(service)
+        controller.queue_relay_command(False)
+
+        service._warning_throttled.assert_called_once()
+        self.assertEqual(service._warning_throttled.call_args.args[0], "direct-switch-under-load")
+        self.assertFalse(service._pending_relay_state)
+
+    def test_queue_relay_command_skips_overload_warning_for_contactor_switching(self):
+        switch_backend = SimpleNamespace(
+            capabilities=MagicMock(
+                return_value=SimpleNamespace(
+                    switching_mode="contactor",
+                    max_direct_switch_power_w=1500.0,
+                )
+            )
+        )
+        service = SimpleNamespace(
+            _backend_selection=SimpleNamespace(mode="split"),
+            _switch_backend=switch_backend,
+            _ensure_worker_state=MagicMock(),
+            _time_now=MagicMock(return_value=100.0),
+            _relay_command_lock=threading.Lock(),
+            _pending_relay_state=None,
+            _pending_relay_requested_at=None,
+            relay_sync_timeout_seconds=2.0,
+            _relay_sync_expected_state=None,
+            _relay_sync_requested_at=None,
+            _relay_sync_deadline_at=None,
+            _relay_sync_failure_reported=False,
+            _last_pm_status={"apower": 1800.0},
+            _last_pm_status_confirmed=True,
+            _warning_throttled=MagicMock(),
+            auto_shelly_soft_fail_seconds=30.0,
+        )
+
+        controller = ShellyIoController(service)
+        controller.queue_relay_command(False)
+
+        service._warning_throttled.assert_not_called()
+        self.assertFalse(service._pending_relay_state)
+
+    def test_fetch_pm_status_preserves_legacy_single_phase_line_mapping_in_split_mode(self):
+        meter_backend = SimpleNamespace(
+            read_meter=MagicMock(
+                return_value=MeterReading(
+                    relay_on=True,
+                    power_w=2300.0,
+                    voltage_v=230.0,
+                    current_a=10.0,
+                    energy_kwh=12.5,
+                    phase_selection="P1",
+                    phase_powers_w=(0.0, 2300.0, 0.0),
+                    phase_currents_a=(0.0, 10.0, 0.0),
+                )
+            )
+        )
+        switch_backend = SimpleNamespace(
+            read_switch_state=MagicMock(return_value=SimpleNamespace(enabled=True)),
+            capabilities=MagicMock(return_value=SimpleNamespace(supported_phase_selections=("P1",))),
+            set_enabled=MagicMock(),
+        )
+        service = SimpleNamespace(
+            _backend_selection=SimpleNamespace(mode="split"),
+            _meter_backend=meter_backend,
+            _switch_backend=switch_backend,
+            supported_phase_selections=("P1",),
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+        )
+
+        controller = ShellyIoController(service)
+        pm_status = controller.fetch_pm_status()
+
+        self.assertEqual(pm_status["_phase_powers_w"], (0.0, 2300.0, 0.0))
+        self.assertEqual(pm_status["_phase_currents_a"], (0.0, 10.0, 0.0))
+        self.assertEqual(service.active_phase_selection, "P1")
+
+    def test_fetch_pm_status_split_falls_back_to_meter_relay_state_when_switch_read_fails(self):
+        meter_backend = SimpleNamespace(
+            read_meter=MagicMock(
+                return_value=MeterReading(
+                    relay_on=True,
+                    power_w=1200.0,
+                    voltage_v=230.0,
+                    current_a=5.2,
+                    energy_kwh=1.5,
+                    phase_selection="P1",
+                )
+            )
+        )
+        switch_backend = SimpleNamespace(
+            read_switch_state=MagicMock(side_effect=RuntimeError("switch down")),
+            capabilities=MagicMock(return_value=SimpleNamespace(supported_phase_selections=("P1", "P1_P2_P3"))),
+            set_enabled=MagicMock(),
+        )
+        service = SimpleNamespace(
+            _backend_selection=SimpleNamespace(mode="split"),
+            _meter_backend=meter_backend,
+            _switch_backend=switch_backend,
+            supported_phase_selections=("P1",),
+            requested_phase_selection="P1_P2_P3",
+            active_phase_selection="P1",
+        )
+
+        controller = ShellyIoController(service)
+        pm_status = controller.worker_fetch_pm_status()
+
+        self.assertTrue(pm_status["output"])
+        self.assertEqual(pm_status["aenergy"]["total"], 1500.0)
+        switch_backend.read_switch_state.assert_called_once_with()
+        self.assertEqual(service.supported_phase_selections, ("P1", "P1_P2_P3"))
+        self.assertEqual(service.requested_phase_selection, "P1_P2_P3")
+        self.assertEqual(service.active_phase_selection, "P1")
+
+    def test_fetch_pm_status_split_without_meter_uses_fresh_charger_readback(self):
+        switch_backend = SimpleNamespace(
+            read_switch_state=MagicMock(
+                return_value=SimpleNamespace(enabled=True, phase_selection="P1_P2_P3")
+            ),
+            capabilities=MagicMock(
+                return_value=SimpleNamespace(supported_phase_selections=("P1", "P1_P2_P3"))
+            ),
+            set_enabled=MagicMock(),
+        )
+        charger_backend = SimpleNamespace(
+            read_charger_state=MagicMock(
+                return_value=SimpleNamespace(
+                    enabled=False,
+                    current_amps=15.5,
+                    phase_selection="P1",
+                    actual_current_amps=14.8,
+                    power_w=10200.0,
+                    energy_kwh=21.4,
+                )
+            )
+        )
+        service = SimpleNamespace(
+            _backend_selection=SimpleNamespace(mode="split"),
+            _meter_backend=None,
+            _switch_backend=switch_backend,
+            _charger_backend=charger_backend,
+            supported_phase_selections=("P1",),
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            auto_shelly_soft_fail_seconds=10.0,
+            _time_now=MagicMock(return_value=100.0),
+            _mark_failure=MagicMock(),
+            _warning_throttled=MagicMock(),
+            _mark_recovery=MagicMock(),
+            virtual_mode=0,
+            virtual_enable=1,
+            virtual_startstop=1,
+            virtual_set_current=16.0,
+            _last_voltage=230.0,
+        )
+
+        controller = ShellyIoController(service)
+        pm_status = controller.fetch_pm_status()
+
+        self.assertEqual(
+            pm_status,
+            {
+                "output": True,
+                "apower": 10200.0,
+                "current": 14.8,
+                "voltage": 230.0,
+                "aenergy": {"total": 21400.0},
+                "_phase_selection": "P1_P2_P3",
+            },
+        )
+        charger_backend.read_charger_state.assert_called_once_with()
+        switch_backend.read_switch_state.assert_called_once_with()
+        self.assertEqual(service.supported_phase_selections, ("P1", "P1_P2_P3"))
+        self.assertEqual(service.active_phase_selection, "P1_P2_P3")
+
+    def test_fetch_pm_status_split_without_meter_uses_recent_cached_charger_state(self):
+        switch_backend = SimpleNamespace(
+            read_switch_state=MagicMock(return_value=SimpleNamespace(enabled=True, phase_selection="P1")),
+            capabilities=MagicMock(return_value=SimpleNamespace(supported_phase_selections=("P1",))),
+            set_enabled=MagicMock(),
+        )
+        charger_backend = SimpleNamespace(read_charger_state=MagicMock(side_effect=RuntimeError("charger down")))
+        service = SimpleNamespace(
+            _backend_selection=SimpleNamespace(mode="split"),
+            _meter_backend=None,
+            _switch_backend=switch_backend,
+            _charger_backend=charger_backend,
+            supported_phase_selections=("P1",),
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            auto_shelly_soft_fail_seconds=10.0,
+            _time_now=MagicMock(return_value=100.0),
+            _mark_failure=MagicMock(),
+            _warning_throttled=MagicMock(),
+            _mark_recovery=MagicMock(),
+            _last_charger_state_enabled=True,
+            _last_charger_state_current_amps=16.0,
+            _last_charger_state_phase_selection="P1",
+            _last_charger_state_actual_current_amps=15.1,
+            _last_charger_state_power_w=3470.0,
+            _last_charger_state_energy_kwh=8.75,
+            _last_charger_state_at=95.0,
+            _last_voltage=230.0,
+        )
+
+        controller = ShellyIoController(service)
+        pm_status = controller.fetch_pm_status()
+
+        self.assertTrue(pm_status["output"])
+        self.assertEqual(pm_status["apower"], 3470.0)
+        self.assertEqual(pm_status["current"], 15.1)
+        self.assertEqual(pm_status["aenergy"]["total"], 8750.0)
+        service._mark_failure.assert_called_once_with("charger")
+        service._warning_throttled.assert_called_once()
+
+    def test_set_relay_uses_split_switch_backend(self):
+        switch_backend = SimpleNamespace(set_enabled=MagicMock())
+        service = SimpleNamespace(
+            _backend_selection=SimpleNamespace(mode="split"),
+            _switch_backend=switch_backend,
+            rpc_call=MagicMock(),
+        )
+
+        controller = ShellyIoController(service)
+        result = controller.set_relay(True)
+
+        self.assertEqual(result, {"output": True})
+        switch_backend.set_enabled.assert_called_once_with(True)
+        service.rpc_call.assert_not_called()
+
+    def test_set_relay_uses_split_charger_backend_when_no_switch_backend_exists(self):
+        charger_backend = SimpleNamespace(set_enabled=MagicMock())
+        service = SimpleNamespace(
+            _backend_selection=SimpleNamespace(mode="split"),
+            _switch_backend=None,
+            _charger_backend=charger_backend,
+            rpc_call=MagicMock(),
+        )
+
+        controller = ShellyIoController(service)
+        result = controller.set_relay(False)
+
+        self.assertEqual(result, {"output": False})
+        charger_backend.set_enabled.assert_called_once_with(False)
+        service.rpc_call.assert_not_called()
+
+    def test_set_phase_selection_updates_switch_and_charger_backends(self):
+        switch_backend = SimpleNamespace(
+            set_phase_selection=MagicMock(),
+            capabilities=MagicMock(
+                return_value=SimpleNamespace(
+                    supported_phase_selections=("P1", "P1_P2"),
+                    requires_charge_pause_for_phase_change=True,
+                )
+            ),
+        )
+        charger_backend = SimpleNamespace(set_phase_selection=MagicMock())
+        service = SimpleNamespace(
+            _switch_backend=switch_backend,
+            _charger_backend=charger_backend,
+            supported_phase_selections=("P1",),
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+        )
+
+        controller = ShellyIoController(service)
+        applied = controller.set_phase_selection("P1_P2")
+
+        self.assertEqual(applied, "P1_P2")
+        switch_backend.set_phase_selection.assert_called_once_with("P1_P2")
+        charger_backend.set_phase_selection.assert_called_once_with("P1_P2")
+        self.assertEqual(service.supported_phase_selections, ("P1", "P1_P2"))
+        self.assertEqual(service.requested_phase_selection, "P1_P2")
+        self.assertEqual(service.active_phase_selection, "P1_P2")
+
+    def test_fetch_pm_status_syncs_native_charger_readback_into_runtime_state(self):
+        charger_backend = SimpleNamespace(
+            read_charger_state=MagicMock(
+                return_value=SimpleNamespace(
+                    enabled=False,
+                    current_amps=12.5,
+                    phase_selection="P1_P2",
+                    actual_current_amps=12.3,
+                    power_w=2830.0,
+                    energy_kwh=7.25,
+                )
+            )
+        )
+        service = SimpleNamespace(
+            host="192.168.178.76",
+            pm_component="Switch",
+            pm_id=0,
+            rpc_call=MagicMock(
+                return_value={
+                    "output": True,
+                    "apower": 1800.0,
+                    "voltage": 230.0,
+                    "current": 7.8,
+                    "aenergy": {"total": 1000.0},
+                }
+            ),
+            _charger_backend=charger_backend,
+            supported_phase_selections=("P1",),
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            virtual_mode=0,
+            virtual_enable=1,
+            virtual_startstop=1,
+            virtual_set_current=16.0,
+            _time_now=MagicMock(return_value=100.0),
+            _mark_failure=MagicMock(),
+            _warning_throttled=MagicMock(),
+            _mark_recovery=MagicMock(),
+        )
+
+        controller = ShellyIoController(service)
+        pm_status = controller.fetch_pm_status()
+
+        self.assertTrue(pm_status["output"])
+        charger_backend.read_charger_state.assert_called_once_with()
+        self.assertEqual(service.virtual_enable, 0)
+        self.assertEqual(service.virtual_startstop, 0)
+        self.assertEqual(service.virtual_set_current, 12.5)
+        self.assertEqual(service._charger_target_current_amps, 12.5)
+        self.assertEqual(service._charger_target_current_applied_at, 100.0)
+        self.assertFalse(service._last_charger_state_enabled)
+        self.assertEqual(service._last_charger_state_current_amps, 12.5)
+        self.assertEqual(service._last_charger_state_phase_selection, "P1_P2")
+        self.assertEqual(service._last_charger_state_actual_current_amps, 12.3)
+        self.assertEqual(service._last_charger_state_power_w, 2830.0)
+        self.assertEqual(service._last_charger_state_energy_kwh, 7.25)
+        self.assertEqual(service._last_charger_state_at, 100.0)
+        self.assertEqual(service.active_phase_selection, "P1_P2")
+        service._mark_recovery.assert_called_once_with("charger", "Charger state reads recovered")
+
+    def test_fetch_pm_status_keeps_pm_flow_when_native_charger_readback_fails(self):
+        service = SimpleNamespace(
+            host="192.168.178.76",
+            pm_component="Switch",
+            pm_id=0,
+            rpc_call=MagicMock(return_value={"output": False}),
+            _charger_backend=SimpleNamespace(read_charger_state=MagicMock(side_effect=RuntimeError("charger down"))),
+            supported_phase_selections=("P1",),
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            auto_shelly_soft_fail_seconds=10.0,
+            _mark_failure=MagicMock(),
+            _warning_throttled=MagicMock(),
+            _mark_recovery=MagicMock(),
+        )
+
+        controller = ShellyIoController(service)
+        pm_status = controller.fetch_pm_status()
+
+        self.assertFalse(pm_status["output"])
+        service._mark_failure.assert_called_once_with("charger")
+        service._warning_throttled.assert_called_once()
+        service._mark_recovery.assert_not_called()
+
+    def test_phase_selection_requires_pause_uses_switch_capabilities(self):
+        switch_backend = SimpleNamespace(
+            capabilities=MagicMock(
+                return_value=SimpleNamespace(
+                    supported_phase_selections=("P1", "P1_P2"),
+                    requires_charge_pause_for_phase_change=True,
+                )
+            )
+        )
+        service = SimpleNamespace(
+            _switch_backend=switch_backend,
+            supported_phase_selections=("P1",),
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+        )
+
+        controller = ShellyIoController(service)
+
+        self.assertTrue(controller.phase_selection_requires_pause())
 
     def test_build_and_publish_local_pm_status_fill_defaults(self):
         service = SimpleNamespace(
@@ -191,6 +653,59 @@ class TestShellyIoController(unittest.TestCase):
 
         service._mark_failure.assert_called_once_with("shelly")
         service._warning_throttled.assert_called_once()
+
+    def test_worker_apply_pending_relay_command_uses_split_switch_backend(self):
+        switch_backend = SimpleNamespace(set_enabled=MagicMock())
+        service = SimpleNamespace(
+            _backend_selection=SimpleNamespace(mode="split"),
+            _switch_backend=switch_backend,
+            _peek_pending_relay_command=MagicMock(return_value=(True, 90.0)),
+            _clear_pending_relay_command=MagicMock(),
+            _mark_relay_changed=MagicMock(),
+            _mark_recovery=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _time_now=MagicMock(return_value=100.0),
+            _rpc_call_with_session=MagicMock(),
+            _worker_session=MagicMock(),
+            auto_shelly_soft_fail_seconds=10,
+        )
+
+        controller = ShellyIoController(service)
+        controller.worker_apply_pending_relay_command()
+
+        switch_backend.set_enabled.assert_called_once_with(True)
+        service._rpc_call_with_session.assert_not_called()
+        service._clear_pending_relay_command.assert_called_once_with(True)
+        service._mark_relay_changed.assert_called_once_with(True, 100.0)
+        service._mark_recovery.assert_called_once_with("shelly", "Shelly relay writes recovered")
+        service._publish_local_pm_status.assert_called_once_with(True, 100.0)
+
+    def test_worker_apply_pending_relay_command_uses_split_charger_backend_without_switch(self):
+        charger_backend = SimpleNamespace(set_enabled=MagicMock())
+        service = SimpleNamespace(
+            _backend_selection=SimpleNamespace(mode="split"),
+            _switch_backend=None,
+            _charger_backend=charger_backend,
+            _peek_pending_relay_command=MagicMock(return_value=(True, 90.0)),
+            _clear_pending_relay_command=MagicMock(),
+            _mark_relay_changed=MagicMock(),
+            _mark_recovery=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _time_now=MagicMock(return_value=100.0),
+            _rpc_call_with_session=MagicMock(),
+            _worker_session=MagicMock(),
+            auto_shelly_soft_fail_seconds=10,
+        )
+
+        controller = ShellyIoController(service)
+        controller.worker_apply_pending_relay_command()
+
+        charger_backend.set_enabled.assert_called_once_with(True)
+        service._rpc_call_with_session.assert_not_called()
+        service._clear_pending_relay_command.assert_called_once_with(True)
+        service._mark_relay_changed.assert_called_once_with(True, 100.0)
+        service._mark_recovery.assert_called_once_with("charger", "%s writes recovered", "charger backend")
+        service._publish_local_pm_status.assert_called_once_with(True, 100.0)
 
     def test_io_worker_once_updates_snapshot_and_handles_read_failure(self):
         service = SimpleNamespace(

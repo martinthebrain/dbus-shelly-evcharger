@@ -176,3 +176,11 @@ class RuntimeHelperMixin(ServiceControllerFactoryMixin):
     def set_relay(self, on: bool) -> Any:
         self._ensure_shelly_io_controller()
         return self._shelly_io_controller.set_relay(on)
+
+    def _phase_selection_requires_pause(self) -> bool:
+        self._ensure_shelly_io_controller()
+        return cast(bool, self._shelly_io_controller.phase_selection_requires_pause())
+
+    def _apply_phase_selection(self, selection: Any) -> str:
+        self._ensure_shelly_io_controller()
+        return cast(str, self._shelly_io_controller.set_phase_selection(selection))

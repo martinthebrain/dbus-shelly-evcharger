@@ -2,6 +2,8 @@
 import unittest
 import sys
 import configparser
+import tempfile
+from pathlib import Path
 from types import ModuleType
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -109,6 +111,13 @@ class TestServiceBootstrapController(unittest.TestCase):
             virtual_mode=0,
             virtual_startstop=1,
             virtual_enable=1,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1",),
+            backend_mode="split",
+            meter_backend_type="shelly_meter",
+            switch_backend_type="template_switch",
+            charger_backend_type="template_charger",
             _last_health_reason="init",
             _last_health_code=0,
             _last_auto_state="idle",
@@ -121,13 +130,34 @@ class TestServiceBootstrapController(unittest.TestCase):
 
         self.assertEqual(service._dbusservice.paths["/Mgmt/ProcessName"]["value"], "/tmp/dbus_shelly_wallbox.py")
         self.assertEqual(service._dbusservice.paths["/Mode"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/PhaseSelection"]["value"], "P1")
         self.assertEqual(service._dbusservice.paths["/Auto/State"]["value"], "idle")
         self.assertEqual(service._dbusservice.paths["/Auto/StateCode"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/StatusSource"]["value"], "unknown")
+        self.assertEqual(service._dbusservice.paths["/Auto/BackendMode"]["value"], "split")
+        self.assertEqual(service._dbusservice.paths["/Auto/MeterBackend"]["value"], "shelly_meter")
+        self.assertEqual(service._dbusservice.paths["/Auto/SwitchBackend"]["value"], "template_switch")
+        self.assertEqual(service._dbusservice.paths["/Auto/ChargerBackend"]["value"], "template_charger")
+        self.assertEqual(service._dbusservice.paths["/Auto/ChargerFaultActive"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ChargerCurrentTarget"]["value"], -1.0)
         self.assertTrue(service._dbusservice.paths["/Mode"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/PhaseSelection"]["writeable"])
         self.assertTrue(service._dbusservice.register_called)
 
     def test_initialize_controllers_uses_port_wrappers_for_bound_controllers(self):
-        service = SimpleNamespace()
+        service = SimpleNamespace(
+            backend_mode="combined",
+            meter_backend_type="shelly_combined",
+            switch_backend_type="shelly_combined",
+            charger_backend_type=None,
+            meter_backend_config_path="",
+            switch_backend_config_path="",
+            charger_backend_config_path="",
+            phase="L1",
+            pm_component="Switch",
+            pm_id=0,
+            max_current=16.0,
+        )
         controller = self._controller(service)
 
         controller.initialize_controllers()
@@ -135,6 +165,83 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertIsInstance(service._auto_controller.service, AutoDecisionPort)
         self.assertIsInstance(service._write_controller.port, WriteControllerPort)
         self.assertIsInstance(service._update_controller.service, UpdateCyclePort)
+        self.assertEqual(service._backend_selection.mode, "combined")
+        self.assertEqual(service._backend_selection.meter_type, "shelly_combined")
+        self.assertEqual(service._backend_selection.switch_type, "shelly_combined")
+        self.assertIsNotNone(service._meter_backend)
+        self.assertIsNotNone(service._switch_backend)
+        self.assertIsNone(service._charger_backend)
+
+    def test_initialize_controllers_supports_meterless_split_charger_setup(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            charger_path = Path(temp_dir) / "charger.ini"
+            charger_path.write_text(
+                "[Adapter]\nType=template_charger\nBaseUrl=http://adapter.local\n"
+                "[EnableRequest]\nUrl=/charger/enable\n"
+                "[CurrentRequest]\nUrl=/charger/current\n",
+                encoding="utf-8",
+            )
+            service = SimpleNamespace(
+                backend_mode="split",
+                meter_backend_type="none",
+                switch_backend_type="shelly_combined",
+                charger_backend_type="template_charger",
+                meter_backend_config_path="",
+                switch_backend_config_path="",
+                charger_backend_config_path=str(charger_path),
+                phase="L1",
+                pm_component="Switch",
+                pm_id=0,
+                max_current=16.0,
+                host="192.168.1.20",
+                session=MagicMock(),
+            )
+            controller = self._controller(service)
+
+            controller.initialize_controllers()
+
+            self.assertEqual(service._backend_selection.mode, "split")
+            self.assertEqual(service._backend_selection.meter_type, "none")
+            self.assertIsNone(service._meter_backend)
+            self.assertIsNotNone(service._switch_backend)
+            self.assertIsNotNone(service._charger_backend)
+
+    def test_initialize_controllers_supports_switchless_split_charger_setup(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            charger_path = Path(temp_dir) / "charger.ini"
+            charger_path.write_text(
+                "[Adapter]\nType=template_charger\nBaseUrl=http://adapter.local\n"
+                "[Capabilities]\nSupportedPhaseSelections=P1,P1_P2\n"
+                "[EnableRequest]\nUrl=/charger/enable\n"
+                "[CurrentRequest]\nUrl=/charger/current\n"
+                "[PhaseRequest]\nUrl=/charger/phase\n",
+                encoding="utf-8",
+            )
+            service = SimpleNamespace(
+                backend_mode="split",
+                meter_backend_type="none",
+                switch_backend_type="none",
+                charger_backend_type="template_charger",
+                meter_backend_config_path="",
+                switch_backend_config_path="",
+                charger_backend_config_path=str(charger_path),
+                phase="L1",
+                pm_component="Switch",
+                pm_id=0,
+                max_current=16.0,
+                host="192.168.1.20",
+                session=MagicMock(),
+                config={"DEFAULT": {}},
+            )
+            controller = self._controller(service)
+
+            controller.initialize_controllers()
+            controller.initialize_virtual_state()
+
+            self.assertEqual(service._backend_selection.switch_type, "none")
+            self.assertIsNone(service._switch_backend)
+            self.assertIsNotNone(service._charger_backend)
+            self.assertEqual(service.supported_phase_selections, ("P1", "P1_P2"))
 
     def test_initialize_virtual_state_uses_config_defaults(self):
         service = SimpleNamespace(
@@ -169,6 +276,9 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service.learned_charge_power_signature_mismatch_sessions, 0)
         self.assertIsNone(service.learned_charge_power_signature_checked_session_started_at)
         self.assertIsNone(service.relay_last_changed_at)
+        self.assertEqual(service.supported_phase_selections, ("P1",))
+        self.assertEqual(service.requested_phase_selection, "P1")
+        self.assertEqual(service.active_phase_selection, "P1")
         self.assertFalse(service._auto_mode_cutover_pending)
 
     def test_restore_runtime_state_sets_manual_startup_target_only_outside_auto_mode(self):
@@ -508,6 +618,13 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service.service_name, "com.example.ev")
         self.assertEqual(service.connection_name, "Custom RPC")
         self.assertEqual(service.runtime_state_path, "/tmp/runtime.json")
+        self.assertEqual(service.backend_mode, "combined")
+        self.assertEqual(service.meter_backend_type, "shelly_combined")
+        self.assertEqual(service.switch_backend_type, "shelly_combined")
+        self.assertIsNone(service.charger_backend_type)
+        self.assertEqual(service.meter_backend_config_path, "")
+        self.assertEqual(service.switch_backend_config_path, "")
+        self.assertEqual(service.charger_backend_config_path, "")
         self.assertEqual(service.auto_pv_service, "com.example.pv")
         self.assertEqual(service.auto_pv_service_prefix, "com.example.pvprefix")
         self.assertEqual(service.auto_pv_path, "/Pv/Power")
@@ -547,6 +664,35 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service.shelly_request_timeout_seconds, 4.5)
         self.assertEqual(service.dbus_method_timeout_seconds, 2.5)
         service._validate_runtime_config.assert_called_once_with()
+
+    def test_load_runtime_configuration_reads_backend_section_when_present(self):
+        parser = configparser.ConfigParser()
+        parser.read_dict(
+            {
+                "DEFAULT": {"Host": "192.168.1.20"},
+                "Backends": {
+                    "Mode": "split",
+                    "MeterType": "shelly_combined",
+                    "SwitchType": "shelly_combined",
+                    "ChargerType": "",
+                    "MeterConfigPath": "/data/meter.ini",
+                    "SwitchConfigPath": "/data/switch.ini",
+                    "ChargerConfigPath": "",
+                },
+            }
+        )
+        service = SimpleNamespace(_load_config=MagicMock(return_value=parser), _validate_runtime_config=MagicMock())
+        controller = self._controller(service)
+
+        controller.load_runtime_configuration()
+
+        self.assertEqual(service.backend_mode, "split")
+        self.assertEqual(service.meter_backend_type, "shelly_combined")
+        self.assertEqual(service.switch_backend_type, "shelly_combined")
+        self.assertIsNone(service.charger_backend_type)
+        self.assertEqual(service.meter_backend_config_path, "/data/meter.ini")
+        self.assertEqual(service.switch_backend_config_path, "/data/switch.ini")
+        self.assertEqual(service.charger_backend_config_path, "")
 
     def test_logging_level_and_seasonal_windows_helpers(self):
         parser = configparser.ConfigParser()

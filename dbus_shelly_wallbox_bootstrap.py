@@ -149,6 +149,7 @@ class ServiceBootstrapController(
         "/MinCurrent",
         "/MaxCurrent",
         "/SetCurrent",
+        "/PhaseSelection",
         "/AutoStart",
         "/Mode",
         "/StartStop",

@@ -52,6 +52,12 @@ class TestDbusWriteController(unittest.TestCase):
 
         return _publish
 
+    @staticmethod
+    def _apply_phase_selection(service: Any, selection: str) -> str:
+        service.requested_phase_selection = selection
+        service.active_phase_selection = selection
+        return selection
+
     def test_snapshot_dbus_paths_returns_empty_mapping_without_dbusservice(self) -> None:
         self.assertEqual(_snapshot_dbus_paths(SimpleNamespace(), ("/Mode",)), {})
 
@@ -315,6 +321,39 @@ class TestDbusWriteController(unittest.TestCase):
         self.assertEqual(service._dbusservice["/Enable"], 1)
         service._save_runtime_state.assert_called_once()
 
+    def test_handle_enable_write_in_manual_mode_uses_charger_backend_when_available(self) -> None:
+        charger_backend = SimpleNamespace(set_enabled=MagicMock())
+        service = SimpleNamespace(
+            virtual_mode=0,
+            virtual_startstop=0,
+            virtual_enable=0,
+            auto_manual_override_seconds=300,
+            manual_override_until=0.0,
+            _charger_backend=charger_backend,
+            _dbusservice={"/StartStop": 0, "/Enable": 0},
+            _time_now=MagicMock(return_value=100.0),
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
+            _queue_relay_command=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _publish_dbus_path=MagicMock(),
+            _state_summary=self._state_summary,
+            _save_runtime_state=MagicMock(),
+        )
+        service._publish_dbus_path.side_effect = self._publish_side_effect(service)
+
+        controller = DbusWriteController(WriteControllerPort(service))
+
+        self.assertTrue(controller.handle_write("/Enable", 1))
+
+        charger_backend.set_enabled.assert_called_once_with(True)
+        service._queue_relay_command.assert_not_called()
+        service._publish_local_pm_status.assert_not_called()
+        self.assertEqual(service.virtual_enable, 1)
+        self.assertEqual(service.virtual_startstop, 1)
+        self.assertEqual(service.manual_override_until, 400.0)
+        self.assertEqual(service._dbusservice["/StartStop"], 1)
+        self.assertEqual(service._dbusservice["/Enable"], 1)
+
     def test_handle_mode_write_keeps_in_flight_cutover_state_after_relay_side_effects_start(self) -> None:
         service = SimpleNamespace(
             virtual_mode=0,
@@ -577,6 +616,75 @@ class TestDbusWriteController(unittest.TestCase):
         self.assertEqual(service.virtual_autostart, 1)
         service._save_runtime_state.assert_not_called()
 
+    def test_manual_startstop_and_setcurrent_use_charger_backend_when_available(self) -> None:
+        charger_backend = SimpleNamespace(
+            set_enabled=MagicMock(),
+            set_current=MagicMock(),
+        )
+        service = SimpleNamespace(
+            virtual_mode=0,
+            virtual_autostart=0,
+            virtual_startstop=0,
+            virtual_enable=0,
+            auto_manual_override_seconds=300,
+            manual_override_until=0.0,
+            max_current=16.0,
+            min_current=6.0,
+            virtual_set_current=10.0,
+            _charger_backend=charger_backend,
+            _dbusservice={"/StartStop": 0, "/Enable": 0, "/SetCurrent": 10.0},
+            _time_now=MagicMock(return_value=100.0),
+            _normalize_mode=self._normalize_mode,
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
+            _queue_relay_command=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _publish_dbus_path=MagicMock(),
+            _state_summary=self._state_summary,
+            _save_runtime_state=MagicMock(),
+        )
+        service._publish_dbus_path.side_effect = self._publish_side_effect(service)
+        controller = DbusWriteController(WriteControllerPort(service))
+
+        self.assertTrue(controller.handle_write("/StartStop", 1))
+        charger_backend.set_enabled.assert_called_once_with(True)
+        service._queue_relay_command.assert_not_called()
+        service._publish_local_pm_status.assert_not_called()
+        self.assertEqual(service.virtual_startstop, 1)
+        self.assertEqual(service.virtual_enable, 1)
+        self.assertEqual(service.manual_override_until, 400.0)
+
+        self.assertTrue(controller.handle_write("/SetCurrent", 12.5))
+        charger_backend.set_current.assert_called_once_with(12.5)
+        self.assertEqual(service.virtual_set_current, 12.5)
+        self.assertEqual(service._dbusservice["/SetCurrent"], 12.5)
+
+    def test_handle_setcurrent_returns_true_when_save_fails_after_charger_side_effects_started(self) -> None:
+        charger_backend = SimpleNamespace(set_current=MagicMock())
+        service = SimpleNamespace(
+            virtual_mode=0,
+            virtual_autostart=0,
+            virtual_startstop=0,
+            virtual_enable=0,
+            max_current=16.0,
+            min_current=6.0,
+            virtual_set_current=10.0,
+            _charger_backend=charger_backend,
+            _dbusservice={"/SetCurrent": 10.0},
+            _time_now=MagicMock(return_value=100.0),
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
+            _publish_dbus_path=MagicMock(),
+            _state_summary=self._state_summary,
+            _save_runtime_state=MagicMock(side_effect=RuntimeError("save failed")),
+        )
+        service._publish_dbus_path.side_effect = self._publish_side_effect(service)
+        controller = DbusWriteController(WriteControllerPort(service))
+
+        self.assertTrue(controller.handle_write("/SetCurrent", 12.5))
+
+        charger_backend.set_current.assert_called_once_with(12.5)
+        self.assertEqual(service.virtual_set_current, 12.5)
+        self.assertEqual(service._dbusservice["/SetCurrent"], 12.5)
+
     def test_startstop_and_enable_in_auto_mode_cover_off_and_on_paths(self) -> None:
         service = SimpleNamespace(
             virtual_mode=1,
@@ -627,3 +735,107 @@ class TestDbusWriteController(unittest.TestCase):
         controller._publish_startstop_enable(service, 100.0)
         service._publish_dbus_path.assert_any_call("/StartStop", 1, 100.0, force=True)
         service._publish_dbus_path.assert_any_call("/Enable", 1, 100.0, force=True)
+
+    def test_handle_phase_selection_write_applies_supported_selection_when_relay_is_off(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=0,
+            virtual_autostart=1,
+            virtual_startstop=0,
+            virtual_enable=0,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1", "P1_P2"),
+            auto_start_condition_since=None,
+            auto_stop_condition_since=None,
+            manual_override_until=0.0,
+            _auto_mode_cutover_pending=False,
+            _ignore_min_offtime_once=False,
+            _dbusservice={
+                "/PhaseSelection": "P1",
+                "/PhaseSelectionActive": "P1",
+                "/SupportedPhaseSelections": "P1,P1_P2",
+            },
+            _time_now=MagicMock(return_value=100.0),
+            _normalize_mode=self._normalize_mode,
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
+            _phase_selection_requires_pause=MagicMock(return_value=True),
+            _apply_phase_selection=MagicMock(),
+            _peek_pending_relay_command=MagicMock(return_value=(None, None)),
+            _last_pm_status={"output": False},
+            _last_pm_status_confirmed=True,
+            _get_worker_snapshot=MagicMock(return_value={"pm_status": {"output": False}, "pm_confirmed": True}),
+            _publish_dbus_path=MagicMock(),
+            _state_summary=self._state_summary,
+            _save_runtime_state=MagicMock(),
+        )
+        service._apply_phase_selection.side_effect = partial(self._apply_phase_selection, service)
+        service._publish_dbus_path.side_effect = self._publish_side_effect(service)
+
+        controller = DbusWriteController(WriteControllerPort(service))
+
+        self.assertTrue(controller.handle_write("/PhaseSelection", "P1_P2"))
+
+        service._apply_phase_selection.assert_called_once_with("P1_P2")
+        self.assertEqual(service.requested_phase_selection, "P1_P2")
+        self.assertEqual(service.active_phase_selection, "P1_P2")
+        self.assertEqual(service._dbusservice["/PhaseSelection"], "P1_P2")
+        self.assertEqual(service._dbusservice["/PhaseSelectionActive"], "P1_P2")
+        self.assertEqual(service._dbusservice["/SupportedPhaseSelections"], "P1,P1_P2")
+
+    def test_handle_phase_selection_write_stages_live_change_when_backend_requires_pause(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=0,
+            virtual_autostart=1,
+            virtual_startstop=1,
+            virtual_enable=1,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1", "P1_P2"),
+            _phase_switch_pending_selection=None,
+            _phase_switch_state=None,
+            _phase_switch_requested_at=None,
+            _phase_switch_stable_until=None,
+            _phase_switch_resume_relay=False,
+            auto_start_condition_since=None,
+            auto_stop_condition_since=None,
+            manual_override_until=0.0,
+            _auto_mode_cutover_pending=False,
+            _ignore_min_offtime_once=False,
+            _dbusservice={
+                "/PhaseSelection": "P1",
+                "/PhaseSelectionActive": "P1",
+                "/SupportedPhaseSelections": "P1,P1_P2",
+            },
+            _time_now=MagicMock(return_value=100.0),
+            _normalize_mode=self._normalize_mode,
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
+            _phase_selection_requires_pause=MagicMock(return_value=True),
+            _apply_phase_selection=MagicMock(),
+            _queue_relay_command=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _peek_pending_relay_command=MagicMock(return_value=(None, None)),
+            _last_pm_status={"output": True},
+            _last_pm_status_confirmed=True,
+            _get_worker_snapshot=MagicMock(return_value={"pm_status": {"output": True}, "pm_confirmed": True}),
+            _publish_dbus_path=MagicMock(),
+            _state_summary=self._state_summary,
+            _save_runtime_state=MagicMock(),
+        )
+        service._publish_dbus_path.side_effect = self._publish_side_effect(service)
+
+        controller = DbusWriteController(WriteControllerPort(service))
+
+        self.assertTrue(controller.handle_write("/PhaseSelection", "P1_P2"))
+        service._queue_relay_command.assert_called_once_with(False, 100.0)
+        service._publish_local_pm_status.assert_called_once_with(False, 100.0)
+        service._apply_phase_selection.assert_not_called()
+        self.assertEqual(service.requested_phase_selection, "P1_P2")
+        self.assertEqual(service.active_phase_selection, "P1")
+        self.assertEqual(service._phase_switch_pending_selection, "P1_P2")
+        self.assertEqual(service._phase_switch_state, "waiting-relay-off")
+        self.assertEqual(service._phase_switch_requested_at, 100.0)
+        self.assertIsNone(service._phase_switch_stable_until)
+        self.assertTrue(service._phase_switch_resume_relay)
+        self.assertEqual(service._dbusservice["/PhaseSelection"], "P1_P2")
+        self.assertEqual(service._dbusservice["/PhaseSelectionActive"], "P1")
+        self.assertEqual(service._dbusservice["/SupportedPhaseSelections"], "P1,P1_P2")

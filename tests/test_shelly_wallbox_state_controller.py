@@ -33,6 +33,16 @@ class TestServiceStateController(unittest.TestCase):
             virtual_autostart=1,
             _auto_mode_cutover_pending=True,
             _ignore_min_offtime_once=False,
+            active_phase_selection="P1_P2",
+            requested_phase_selection="P1_P2_P3",
+            backend_mode="split",
+            meter_backend_type="template_meter",
+            switch_backend_type="template_switch",
+            charger_backend_type="template_charger",
+            _charger_target_current_amps=13.0,
+            _last_charger_state_status="charging",
+            _last_charger_state_fault="none",
+            _last_status_source="charger-fault",
             _last_auto_state="waiting",
             _last_health_reason="running",
         )
@@ -52,6 +62,16 @@ class TestServiceStateController(unittest.TestCase):
         self.assertIsNone(controller._coerce_optional_runtime_past_time(110.0, 100.0))
         self.assertEqual(controller._coerce_optional_runtime_past_time(100.5, 100.0), 100.5)
         self.assertIn("mode=1", controller.state_summary())
+        self.assertIn("phase=P1_P2", controller.state_summary())
+        self.assertIn("phase_req=P1_P2_P3", controller.state_summary())
+        self.assertIn("backend=split", controller.state_summary())
+        self.assertIn("meter_backend=template_meter", controller.state_summary())
+        self.assertIn("switch_backend=template_switch", controller.state_summary())
+        self.assertIn("charger_backend=template_charger", controller.state_summary())
+        self.assertIn("charger_target=13.0", controller.state_summary())
+        self.assertIn("charger_status=charging", controller.state_summary())
+        self.assertIn("charger_fault=none", controller.state_summary())
+        self.assertIn("status_source=charger-fault", controller.state_summary())
         self.assertIn("auto_state=waiting", controller.state_summary())
         self.assertIn("health=running", controller.state_summary())
 
@@ -278,6 +298,14 @@ class TestServiceStateController(unittest.TestCase):
                 learned_charge_power_voltage=229.4,
                 learned_charge_power_signature_mismatch_sessions=1,
                 learned_charge_power_signature_checked_session_started_at=80.0,
+                supported_phase_selections=("P1", "P1_P2", "P1_P2_P3"),
+                requested_phase_selection="P1_P2",
+                active_phase_selection="P1_P2",
+                _phase_switch_pending_selection="P1_P2_P3",
+                _phase_switch_state="stabilizing",
+                _phase_switch_requested_at=118.0,
+                _phase_switch_stable_until=130.0,
+                _phase_switch_resume_relay=True,
                 relay_last_changed_at=111.0,
                 relay_last_off_at=112.0,
                 _runtime_state_serialized=None,
@@ -302,6 +330,14 @@ class TestServiceStateController(unittest.TestCase):
             self.assertEqual(saved["learned_charge_power_voltage"], 229.4)
             self.assertEqual(saved["learned_charge_power_signature_mismatch_sessions"], 1)
             self.assertEqual(saved["learned_charge_power_signature_checked_session_started_at"], 80.0)
+            self.assertEqual(saved["supported_phase_selections"], ["P1", "P1_P2", "P1_P2_P3"])
+            self.assertEqual(saved["requested_phase_selection"], "P1_P2")
+            self.assertEqual(saved["active_phase_selection"], "P1_P2")
+            self.assertEqual(saved["phase_switch_pending_selection"], "P1_P2_P3")
+            self.assertEqual(saved["phase_switch_state"], "stabilizing")
+            self.assertEqual(saved["phase_switch_requested_at"], 118.0)
+            self.assertEqual(saved["phase_switch_stable_until"], 130.0)
+            self.assertEqual(saved["phase_switch_resume_relay"], 1)
 
             service.virtual_mode = 0
             service.virtual_autostart = 1
@@ -319,6 +355,14 @@ class TestServiceStateController(unittest.TestCase):
             service.learned_charge_power_voltage = None
             service.learned_charge_power_signature_mismatch_sessions = 0
             service.learned_charge_power_signature_checked_session_started_at = None
+            service.supported_phase_selections = ("P1",)
+            service.requested_phase_selection = "P1"
+            service.active_phase_selection = "P1"
+            service._phase_switch_pending_selection = None
+            service._phase_switch_state = None
+            service._phase_switch_requested_at = None
+            service._phase_switch_stable_until = None
+            service._phase_switch_resume_relay = False
             service.relay_last_changed_at = None
             service.relay_last_off_at = None
 
@@ -340,6 +384,14 @@ class TestServiceStateController(unittest.TestCase):
             self.assertEqual(service.learned_charge_power_voltage, 229.4)
             self.assertEqual(service.learned_charge_power_signature_mismatch_sessions, 1)
             self.assertEqual(service.learned_charge_power_signature_checked_session_started_at, 80.0)
+            self.assertEqual(service.supported_phase_selections, ("P1", "P1_P2", "P1_P2_P3"))
+            self.assertEqual(service.requested_phase_selection, "P1_P2")
+            self.assertEqual(service.active_phase_selection, "P1_P2")
+            self.assertEqual(service._phase_switch_pending_selection, "P1_P2_P3")
+            self.assertEqual(service._phase_switch_state, "stabilizing")
+            self.assertEqual(service._phase_switch_requested_at, 118.0)
+            self.assertEqual(service._phase_switch_stable_until, 130.0)
+            self.assertTrue(service._phase_switch_resume_relay)
             self.assertEqual(service.relay_last_changed_at, 111.0)
             self.assertEqual(service.relay_last_off_at, 112.0)
 
@@ -361,6 +413,9 @@ class TestServiceStateController(unittest.TestCase):
                         "learned_charge_power_state": "nonsense",
                         "learned_charge_power_sample_count": 2,
                         "learned_charge_power_phase": "weird",
+                        "supported_phase_selections": ["L2", "3P"],
+                        "requested_phase_selection": "3P",
+                        "active_phase_selection": "L2",
                     },
                     handle,
                 )
@@ -373,6 +428,9 @@ class TestServiceStateController(unittest.TestCase):
             self.assertEqual(service.learned_charge_power_state, "unknown")
             self.assertEqual(service.learned_charge_power_sample_count, 2)
             self.assertIsNone(service.learned_charge_power_phase)
+            self.assertEqual(service.supported_phase_selections, ("P1", "P1_P2_P3"))
+            self.assertEqual(service.requested_phase_selection, "P1_P2_P3")
+            self.assertEqual(service.active_phase_selection, "P1")
 
     def test_load_runtime_state_discards_future_historical_timestamps(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

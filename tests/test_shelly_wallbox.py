@@ -46,6 +46,7 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         service._error_state = {
             "dbus": 0,
             "shelly": 0,
+            "charger": 0,
             "pv": 0,
             "battery": 0,
             "grid": 0,
@@ -54,6 +55,7 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         service._failure_active = {
             "dbus": False,
             "shelly": False,
+            "charger": False,
             "pv": False,
             "battery": False,
             "grid": False,
@@ -88,6 +90,12 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         service._last_battery_allow_warning = None
         service._last_dbus_ok_at = None
         service._last_voltage = None
+        service.backend_mode = "combined"
+        service.meter_backend_type = "shelly_combined"
+        service.switch_backend_type = "shelly_combined"
+        service.charger_backend_type = None
+        service._charger_target_current_amps = None
+        service._charger_target_current_applied_at = None
         service._last_auto_metrics = {"surplus": None, "grid": None, "soc": None}
         service.auto_samples = deque()
         service.relay_last_changed_at = None
@@ -1885,6 +1893,29 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         service._publish_diagnostic_paths(100.0)
 
         self.assertEqual(service._dbusservice["/Auto/LastShellyReadAge"], -1)
+
+    def test_diagnostics_publish_backend_mode_and_charger_target_visibility(self):
+        service = self._make_update_service()
+        service.backend_mode = "split"
+        service.meter_backend_type = "template_meter"
+        service.switch_backend_type = "template_switch"
+        service.charger_backend_type = "template_charger"
+        service._error_state["charger"] = 2
+        service._charger_target_current_amps = 13.0
+        service._charger_target_current_applied_at = 96.0
+
+        service._publish_diagnostic_paths(100.0)
+
+        self.assertEqual(service._dbusservice["/Auto/BackendMode"], "split")
+        self.assertEqual(service._dbusservice["/Auto/MeterBackend"], "template_meter")
+        self.assertEqual(service._dbusservice["/Auto/SwitchBackend"], "template_switch")
+        self.assertEqual(service._dbusservice["/Auto/ChargerBackend"], "template_charger")
+        self.assertEqual(service._dbusservice["/Auto/StatusSource"], "unknown")
+        self.assertEqual(service._dbusservice["/Auto/ChargerFaultActive"], 0)
+        self.assertEqual(service._dbusservice["/Auto/ChargerWriteErrors"], 2)
+        self.assertEqual(service._dbusservice["/Auto/ChargerCurrentTarget"], 13.0)
+        self.assertEqual(service._dbusservice["/Auto/ChargerCurrentTargetAge"], 4)
+        self.assertEqual(service._dbusservice["/Auto/ErrorCount"], 2)
 
     def test_stale_helper_snapshot_prevents_auto_start_and_marks_grid_missing(self):
         service = self._make_update_service()

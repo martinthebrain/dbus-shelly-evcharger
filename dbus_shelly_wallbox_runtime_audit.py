@@ -16,6 +16,7 @@ from typing import Any, cast
 
 from dbus_shelly_wallbox_common import _fresh_confirmed_relay_output
 from dbus_shelly_wallbox_contracts import (
+    finite_float_or_none,
     normalized_auto_state_pair,
     normalized_worker_snapshot,
     sanitized_auto_metrics,
@@ -31,6 +32,18 @@ DefaultFactory = Callable[[], Any]
 
 
 class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
+    @staticmethod
+    def _backend_value(svc: Any, attribute_name: str, default: str = "") -> str:
+        """Return one normalized backend label for logs and audit payloads."""
+        raw_value = getattr(svc, attribute_name, default)
+        normalized = str(raw_value).strip() if raw_value is not None else ""
+        return normalized or default
+
+    @classmethod
+    def _charger_target_for_audit(cls, svc: Any) -> float | None:
+        """Return the last applied native-charger target for diagnostics."""
+        return finite_float_or_none(getattr(svc, "_charger_target_current_amps", None))
+
     @staticmethod
     def _callable_time_or_none(time_func: Any) -> float | None:
         """Return one numeric current time when a service helper provides it."""
@@ -131,6 +144,11 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
         float | None,
         float | None,
         float | None,
+        str,
+        str,
+        str,
+        str | None,
+        float | None,
     ]:
         """Return a de-duplication key for audit entries."""
         metrics = cls._normalized_auto_audit_metrics(svc)
@@ -154,6 +172,11 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
             cls._bucket_metric(metrics.get("start_threshold"), step=50.0),
             cls._bucket_metric(metrics.get("stop_threshold"), step=50.0),
             cls._bucket_metric(metrics.get("threshold_scale"), step=0.02),
+            cls._backend_value(svc, "backend_mode", "combined"),
+            cls._backend_value(svc, "meter_backend_type", "shelly_combined"),
+            cls._backend_value(svc, "switch_backend_type", "shelly_combined"),
+            cls._string_metric(getattr(svc, "charger_backend_type", None)),
+            cls._bucket_metric(cls._charger_target_for_audit(svc), step=1.0),
         )
 
     @staticmethod
@@ -187,6 +210,11 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
             f"learned_charge_power_state={fields['learned_charge_power_state']}\t"
             f"threshold_scale={fields['threshold_scale']}\t"
             f"threshold_mode={fields['threshold_mode']}\t"
+            f"backend_mode={fields['backend_mode']}\t"
+            f"meter_backend={fields['meter_backend']}\t"
+            f"switch_backend={fields['switch_backend']}\t"
+            f"charger_backend={fields['charger_backend']}\t"
+            f"charger_target={fields['charger_target']}\t"
             f"stop_alpha={fields['stop_alpha']}\t"
             f"stop_alpha_stage={fields['stop_alpha_stage']}\t"
             f"surplus_volatility={fields['surplus_volatility']}\t"
@@ -210,6 +238,11 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
             "learned_charge_power_state": ("learned_charge_power_state", None),
             "threshold_scale": ("threshold_scale", "{:.3f}"),
             "threshold_mode": ("threshold_mode", None),
+            "backend_mode": ("backend_mode", None),
+            "meter_backend": ("meter_backend", None),
+            "switch_backend": ("switch_backend", None),
+            "charger_backend": ("charger_backend", None),
+            "charger_target": ("charger_target", "{:.1f}A"),
             "stop_alpha": ("stop_alpha", "{:.2f}"),
             "stop_alpha_stage": ("stop_alpha_stage", None),
             "surplus_volatility": ("surplus_volatility", "{:.0f}W"),
@@ -219,7 +252,21 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
     @staticmethod
     def _normalized_auto_audit_metrics(svc: Any) -> dict[str, Any]:
         """Return one sanitized metric payload suitable for outward audit formatting."""
-        return sanitized_auto_metrics(getattr(svc, "_last_auto_metrics", {}) or {})
+        metrics = sanitized_auto_metrics(getattr(svc, "_last_auto_metrics", {}) or {})
+        metrics["backend_mode"] = _RuntimeSupportAuditMixin._backend_value(svc, "backend_mode", "combined")
+        metrics["meter_backend"] = _RuntimeSupportAuditMixin._backend_value(
+            svc,
+            "meter_backend_type",
+            "shelly_combined",
+        )
+        metrics["switch_backend"] = _RuntimeSupportAuditMixin._backend_value(
+            svc,
+            "switch_backend_type",
+            "shelly_combined",
+        )
+        metrics["charger_backend"] = getattr(svc, "charger_backend_type", None) or "na"
+        metrics["charger_target"] = _RuntimeSupportAuditMixin._charger_target_for_audit(svc)
+        return metrics
 
     @staticmethod
     def _auto_audit_value_text(value: Any, fmt: str | None) -> str:

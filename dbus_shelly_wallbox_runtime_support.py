@@ -19,6 +19,7 @@ import dbus
 import requests
 
 from dbus_shelly_wallbox_shared import write_text_atomically
+from dbus_shelly_wallbox_backend_types import normalize_phase_selection, normalize_phase_selection_tuple
 
 WorkerSnapshot = dict[str, Any]
 ErrorState = dict[str, int]
@@ -41,7 +42,7 @@ class RuntimeSupportController(
 ):
     """Encapsulate runtime caches, worker state, and observability/watchdog logic."""
 
-    SOURCE_ERROR_KEYS: tuple[str, ...] = ("dbus", "shelly", "pv", "battery", "grid")
+    SOURCE_ERROR_KEYS: tuple[str, ...] = ("dbus", "shelly", "charger", "pv", "battery", "grid")
     def __init__(
         self,
         service: Any,
@@ -117,10 +118,31 @@ class RuntimeSupportController(
             "_recovery_attempts": lambda: 0,
             "_last_auto_state": lambda: "idle",
             "_last_auto_state_code": lambda: 0,
+            "_last_status_source": lambda: "unknown",
+            "_last_charger_fault_active": lambda: 0,
             "_last_pm_status_at": lambda: None,
             "_last_pm_status_confirmed": lambda: False,
             "_last_confirmed_pm_status": lambda: None,
             "_last_confirmed_pm_status_at": lambda: None,
+            "_last_charger_state_enabled": lambda: None,
+            "_last_charger_state_current_amps": lambda: None,
+            "_last_charger_state_phase_selection": lambda: None,
+            "_last_charger_state_actual_current_amps": lambda: None,
+            "_last_charger_state_power_w": lambda: None,
+            "_last_charger_state_energy_kwh": lambda: None,
+            "_last_charger_state_status": lambda: None,
+            "_last_charger_state_fault": lambda: None,
+            "_last_charger_state_at": lambda: None,
+            "_charger_target_current_amps": lambda: None,
+            "_charger_target_current_applied_at": lambda: None,
+            "active_phase_selection": lambda: normalize_phase_selection("P1"),
+            "requested_phase_selection": lambda: normalize_phase_selection("P1"),
+            "supported_phase_selections": lambda: normalize_phase_selection_tuple(("P1",), ("P1",)),
+            "_phase_switch_pending_selection": lambda: None,
+            "_phase_switch_state": lambda: None,
+            "_phase_switch_requested_at": lambda: None,
+            "_phase_switch_stable_until": lambda: None,
+            "_phase_switch_resume_relay": lambda: False,
             "_last_pv_at": lambda: None,
             "_last_battery_soc_at": lambda: None,
             "_last_grid_at": lambda: None,

@@ -312,6 +312,6 @@ def cutover_confirmed_off(
     return confirmed_timestamp >= requested_timestamp
 
 
-def write_failure_is_reversible(relay_side_effect_started: bool) -> bool:
+def write_failure_is_reversible(side_effect_started: bool) -> bool:
     """Return whether one failed DBus write may still be rolled back safely."""
-    return not bool(relay_side_effect_started)
+    return not bool(side_effect_started)

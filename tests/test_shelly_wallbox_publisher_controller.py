@@ -12,6 +12,16 @@ class TestDbusPublishController(unittest.TestCase):
     def _age_seconds(_timestamp: Any, _now: float) -> float:
         return 0.0
 
+    @staticmethod
+    def _real_age_seconds(timestamp: Any, now: float) -> float:
+        if timestamp is None:
+            return -1.0
+        return float(now) - float(timestamp)
+
+    @staticmethod
+    def _never_stale(_now: float) -> bool:
+        return False
+
     def test_publish_path_handles_change_and_interval_throttling(self) -> None:
         service = SimpleNamespace(
             _dbusservice={},
@@ -90,6 +100,9 @@ class TestDbusPublishController(unittest.TestCase):
             virtual_autostart=1,
             virtual_enable=1,
             virtual_set_current=16.0,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1", "P1_P2"),
             min_current=6.0,
             max_current=16.0,
         )
@@ -108,6 +121,9 @@ class TestDbusPublishController(unittest.TestCase):
             virtual_autostart=1,
             virtual_enable=1,
             virtual_set_current=16.0,
+            requested_phase_selection="P1_P2",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1", "P1_P2"),
             min_current=6.0,
             max_current=16.0,
             learned_charge_power_state="stable",
@@ -124,6 +140,9 @@ class TestDbusPublishController(unittest.TestCase):
         values = controller._config_values(1, now=100.0)
 
         self.assertEqual(values["/SetCurrent"], 13.0)
+        self.assertEqual(values["/PhaseSelection"], "P1_P2")
+        self.assertEqual(values["/PhaseSelectionActive"], "P1")
+        self.assertEqual(values["/SupportedPhaseSelections"], "P1,P1_P2")
 
     def test_config_values_can_disable_learned_current_display(self) -> None:
         service = SimpleNamespace(
@@ -131,6 +150,9 @@ class TestDbusPublishController(unittest.TestCase):
             virtual_autostart=1,
             virtual_enable=1,
             virtual_set_current=16.0,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1",),
             min_current=6.0,
             max_current=16.0,
             display_learned_set_current=0,
@@ -149,12 +171,77 @@ class TestDbusPublishController(unittest.TestCase):
 
         self.assertEqual(values["/SetCurrent"], 16.0)
 
+    def test_config_values_keep_actual_set_current_when_native_charger_backend_is_present(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_enable=1,
+            virtual_set_current=11.0,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1",),
+            min_current=6.0,
+            max_current=16.0,
+            learned_charge_power_state="stable",
+            learned_charge_power_watts=2990.0,
+            learned_charge_power_updated_at=95.0,
+            learned_charge_power_phase="L1",
+            learned_charge_power_voltage=230.0,
+            phase="L1",
+            voltage_mode="phase",
+            auto_learn_charge_power_max_age_seconds=21600.0,
+            _charger_backend=SimpleNamespace(set_current=MagicMock()),
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        values = controller._config_values(1, now=100.0)
+
+        self.assertEqual(values["/SetCurrent"], 11.0)
+
+    def test_config_values_prefer_fresh_native_charger_readback_for_gui_state(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1",),
+            min_current=6.0,
+            max_current=16.0,
+            learned_charge_power_state="stable",
+            learned_charge_power_watts=2990.0,
+            learned_charge_power_updated_at=95.0,
+            learned_charge_power_phase="L1",
+            learned_charge_power_voltage=230.0,
+            phase="L1",
+            voltage_mode="phase",
+            auto_learn_charge_power_max_age_seconds=21600.0,
+            auto_shelly_soft_fail_seconds=10.0,
+            _charger_backend=SimpleNamespace(set_current=MagicMock()),
+            _last_charger_state_enabled=False,
+            _last_charger_state_current_amps=12.5,
+            _last_charger_state_status="paused",
+            _last_charger_state_fault="vehicle-sleeping",
+            _last_charger_state_at=99.5,
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        values = controller._config_values(1, now=100.0)
+
+        self.assertEqual(values["/Enable"], 0)
+        self.assertEqual(values["/StartStop"], 0)
+        self.assertEqual(values["/SetCurrent"], 12.5)
+
     def test_config_values_convert_stable_three_phase_line_voltage_to_display_current(self) -> None:
         service = SimpleNamespace(
             virtual_mode=1,
             virtual_autostart=1,
             virtual_enable=1,
             virtual_set_current=16.0,
+            requested_phase_selection="P1_P2_P3",
+            active_phase_selection="P1_P2_P3",
+            supported_phase_selections=("P1", "P1_P2_P3"),
             min_current=6.0,
             max_current=16.0,
             learned_charge_power_state="stable",
@@ -272,3 +359,62 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(service._dbusservice.restore_attempts, 1)
         service._mark_failure.assert_called_once_with("dbus")
         service._warning_throttled.assert_called_once()
+
+    def test_diagnostic_values_include_backend_and_charger_visibility(self) -> None:
+        service = SimpleNamespace(
+            _error_state={
+                "dbus": 1,
+                "shelly": 0,
+                "charger": 2,
+                "pv": 0,
+                "battery": 0,
+                "grid": 1,
+                "cache_hits": 3,
+            },
+            last_status=2,
+            _last_health_reason="running",
+            _last_health_code=5,
+            _last_auto_state="charging",
+            _last_auto_state_code=2,
+            _last_status_source="charger-fault",
+            backend_mode="split",
+            meter_backend_type="template_meter",
+            switch_backend_type="template_switch",
+            charger_backend_type="template_charger",
+            _charger_backend=SimpleNamespace(set_current=MagicMock()),
+            _charger_target_current_amps=13.0,
+            _charger_target_current_applied_at=96.0,
+            _last_charger_state_status="charging",
+            _last_charger_state_fault="",
+            _last_charger_fault_active=1,
+            _last_charger_state_at=97.0,
+            _is_update_stale=self._never_stale,
+            _recovery_attempts=4,
+            _last_confirmed_pm_status_at=95.0,
+            _last_pm_status_at=95.0,
+            _last_pm_status_confirmed=True,
+            _last_pv_at=98.0,
+            _last_battery_soc_at=97.0,
+            _last_grid_at=94.0,
+            _last_dbus_ok_at=99.0,
+            _last_successful_update_at=93.0,
+            started_at=90.0,
+        )
+        controller = DbusPublishController(service, self._real_age_seconds)
+
+        counter_values = controller._diagnostic_counter_values(100.0)
+        age_values = controller._diagnostic_age_values(100.0)
+
+        self.assertEqual(counter_values["/Auto/BackendMode"], "split")
+        self.assertEqual(counter_values["/Auto/MeterBackend"], "template_meter")
+        self.assertEqual(counter_values["/Auto/SwitchBackend"], "template_switch")
+        self.assertEqual(counter_values["/Auto/ChargerBackend"], "template_charger")
+        self.assertEqual(counter_values["/Auto/StatusSource"], "charger-fault")
+        self.assertEqual(counter_values["/Auto/ChargerStatus"], "charging")
+        self.assertEqual(counter_values["/Auto/ChargerFault"], "")
+        self.assertEqual(counter_values["/Auto/ChargerFaultActive"], 1)
+        self.assertEqual(counter_values["/Auto/ChargerWriteErrors"], 2)
+        self.assertEqual(counter_values["/Auto/ErrorCount"], 4)
+        self.assertEqual(counter_values["/Auto/ChargerCurrentTarget"], 13.0)
+        self.assertEqual(age_values["/Auto/ChargerCurrentTargetAge"], 4.0)
+        self.assertEqual(age_values["/Auto/LastChargerReadAge"], 3.0)

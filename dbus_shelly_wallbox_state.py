@@ -9,6 +9,11 @@ import time
 from typing import Any, Callable
 
 from dbus_shelly_wallbox_auto_policy import validate_auto_policy
+from dbus_shelly_wallbox_backend_types import (
+    PhaseSelection,
+    normalize_phase_selection,
+    normalize_phase_selection_tuple,
+)
 from dbus_shelly_wallbox_contracts import (
     finite_float_or_none,
     non_negative_float_or_none,
@@ -58,6 +63,11 @@ class ServiceStateController:
     def state_summary(self) -> str:
         """Return a compact runtime state summary for debug logging."""
         svc = self.service
+        charger_target = finite_float_or_none(getattr(svc, "_charger_target_current_amps", None))
+        charger_target_text = "na" if charger_target is None else f"{charger_target:.1f}"
+        charger_status = str(getattr(svc, "_last_charger_state_status", "") or "").strip() or "na"
+        charger_fault = str(getattr(svc, "_last_charger_state_fault", "") or "").strip() or "na"
+        status_source = str(getattr(svc, "_last_status_source", "") or "").strip() or "unknown"
         return (
             f"mode={getattr(svc, 'virtual_mode', 'na')} "
             f"enable={getattr(svc, 'virtual_enable', 'na')} "
@@ -65,6 +75,17 @@ class ServiceStateController:
             f"autostart={getattr(svc, 'virtual_autostart', 'na')} "
             f"cutover={int(bool(getattr(svc, '_auto_mode_cutover_pending', False)))} "
             f"ignore_offtime={int(bool(getattr(svc, '_ignore_min_offtime_once', False)))} "
+            f"phase={getattr(svc, 'active_phase_selection', 'na')} "
+            f"phase_req={getattr(svc, 'requested_phase_selection', 'na')} "
+            f"phase_switch={getattr(svc, '_phase_switch_state', 'na') or 'idle'} "
+            f"backend={getattr(svc, 'backend_mode', 'combined')} "
+            f"meter_backend={getattr(svc, 'meter_backend_type', 'shelly_combined')} "
+            f"switch_backend={getattr(svc, 'switch_backend_type', 'shelly_combined')} "
+            f"charger_backend={getattr(svc, 'charger_backend_type', None) or 'na'} "
+            f"charger_target={charger_target_text} "
+            f"charger_status={charger_status} "
+            f"charger_fault={charger_fault} "
+            f"status_source={status_source} "
             f"auto_state={getattr(svc, '_last_auto_state', 'na')} "
             f"health={getattr(svc, '_last_health_reason', 'na')}"
         )
@@ -112,6 +133,35 @@ class ServiceStateController:
                 "learned_charge_power_signature_checked_session_started_at",
                 None,
             ),
+            "active_phase_selection": self._normalize_runtime_phase_selection(
+                getattr(svc, "active_phase_selection", "P1")
+            ),
+            "requested_phase_selection": self._normalize_runtime_phase_selection(
+                getattr(svc, "requested_phase_selection", "P1")
+            ),
+            "supported_phase_selections": list(
+                self._normalize_runtime_supported_phase_selections(
+                    getattr(svc, "supported_phase_selections", ("P1",))
+                )
+            ),
+            "phase_switch_pending_selection": (
+                None
+                if getattr(svc, "_phase_switch_pending_selection", None) is None
+                else self._normalize_runtime_phase_selection(
+                    getattr(svc, "_phase_switch_pending_selection"),
+                    getattr(svc, "requested_phase_selection", "P1"),
+                )
+            ),
+            "phase_switch_state": self._normalize_phase_switch_state(
+                getattr(svc, "_phase_switch_state", None)
+            ),
+            "phase_switch_requested_at": self._coerce_optional_runtime_past_time(
+                getattr(svc, "_phase_switch_requested_at", None)
+            ),
+            "phase_switch_stable_until": self._coerce_optional_runtime_float(
+                getattr(svc, "_phase_switch_stable_until", None)
+            ),
+            "phase_switch_resume_relay": 1 if bool(getattr(svc, "_phase_switch_resume_relay", False)) else 0,
             "relay_last_changed_at": svc.relay_last_changed_at,
             "relay_last_off_at": svc.relay_last_off_at,
         }
@@ -147,6 +197,31 @@ class ServiceStateController:
     def _normalize_learned_charge_power_phase(value: object) -> str | None:
         """Return one supported learned-power phase signature."""
         return normalize_learning_phase(value)
+
+    @staticmethod
+    def _normalize_runtime_phase_selection(
+        value: object,
+        default: PhaseSelection = "P1",
+    ) -> PhaseSelection:
+        """Return one normalized service phase-selection state value."""
+        return normalize_phase_selection(value, default)
+
+    @staticmethod
+    def _normalize_runtime_supported_phase_selections(
+        value: object,
+        default: tuple[PhaseSelection, ...] = ("P1",),
+    ) -> tuple[PhaseSelection, ...]:
+        """Return normalized supported service phase selections."""
+        normalized: tuple[PhaseSelection, ...] = normalize_phase_selection_tuple(value, default)
+        return normalized
+
+    @staticmethod
+    def _normalize_phase_switch_state(value: object) -> str | None:
+        """Return one supported phase-switch orchestration state."""
+        state = str(value).strip().lower() if value is not None else ""
+        if state in {"waiting-relay-off", "stabilizing"}:
+            return state
+        return None
 
     def load_runtime_state(self) -> None:
         """Restore volatile runtime state from a RAM-backed file if present."""
@@ -231,6 +306,59 @@ class ServiceStateController:
             ),
             current_time,
         )
+        supported_phase_selections = self._normalize_runtime_supported_phase_selections(
+            state.get(
+                "supported_phase_selections",
+                getattr(svc, "supported_phase_selections", ("P1",)),
+            )
+        )
+        svc.supported_phase_selections = supported_phase_selections
+        default_phase_selection: PhaseSelection = supported_phase_selections[0]
+        svc.requested_phase_selection = self._normalize_runtime_phase_selection(
+            state.get(
+                "requested_phase_selection",
+                getattr(svc, "requested_phase_selection", default_phase_selection),
+            ),
+            default_phase_selection,
+        )
+        svc.active_phase_selection = self._normalize_runtime_phase_selection(
+            state.get(
+                "active_phase_selection",
+                getattr(svc, "active_phase_selection", svc.requested_phase_selection),
+            ),
+            svc.requested_phase_selection,
+        )
+        pending_phase_selection = state.get(
+            "phase_switch_pending_selection",
+            getattr(svc, "_phase_switch_pending_selection", None),
+        )
+        svc._phase_switch_pending_selection = (
+            None
+            if pending_phase_selection is None
+            else self._normalize_runtime_phase_selection(pending_phase_selection, svc.requested_phase_selection)
+        )
+        svc._phase_switch_state = self._normalize_phase_switch_state(
+            state.get("phase_switch_state", getattr(svc, "_phase_switch_state", None))
+        )
+        svc._phase_switch_requested_at = self._coerce_optional_runtime_past_time(
+            state.get("phase_switch_requested_at", getattr(svc, "_phase_switch_requested_at", None)),
+            current_time,
+        )
+        svc._phase_switch_stable_until = self._coerce_optional_runtime_float(
+            state.get("phase_switch_stable_until", getattr(svc, "_phase_switch_stable_until", None))
+        )
+        svc._phase_switch_resume_relay = bool(
+            self.coerce_runtime_int(
+                state.get("phase_switch_resume_relay", getattr(svc, "_phase_switch_resume_relay", False)),
+                1 if bool(getattr(svc, "_phase_switch_resume_relay", False)) else 0,
+            )
+        )
+        if svc._phase_switch_state is None or svc._phase_switch_pending_selection is None:
+            svc._phase_switch_pending_selection = None
+            svc._phase_switch_state = None
+            svc._phase_switch_requested_at = None
+            svc._phase_switch_stable_until = None
+            svc._phase_switch_resume_relay = False
         relay_last_changed_at = state.get("relay_last_changed_at", svc.relay_last_changed_at)
         relay_last_off_at = state.get("relay_last_off_at", svc.relay_last_off_at)
         svc.relay_last_changed_at = self._coerce_optional_runtime_past_time(relay_last_changed_at, current_time)

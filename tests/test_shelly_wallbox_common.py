@@ -235,6 +235,7 @@ class TestShellyWallboxCommon(unittest.TestCase):
         self.assertEqual(_status_label(None, 2), "Laden")
         self.assertEqual(_status_label(None, 999), "Unbekannt")
         self.assertEqual(_health_code("running"), 5)
+        self.assertEqual(_health_code("charger-fault"), 26)
         self.assertEqual(_health_code("unknown"), 99)
         self.assertEqual(_auto_state_code("charging"), 3)
         self.assertEqual(_auto_state_code("invalid"), 0)

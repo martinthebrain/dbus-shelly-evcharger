@@ -17,6 +17,7 @@ import configparser
 from collections.abc import Callable
 from typing import Any
 
+from dbus_shelly_wallbox_backend_config import load_backend_selection
 from dbus_shelly_wallbox_auto_policy import load_auto_policy_from_config
 from dbus_shelly_wallbox_split_mixins import _ComposableControllerMixin
 
@@ -59,6 +60,7 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
         svc.config = svc._load_config()
         defaults = svc.config["DEFAULT"]
         self._load_identity_config(defaults)
+        self._load_backend_config()
         self._load_auto_source_config(defaults)
         self._load_auto_policy_config(defaults)
         self._load_helper_and_timeout_config(defaults)
@@ -144,6 +146,18 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
         svc.auto_grid_recovery_start_seconds = float(
             _config_value(defaults, "AutoGridRecoveryStartSeconds", _config_value(defaults, "AutoStartDelaySeconds", 10))
         )
+
+    def _load_backend_config(self) -> None:
+        """Load normalized meter/switch/charger backend selection."""
+        svc = self.service
+        selection = load_backend_selection(svc.config)
+        svc.backend_mode = selection.mode
+        svc.meter_backend_type = selection.meter_type
+        svc.switch_backend_type = selection.switch_type
+        svc.charger_backend_type = selection.charger_type
+        svc.meter_backend_config_path = selection.meter_config_path
+        svc.switch_backend_config_path = selection.switch_config_path
+        svc.charger_backend_config_path = selection.charger_config_path
 
     def _load_auto_policy_config(self, defaults: configparser.SectionProxy) -> None:
         """Load Auto thresholds, seasonal windows, and timing policy."""

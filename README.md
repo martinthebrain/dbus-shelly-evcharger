@@ -195,6 +195,7 @@ Optional, depending on your setup:
 The comments in the config explain each group of settings:
 - service identity
 - Shelly access
+- backend / adapter selection
 - startup behavior
 - PV / battery / grid input selection
 - Auto-mode thresholds
@@ -236,6 +237,38 @@ tail -f /var/volatile/log/dbus-shelly-wallbox/current
 tail -f /var/volatile/log/dbus-shelly-wallbox/auto-reasons.log
 ```
 
+### Backend And Charger Diagnostics
+
+When split backends or a native charger backend are configured, the service now
+publishes a few extra diagnostic paths that make field troubleshooting much
+easier:
+
+- `/Auto/BackendMode`
+- `/Auto/MeterBackend`
+- `/Auto/SwitchBackend`
+- `/Auto/ChargerBackend`
+- `/Auto/ChargerWriteErrors`
+- `/Auto/ChargerCurrentTarget`
+- `/Auto/ChargerCurrentTargetAge`
+
+These values show which backend combination is actually active, whether charger
+writes are failing, and which current target was last pushed to a native
+charger backend.
+
+If you configure a native charger backend such as `template_charger`, the GUI
+field `/SetCurrent` keeps showing the real configured/current charger target.
+The learned-current display overlay is only used for relay-only setups where no
+native current control exists.
+
+For charger-native split setups, `MeterType=none` is now supported as long as a
+`ChargerType` is configured. In that mode the service can synthesize its online
+PM status from fresh charger readback instead of requiring a separate meter
+backend.
+
+`SwitchType=none` is also supported for charger-native split setups. In that
+case enable/disable control is routed directly through the charger backend, so
+no separate relay/switch adapter is required.
+
 ## Troubleshooting
 
 ### Service does not start
@@ -248,6 +281,20 @@ tail -f /var/volatile/log/dbus-shelly-wallbox/auto-reasons.log
 - First verify the DBus service exists: `dbus -y com.victronenergy.evcharger.http_60 /Connected GetValue`
   Replace `http_60` with your configured `DeviceInstance`, for example `http_61` if `DeviceInstance=61`.
 - If DBus works but the tile is still missing, restart the GUI with `svc -t /service/gui`
+
+### Native charger or backend behavior is unclear
+
+- Check the service log and the Auto audit log first:
+  - `tail -f /var/volatile/log/dbus-shelly-wallbox/current`
+  - `tail -f /var/volatile/log/dbus-shelly-wallbox/auto-reasons.log`
+- Inspect the backend-related DBus paths listed above.
+- If you use template adapters, validate them before enabling the service:
+
+  ```bash
+  python3 dbus_shelly_wallbox_backend_probe.py validate /data/etc/wallbox-meter.ini
+  python3 dbus_shelly_wallbox_backend_probe.py validate /data/etc/wallbox-switch.ini
+  python3 dbus_shelly_wallbox_backend_probe.py validate /data/etc/wallbox-charger.ini
+  ```
 
 ## Project Structure
 

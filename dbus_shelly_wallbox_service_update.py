@@ -148,6 +148,7 @@ class UpdateCycleMixin(ServiceControllerFactoryMixin):
 
     def _publish_online_update(
         self,
+        pm_status: dict[str, Any],
         status: int,
         energy_forward: float,
         relay_on: bool,
@@ -156,7 +157,7 @@ class UpdateCycleMixin(ServiceControllerFactoryMixin):
         now: float,
     ) -> None:
         self._ensure_update_controller()
-        self._update_controller.publish_online_update(status, energy_forward, relay_on, power, voltage, now)
+        self._update_controller.publish_online_update(pm_status, status, energy_forward, relay_on, power, voltage, now)
 
     def _complete_update_cycle(
         self,

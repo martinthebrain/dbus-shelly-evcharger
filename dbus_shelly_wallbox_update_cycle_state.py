@@ -9,12 +9,53 @@ state back to Venus OS.
 
 from __future__ import annotations
 
+import time
 from typing import Any
+from dbus_shelly_wallbox_contracts import finite_float_or_none
 from dbus_shelly_wallbox_split_mixins import _ComposableControllerMixin
 
 
 
 class _UpdateCycleStateMixin(_ComposableControllerMixin):
+    @staticmethod
+    def _charger_state_max_age_seconds(svc: Any) -> float:
+        """Return how fresh charger readback must be before it drives session state."""
+        candidates = [2.0]
+        worker_poll_interval = finite_float_or_none(getattr(svc, "_worker_poll_interval_seconds", None))
+        if worker_poll_interval is not None and worker_poll_interval > 0.0:
+            candidates.append(float(worker_poll_interval) * 2.0)
+        soft_fail_seconds = finite_float_or_none(getattr(svc, "auto_shelly_soft_fail_seconds", 10.0))
+        if soft_fail_seconds is not None and soft_fail_seconds > 0.0:
+            candidates.append(float(soft_fail_seconds))
+        return max(1.0, min(candidates))
+
+    @classmethod
+    def _fresh_charger_enabled_readback(cls, svc: Any, now: float | None = None) -> bool | None:
+        """Return fresh native charger enabled-state readback when available."""
+        if getattr(svc, "_charger_backend", None) is None:
+            return None
+        state_at = finite_float_or_none(getattr(svc, "_last_charger_state_at", None))
+        if state_at is None:
+            return None
+        raw_enabled = getattr(svc, "_last_charger_state_enabled", None)
+        if raw_enabled is None:
+            return None
+        current = float(now) if now is not None else time.time()
+        if abs(current - state_at) > cls._charger_state_max_age_seconds(svc):
+            return None
+        return bool(raw_enabled)
+
+    @classmethod
+    def _effective_session_enabled_state(
+        cls,
+        svc: Any,
+        relay_on: bool,
+        now: float | None = None,
+    ) -> bool:
+        """Return the best-known enabled state for session/UI calculations."""
+        charger_enabled = cls._fresh_charger_enabled_readback(svc, now)
+        return bool(relay_on) if charger_enabled is None else bool(charger_enabled)
+
     @staticmethod
     def _fallback_local_pm_status(pm_status: dict[str, Any], relay_on: bool) -> dict[str, Any]:
         """Return one synthesized local PM payload when no helper publish is available."""
@@ -67,13 +108,16 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
             # Startup manual state is best-effort. If Shelly access is currently
             # unavailable, we keep the live status and let the normal update loop
             # retry on the next cycle instead of failing startup.
-            svc._queue_relay_command(target_on, now)
+            self._apply_enabled_target(svc, target_on, now)
         except Exception as error:  # pylint: disable=broad-except
-            svc._mark_failure("shelly")
+            source_key = self._enable_control_source_key(svc)
+            source_label = self._enable_control_label(svc)
+            svc._mark_failure(source_key)
             svc._warning_throttled(
                 "startup-manual-target-failed",
                 svc.auto_shelly_soft_fail_seconds,
-                "Failed to queue startup manual relay state %s: %s",
+                "Failed to apply startup manual %s state %s: %s",
+                source_label,
                 target_on,
                 error,
                 exc_info=error,
@@ -92,8 +136,9 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
         if not hasattr(svc, "_last_health_code"):
             svc._last_health_code = self._health_code(svc._last_health_reason)
 
-    @staticmethod
+    @classmethod
     def session_state_from_status(
+        cls,
         svc: Any,
         status: int,
         current_total_energy: float,
@@ -101,7 +146,8 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
         now: float,
     ) -> tuple[int, float]:
         """Compute current session timing and energy values."""
-        session_active = status == 2 or (relay_on and svc.charging_started_at is not None)
+        effective_enabled = cls._effective_session_enabled_state(svc, relay_on, now)
+        session_active = status == 2 or (effective_enabled and svc.charging_started_at is not None)
         if session_active:
             if svc.charging_started_at is None:
                 svc.charging_started_at = now
@@ -109,16 +155,19 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
             charging_time = int(now - svc.charging_started_at)
             session_energy = round(max(0.0, current_total_energy - svc.energy_at_start), 3)
             return charging_time, session_energy
-        if not relay_on:
+        if not effective_enabled:
             svc.charging_started_at = None
             svc.energy_at_start = current_total_energy
             return 0, 0.0
         session_energy = round(max(0.0, current_total_energy - svc.energy_at_start), 3)
         return 0, session_energy
 
-    @staticmethod
-    def startstop_display_for_state(svc: Any, relay_on: bool) -> int:
+    @classmethod
+    def startstop_display_for_state(cls, svc: Any, relay_on: bool, now: float) -> int:
         """Return the GUI start/stop indicator for the current mode."""
+        charger_enabled = cls._fresh_charger_enabled_readback(svc, now)
+        if charger_enabled is not None:
+            return int(charger_enabled)
         svc.virtual_startstop = 1 if relay_on else 0
         if svc._mode_uses_auto_logic(svc.virtual_mode):
             return int(relay_on or svc.virtual_enable)
@@ -179,7 +228,7 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
             relay_on,
             now,
         )
-        startstop_display = self.startstop_display_for_state(svc, relay_on)
+        startstop_display = self.startstop_display_for_state(svc, relay_on, now)
         svc.last_status = status
         changed = self.publish_virtual_state_paths(
             current_total_energy,
