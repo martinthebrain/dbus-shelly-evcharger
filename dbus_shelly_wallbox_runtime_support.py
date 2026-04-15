@@ -30,9 +30,9 @@ DefaultFactory = Callable[[], Any]
 _TEST_PATCH_EXPORTS = (logging, os, dbus, write_text_atomically)
 
 
-from dbus_shelly_wallbox_runtime_audit import _RuntimeSupportAuditMixin
-from dbus_shelly_wallbox_runtime_health import _RuntimeSupportHealthMixin
-from dbus_shelly_wallbox_runtime_setup import _RuntimeSupportSetupMixin
+from shelly_wallbox.runtime.audit import _RuntimeSupportAuditMixin
+from shelly_wallbox.runtime.health import _RuntimeSupportHealthMixin
+from shelly_wallbox.runtime.setup import _RuntimeSupportSetupMixin
 
 
 class RuntimeSupportController(

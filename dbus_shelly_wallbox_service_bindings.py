@@ -1,18 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Compatibility facade for the wallbox service mixin modules."""
+"""Compatibility wrapper for ``shelly_wallbox.service.bindings``."""
 
-from __future__ import annotations
-
-from dbus_shelly_wallbox_service_auto import DbusAutoLogicMixin
-from dbus_shelly_wallbox_service_factory import ServiceControllerFactoryMixin
-from dbus_shelly_wallbox_service_runtime import RuntimeHelperMixin
-from dbus_shelly_wallbox_service_state_publish import StatePublishMixin
-from dbus_shelly_wallbox_service_update import UpdateCycleMixin
-
-__all__ = [
-    "DbusAutoLogicMixin",
-    "RuntimeHelperMixin",
-    "ServiceControllerFactoryMixin",
-    "StatePublishMixin",
-    "UpdateCycleMixin",
-]
+from shelly_wallbox.service.bindings import *  # noqa: F401,F403

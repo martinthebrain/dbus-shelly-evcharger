@@ -20,120 +20,66 @@ import os
 import signal
 import time
 from collections.abc import Callable
-from types import FrameType
 from typing import Any
 
 from vedbus import VeDbusService
+from shelly_wallbox.app.bootstrap_support import (
+    enable_fault_diagnostics as _enable_fault_diagnostics_impl,
+    install_signal_logging as _install_signal_logging_impl,
+    logging_level_from_config as _logging_level_from_config,
+    request_mainloop_quit as _request_mainloop_quit_impl,
+    run_service_loop as _run_service_loop_impl,
+    setup_dbus_mainloop as _setup_dbus_mainloop_impl,
+)
+from shelly_wallbox.bootstrap.config import (
+    MONTH_WINDOW_DEFAULTS as _MONTH_WINDOW_DEFAULTS,
+    _config_value as _config_value_impl,
+    _seasonal_month_windows as _seasonal_month_windows_impl,
+)
+
+MONTH_WINDOW_DEFAULTS = _MONTH_WINDOW_DEFAULTS
+_config_value = _config_value_impl
+_seasonal_month_windows = _seasonal_month_windows_impl
 
 
 PathSpec = tuple[Any, Callable[[Any, Any], str] | None]
 PathMap = dict[str, PathSpec]
 
-MONTH_WINDOW_DEFAULTS: dict[int, tuple[str, str]] = {
-    1: ("09:00", "16:30"),
-    2: ("08:30", "17:15"),
-    3: ("08:00", "18:00"),
-    4: ("07:30", "19:30"),
-    5: ("07:00", "20:30"),
-    6: ("07:00", "21:00"),
-    7: ("07:00", "21:00"),
-    8: ("07:00", "20:30"),
-    9: ("07:30", "19:30"),
-    10: ("08:00", "18:00"),
-    11: ("08:30", "17:00"),
-    12: ("09:00", "16:30"),
-}
-
-
-def _config_value(defaults: configparser.SectionProxy, key: str, fallback: Any) -> str:  # pragma: no cover
-    """Return a config value while keeping SectionProxy.get() mypy-friendly."""
-    return defaults.get(key, str(fallback))
-
-
-def _seasonal_month_windows(  # pragma: no cover
-    config: configparser.ConfigParser,
-    month_window_func: Callable[[configparser.ConfigParser, int, str, str], Any],
-) -> dict[int, Any]:
-    """Return the configured monthly daytime windows with sensible defaults."""
-    return {
-        month: month_window_func(config, month, start, end)
-        for month, (start, end) in MONTH_WINDOW_DEFAULTS.items()
-    }
-
-
-def _logging_level_from_config(config: configparser.ConfigParser, default: str = "INFO") -> str:
-    """Read the configured log level from the DEFAULT section."""
-    if "DEFAULT" not in config:
-        return default
-    return config["DEFAULT"].get("Logging", default).upper()
-
 
 def _enable_fault_diagnostics() -> None:
     """Enable crash diagnostics when available."""
-    try:
-        faulthandler.enable(all_threads=True)
-    except Exception as error:  # pylint: disable=broad-except
-        logging.debug("faulthandler.enable() unavailable: %s", error)
+    _enable_fault_diagnostics_impl(faulthandler, logging)
 
 
 def _install_signal_logging(quit_callback: Callable[[], None] | None = None) -> None:
     """Install signal handlers that log and request a clean GLib-loop shutdown."""
-
-    def _log_signal(signum: int, _frame: FrameType | None) -> None:
-        logging.warning("Received signal %s in pid=%s", signum, os.getpid())
-        if quit_callback is None:
-            return
-        try:
-            quit_callback()
-        except Exception as error:  # pylint: disable=broad-except
-            logging.debug("Unable to request shutdown after signal %s: %s", signum, error)
-
-    for signum in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None), getattr(signal, "SIGHUP", None)):
-        if signum is None:
-            continue
-        try:
-            signal.signal(signum, _log_signal)
-        except Exception as error:  # pylint: disable=broad-except
-            logging.debug("Unable to install signal handler for %s: %s", signum, error)
+    _install_signal_logging_impl(signal, logging, os, quit_callback)
 
 
 def _setup_dbus_mainloop() -> None:
     """Prepare dbus-python and GLib to run the Venus event loop."""
-    from dbus.mainloop.glib import DBusGMainLoop  # pylint: disable=import-error
-    import dbus.mainloop.glib as dbus_glib_mainloop  # pylint: disable=import-error
-
-    try:
-        dbus_glib_mainloop.threads_init()
-    except AttributeError:
-        logging.debug("dbus.mainloop.glib.threads_init() not available on this runtime")
-
-    DBusGMainLoop(set_as_default=True)
+    _setup_dbus_mainloop_impl(logging)
 
 
 def _request_mainloop_quit(gobject_module: Any, mainloop: Any) -> None:
     """Request a clean GLib shutdown, preferring idle_add when available."""
-    idle_add = getattr(gobject_module, "idle_add", None)
-    if callable(idle_add):
-        try:
-            idle_add(mainloop.quit)
-            return
-        except Exception as error:  # pylint: disable=broad-except
-            logging.debug("Unable to schedule GLib shutdown via idle_add: %s", error)
-    mainloop.quit()
+    _request_mainloop_quit_impl(gobject_module, mainloop, logging)
 
 
 def _run_service_loop(service_class: Callable[[], Any], gobject_module: Any) -> None:
     """Instantiate the service and enter the GLib main loop."""
-    service_class()
-    mainloop = gobject_module.MainLoop()
-    _install_signal_logging(lambda: _request_mainloop_quit(gobject_module, mainloop))
-    logging.info("Connected to dbus, and switching over to gobject.MainLoop() (= event based)")
-    mainloop.run()
+    _run_service_loop_impl(
+        service_class,
+        gobject_module,
+        _install_signal_logging,
+        _request_mainloop_quit,
+        logging,
+    )
 
 
-from dbus_shelly_wallbox_bootstrap_config import _ServiceBootstrapConfigMixin
-from dbus_shelly_wallbox_bootstrap_paths import _ServiceBootstrapPathMixin
-from dbus_shelly_wallbox_bootstrap_runtime import _ServiceBootstrapRuntimeMixin
+from shelly_wallbox.bootstrap.config import _ServiceBootstrapConfigMixin
+from shelly_wallbox.bootstrap.paths import _ServiceBootstrapPathMixin
+from shelly_wallbox.bootstrap.runtime import _ServiceBootstrapRuntimeMixin
 
 _TEST_PATCH_EXPORTS = (time,)
 

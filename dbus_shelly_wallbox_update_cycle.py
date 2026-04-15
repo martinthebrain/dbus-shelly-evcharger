@@ -21,9 +21,9 @@ from dbus_shelly_wallbox_contracts import (
     timestamp_age_within,
     timestamp_not_future,
 )
-from dbus_shelly_wallbox_update_cycle_learning import _UpdateCycleLearningMixin
-from dbus_shelly_wallbox_update_cycle_relay import _UpdateCycleRelayMixin
-from dbus_shelly_wallbox_update_cycle_state import _UpdateCycleStateMixin
+from shelly_wallbox.update.learning import _UpdateCycleLearningMixin
+from shelly_wallbox.update.relay import _UpdateCycleRelayMixin
+from shelly_wallbox.update.state import _UpdateCycleStateMixin
 
 
 class UpdateCycleController(

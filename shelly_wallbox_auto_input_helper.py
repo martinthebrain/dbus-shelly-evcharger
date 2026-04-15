@@ -35,9 +35,11 @@ def _as_bool(value: object, default: bool = False) -> bool:
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
-from shelly_wallbox_auto_input_helper_snapshot import _AutoInputHelperSnapshotMixin
-from shelly_wallbox_auto_input_helper_sources import _AutoInputHelperSourceMixin
-from shelly_wallbox_auto_input_helper_subscriptions import _AutoInputHelperSubscriptionMixin
+from shelly_wallbox.inputs.helper import (
+    _AutoInputHelperSnapshotMixin,
+    _AutoInputHelperSourceMixin,
+    _AutoInputHelperSubscriptionMixin,
+)
 
 
 class AutoInputHelper(

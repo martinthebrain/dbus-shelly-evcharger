@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import time
 
-from dbus_shelly_wallbox_auto_logic_decisions import _AutoDecisionDecisionMixin
-from dbus_shelly_wallbox_auto_logic_gates import _AutoDecisionGatesMixin
-from dbus_shelly_wallbox_auto_logic_samples import _AutoDecisionSamplesMixin
-from dbus_shelly_wallbox_auto_logic_types import NO_RELAY_DECISION, RelayDecisionState
+from shelly_wallbox.auto.logic_decisions import _AutoDecisionDecisionMixin
+from shelly_wallbox.auto.logic_gates import _AutoDecisionGatesMixin
+from shelly_wallbox.auto.logic_samples import _AutoDecisionSamplesMixin
+from shelly_wallbox.auto.logic_types import NO_RELAY_DECISION, RelayDecisionState
 
 # Tests patch `dbus_shelly_wallbox_auto_logic.time.time` to cover default clock paths.
 _TEST_PATCH_EXPORTS = (time,)
