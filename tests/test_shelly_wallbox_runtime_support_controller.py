@@ -57,6 +57,13 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertIsNone(service._relay_sync_expected_state)
         self.assertIsNone(service._auto_input_snapshot_last_captured_at)
         self.assertIsNone(service._auto_input_snapshot_version)
+        self.assertIsNone(service._last_charger_transport_reason)
+        self.assertIsNone(service._last_charger_transport_source)
+        self.assertIsNone(service._last_charger_transport_detail)
+        self.assertIsNone(service._last_charger_transport_at)
+        self.assertIsNone(service._charger_retry_reason)
+        self.assertIsNone(service._charger_retry_source)
+        self.assertIsNone(service._charger_retry_until)
 
         partial_service = SimpleNamespace(poll_interval_ms=500, deviceinstance=61)
         partial_controller = RuntimeSupportController(partial_service, self._age_zero, self._health_zero)
@@ -70,6 +77,13 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertIsNone(partial_service._last_confirmed_pm_status_at)
         self.assertIsNone(partial_service._auto_input_snapshot_last_captured_at)
         self.assertIsNone(partial_service._auto_input_snapshot_version)
+        self.assertIsNone(partial_service._last_charger_transport_reason)
+        self.assertIsNone(partial_service._last_charger_transport_source)
+        self.assertIsNone(partial_service._last_charger_transport_detail)
+        self.assertIsNone(partial_service._last_charger_transport_at)
+        self.assertIsNone(partial_service._charger_retry_reason)
+        self.assertIsNone(partial_service._charger_retry_source)
+        self.assertIsNone(partial_service._charger_retry_until)
 
         pm_status: dict[str, object] = {"output": True}
         snapshot: dict[str, object] = {"captured_at": 1.0, "pm_status": pm_status}
@@ -95,6 +109,7 @@ class TestRuntimeSupportController(unittest.TestCase):
         with patch("shelly_wallbox.runtime.support.time.time", return_value=100.0):
             partial_controller.delay_source_retry("dbus")
         self.assertFalse(partial_controller.source_retry_ready("dbus", 100.0))
+        self.assertEqual(partial_controller.source_retry_remaining("dbus", 102.0), 3)
         self.assertTrue(partial_controller.source_retry_ready("dbus", 106.0))
 
     def test_worker_snapshot_contract_normalizes_pm_invariants(self) -> None:
@@ -154,6 +169,22 @@ class TestRuntimeSupportController(unittest.TestCase):
             )
             self.assertIn(
                 "learned_charge_power_state=na",
+                controller._format_auto_audit_line(service, "waiting", False, 1000.0),
+            )
+            self.assertIn(
+                "charger_transport_reason=na",
+                controller._format_auto_audit_line(service, "waiting", False, 1000.0),
+            )
+            self.assertIn(
+                "charger_transport_source=na",
+                controller._format_auto_audit_line(service, "waiting", False, 1000.0),
+            )
+            self.assertIn(
+                "charger_retry_reason=na",
+                controller._format_auto_audit_line(service, "waiting", False, 1000.0),
+            )
+            self.assertIn(
+                "charger_retry_source=na",
                 controller._format_auto_audit_line(service, "waiting", False, 1000.0),
             )
             self.assertIn("phase_observed=na", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
@@ -459,6 +490,13 @@ class TestRuntimeSupportController(unittest.TestCase):
                 switch_backend_type="template_switch",
                 charger_backend_type="template_charger",
                 _charger_target_current_amps=13.0,
+                _last_charger_transport_reason="offline",
+                _last_charger_transport_source="read",
+                _last_charger_transport_detail="Modbus slave 1 did not respond",
+                _last_charger_transport_at=1000.0,
+                _charger_retry_reason="offline",
+                _charger_retry_source="read",
+                _charger_retry_until=1005.0,
                 _last_confirmed_pm_status={"_phase_selection": "P1_P2", "output": True},
                 _last_confirmed_pm_status_at=1000.0,
                 _phase_switch_mismatch_active=True,
@@ -501,6 +539,10 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertIn("switch_backend=template_switch", payload)
         self.assertIn("charger_backend=template_charger", payload)
         self.assertIn("charger_target=13.0A", payload)
+        self.assertIn("charger_transport_reason=offline", payload)
+        self.assertIn("charger_transport_source=read", payload)
+        self.assertIn("charger_retry_reason=offline", payload)
+        self.assertIn("charger_retry_source=read", payload)
         self.assertIn("phase_observed=P1_P2", payload)
         self.assertIn("phase_mismatch=1", payload)
         self.assertIn("switch_feedback=0", payload)

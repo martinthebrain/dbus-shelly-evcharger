@@ -17,6 +17,11 @@ from shelly_wallbox.backend.models import (
     normalize_phase_selection,
     normalize_phase_selection_tuple,
 )
+from shelly_wallbox.backend.modbus_transport import modbus_transport_issue_reason
+from shelly_wallbox.core.common import (
+    _charger_transport_retry_delay_seconds,
+    _fresh_charger_retry_until,
+)
 from shelly_wallbox.core.contracts import finite_float_or_none
 
 
@@ -133,6 +138,14 @@ class ShellyIoHost(Protocol):
     _last_charger_state_status: str | None
     _last_charger_state_fault: str | None
     _last_charger_state_at: float | None
+    _last_charger_transport_reason: str | None
+    _last_charger_transport_source: str | None
+    _last_charger_transport_detail: str | None
+    _last_charger_transport_at: float | None
+    _charger_retry_reason: str | None
+    _charger_retry_source: str | None
+    _charger_retry_until: float | None
+    _source_retry_after: dict[str, float]
     _last_switch_feedback_closed: bool | None
     _last_switch_interlock_ok: bool | None
     _last_switch_feedback_at: float | None
@@ -182,6 +195,15 @@ class ShellyIoHost(Protocol):
     ) -> None: ...
 
     def _mark_recovery(self, source_key: str, message: str, *args: object) -> None: ...
+
+    def _source_retry_ready(self, source_key: str, now: float) -> bool: ...
+
+    def _delay_source_retry(
+        self,
+        source_key: str,
+        now: float,
+        delay_seconds: float | None = None,
+    ) -> None: ...
 
     def _mark_relay_changed(self, relay_on: bool, changed_at: float) -> None: ...
 
@@ -506,15 +528,85 @@ class ShellyIoController:
             active=state.phase_selection,
         )
 
+    @staticmethod
+    def _charger_transport_detail(error: BaseException) -> str:
+        """Return one compact transport-error detail string for diagnostics."""
+        detail = str(error).strip()
+        return detail or error.__class__.__name__
+
+    def _remember_charger_transport_issue(
+        self,
+        reason: str,
+        source: str,
+        error: BaseException,
+        now: float | None = None,
+    ) -> None:
+        """Persist one normalized charger-transport issue for runtime diagnostics."""
+        svc = self.service
+        captured_at = self._runtime_now() if now is None else float(now)
+        svc._last_charger_transport_reason = str(reason).strip() or None
+        svc._last_charger_transport_source = str(source).strip() or None
+        svc._last_charger_transport_detail = self._charger_transport_detail(error)
+        svc._last_charger_transport_at = captured_at
+
+    def _clear_charger_transport_issue(self) -> None:
+        """Clear the remembered charger-transport issue after one successful request."""
+        svc = self.service
+        svc._last_charger_transport_reason = None
+        svc._last_charger_transport_source = None
+        svc._last_charger_transport_detail = None
+        svc._last_charger_transport_at = None
+
+    def _remember_charger_retry(
+        self,
+        reason: str,
+        source: str,
+        now: float | None = None,
+    ) -> None:
+        """Persist one charger retry-backoff window after a transport failure."""
+        svc = self.service
+        captured_at = self._runtime_now() if now is None else float(now)
+        delay_seconds = _charger_transport_retry_delay_seconds(svc, reason)
+        delay_retry = getattr(svc, "_delay_source_retry", None)
+        if callable(delay_retry):
+            delay_retry("charger", captured_at, delay_seconds)
+        elif isinstance(getattr(svc, "_source_retry_after", None), dict):
+            svc._source_retry_after["charger"] = captured_at + delay_seconds
+        svc._charger_retry_reason = str(reason).strip() or None
+        svc._charger_retry_source = str(source).strip() or None
+        svc._charger_retry_until = captured_at + delay_seconds
+
+    def _clear_charger_retry(self) -> None:
+        """Clear the remembered charger retry-backoff state after recovery."""
+        svc = self.service
+        svc._charger_retry_reason = None
+        svc._charger_retry_source = None
+        svc._charger_retry_until = None
+        if isinstance(getattr(svc, "_source_retry_after", None), dict):
+            svc._source_retry_after["charger"] = 0.0
+
+    def _charger_retry_active(self, now: float | None = None) -> bool:
+        """Return whether charger polling/writes are still inside one retry backoff."""
+        svc = self.service
+        current = self._runtime_now() if now is None else float(now)
+        return _fresh_charger_retry_until(svc, current) is not None
+
     def _read_charger_state_best_effort(self, now: float | None = None) -> ChargerState | None:
         """Read native charger state without letting charger issues break meter/switch polling."""
         svc = self.service
         backend = self._charger_state_backend()
         if backend is None:
             return None
+        current = self._runtime_now() if now is None else float(now)
+        if self._charger_retry_active(current):
+            return None
         try:
             state = cast(ChargerState, cast(Any, backend).read_charger_state())
         except Exception as error:  # pylint: disable=broad-except
+            transport_reason = modbus_transport_issue_reason(error)
+            if transport_reason is not None:
+                self._remember_charger_transport_issue(transport_reason, "read", error, current)
+                self._remember_charger_retry(transport_reason, "read", current)
             svc._mark_failure("charger")
             svc._warning_throttled(
                 "charger-state-failed",
@@ -524,7 +616,9 @@ class ShellyIoController:
                 exc_info=error,
             )
             return None
-        self._sync_charger_runtime_state(state, now=now)
+        self._sync_charger_runtime_state(state, now=current)
+        self._clear_charger_transport_issue()
+        self._clear_charger_retry()
         svc._mark_recovery("charger", "Charger state reads recovered")
         return state
 
@@ -1049,6 +1143,9 @@ class ShellyIoController:
             return
         source_key = self._split_enable_source_key()
         source_label = self._split_enable_source_label()
+        current = self._runtime_now()
+        if source_key == "charger" and self._charger_retry_active(current):
+            return
         try:
             backend = self._split_enable_backend()
             if backend is not None:
@@ -1061,6 +1158,11 @@ class ShellyIoController:
                     on=bool(target_on),
                 )
         except Exception as error:  # pylint: disable=broad-except
+            if source_key == "charger":
+                transport_reason = modbus_transport_issue_reason(error)
+                if transport_reason is not None:
+                    self._remember_charger_transport_issue(transport_reason, "enable", error, current)
+                    self._remember_charger_retry(transport_reason, "enable", current)
             svc._mark_failure(source_key)
             svc._warning_throttled(
                 f"worker-{source_key}-switch-failed",
@@ -1078,6 +1180,8 @@ class ShellyIoController:
         if source_key == "shelly":
             svc._mark_recovery("shelly", "Shelly relay writes recovered")
         else:
+            self._clear_charger_transport_issue()
+            self._clear_charger_retry()
             svc._mark_recovery(source_key, "%s writes recovered", source_label)
         svc._publish_local_pm_status(bool(target_on), completed_at)
 

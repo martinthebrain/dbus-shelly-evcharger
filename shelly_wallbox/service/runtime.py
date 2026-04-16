@@ -90,9 +90,16 @@ class RuntimeHelperMixin(ServiceControllerFactoryMixin):
         self._ensure_runtime_support_controller()
         return cast(bool, self._runtime_support_controller.source_retry_ready(source_key, now))
 
-    def _delay_source_retry(self, source_key: str, now: float) -> None:
+    def _source_retry_remaining(self, source_key: str, now: float | None = None) -> int:
         self._ensure_runtime_support_controller()
-        self._runtime_support_controller.delay_source_retry(source_key, now)
+        return cast(int, self._runtime_support_controller.source_retry_remaining(source_key, now))
+
+    def _delay_source_retry(self, source_key: str, now: float, delay_seconds: float | None = None) -> None:
+        self._ensure_runtime_support_controller()
+        if delay_seconds is None:
+            self._runtime_support_controller.delay_source_retry(source_key, now)
+            return
+        self._runtime_support_controller.delay_source_retry(source_key, now, delay_seconds)
 
     def _stop_auto_input_helper(self, force: bool = False) -> None:
         self._ensure_auto_input_supervisor()

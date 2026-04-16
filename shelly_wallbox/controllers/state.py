@@ -16,7 +16,14 @@ from shelly_wallbox.backend.models import (
     normalize_phase_selection_tuple,
     switch_feedback_mismatch,
 )
-from shelly_wallbox.core.common import evse_fault_reason
+from shelly_wallbox.core.common import (
+    _charger_retry_remaining_seconds,
+    _fresh_charger_retry_reason,
+    _fresh_charger_retry_source,
+    _fresh_charger_transport_reason,
+    _fresh_charger_transport_source,
+    evse_fault_reason,
+)
 from shelly_wallbox.core.contracts import (
     finite_float_or_none,
     non_negative_float_or_none,
@@ -216,6 +223,26 @@ class ServiceStateController:
         return "na" if reason is None else reason
 
     @staticmethod
+    def _summary_charger_transport_reason(svc: Any) -> str:
+        """Return the active charger-transport reason for debug summaries."""
+        return ServiceStateController._summary_text(_fresh_charger_transport_reason(svc, time.time()), "na")
+
+    @staticmethod
+    def _summary_charger_transport_source(svc: Any) -> str:
+        """Return the active charger-transport source for debug summaries."""
+        return ServiceStateController._summary_text(_fresh_charger_transport_source(svc, time.time()), "na")
+
+    @staticmethod
+    def _summary_charger_retry_reason(svc: Any) -> str:
+        """Return the active charger-retry reason for debug summaries."""
+        return ServiceStateController._summary_text(_fresh_charger_retry_reason(svc, time.time()), "na")
+
+    @staticmethod
+    def _summary_charger_retry_source(svc: Any) -> str:
+        """Return the active charger-retry source for debug summaries."""
+        return ServiceStateController._summary_text(_fresh_charger_retry_source(svc, time.time()), "na")
+
+    @staticmethod
     def _summary_recovery_active(svc: Any) -> str:
         """Return whether the broad Auto state currently represents recovery."""
         return "1" if str(getattr(svc, "_last_auto_state", "idle")) == "recovery" else "0"
@@ -254,6 +281,11 @@ class ServiceStateController:
             f"charger_target={self._summary_float(getattr(svc, '_charger_target_current_amps', None))}",
             f"charger_status={self._summary_text(getattr(svc, '_last_charger_state_status', ''), 'na')}",
             f"charger_fault={self._summary_text(getattr(svc, '_last_charger_state_fault', ''), 'na')}",
+            f"charger_transport={self._summary_charger_transport_reason(svc)}",
+            f"charger_transport_source={self._summary_charger_transport_source(svc)}",
+            f"charger_retry={self._summary_charger_retry_reason(svc)}",
+            f"charger_retry_source={self._summary_charger_retry_source(svc)}",
+            f"charger_retry_remaining={_charger_retry_remaining_seconds(svc, time.time())}",
             f"status_source={self._summary_text(getattr(svc, '_last_status_source', ''), 'unknown')}",
             f"fault={self._summary_fault_active(svc)}",
             f"fault_reason={self._summary_fault_reason(svc)}",

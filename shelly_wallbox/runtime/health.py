@@ -123,12 +123,21 @@ class _RuntimeSupportHealthMixin(_ComposableControllerMixin):
         current = time.time() if now is None else float(now)
         return current >= float(svc._source_retry_after.get(key, 0.0))
 
-    def delay_source_retry(self, key: str, now: float | None = None) -> None:
+    def source_retry_remaining(self, key: str, now: float | None = None) -> int:
+        """Return how many whole seconds remain before a source may be retried."""
+        svc = self.service
+        svc._ensure_observability_state()
+        current = time.time() if now is None else float(now)
+        retry_after = float(svc._source_retry_after.get(key, 0.0))
+        return max(0, int(retry_after - current)) if retry_after > current else 0
+
+    def delay_source_retry(self, key: str, now: float | None = None, delay_seconds: float | None = None) -> None:
         """Delay repeated retries for a failing data source to keep the main loop responsive."""
         svc = self.service
         svc._ensure_observability_state()
         current = time.time() if now is None else float(now)
-        delay = max(1.0, float(getattr(svc, "auto_dbus_backoff_base_seconds", 5.0)))
+        default_delay = max(1.0, float(getattr(svc, "auto_dbus_backoff_base_seconds", 5.0)))
+        delay = default_delay if delay_seconds is None else max(0.0, float(delay_seconds))
         svc._source_retry_after[key] = current + delay
 
 

@@ -41,6 +41,12 @@ class TestServiceStateController(unittest.TestCase):
             switch_backend_type="template_switch",
             charger_backend_type="template_charger",
             _charger_target_current_amps=13.0,
+            _last_charger_transport_reason="offline",
+            _last_charger_transport_source="read",
+            _last_charger_transport_at=100.0,
+            _charger_retry_reason="offline",
+            _charger_retry_source="read",
+            _charger_retry_until=105.0,
             _last_confirmed_pm_status={"_phase_selection": "P1", "output": True},
             _phase_switch_mismatch_active=True,
             _phase_switch_lockout_selection="P1_P2_P3",
@@ -98,6 +104,11 @@ class TestServiceStateController(unittest.TestCase):
         self.assertIn("charger_target=13.0", summary)
         self.assertIn("charger_status=charging", summary)
         self.assertIn("charger_fault=none", summary)
+        self.assertIn("charger_transport=offline", summary)
+        self.assertIn("charger_transport_source=read", summary)
+        self.assertIn("charger_retry=offline", summary)
+        self.assertIn("charger_retry_source=read", summary)
+        self.assertIn("charger_retry_remaining=5", summary)
         self.assertIn("status_source=charger-fault", summary)
         self.assertIn("fault=0", summary)
         self.assertIn("fault_reason=na", summary)

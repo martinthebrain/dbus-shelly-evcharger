@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from shelly_wallbox.backend.modbus_transport import ModbusSlaveOfflineError
 from shelly_wallbox.backend.shelly_io import ShellyIoController
 from shelly_wallbox.backend.models import MeterReading
 
@@ -579,6 +580,13 @@ class TestShellyIoController(unittest.TestCase):
         self.assertEqual(service._last_charger_state_power_w, 2830.0)
         self.assertEqual(service._last_charger_state_energy_kwh, 7.25)
         self.assertEqual(service._last_charger_state_at, 100.0)
+        self.assertIsNone(service._last_charger_transport_reason)
+        self.assertIsNone(service._last_charger_transport_source)
+        self.assertIsNone(service._last_charger_transport_detail)
+        self.assertIsNone(service._last_charger_transport_at)
+        self.assertIsNone(service._charger_retry_reason)
+        self.assertIsNone(service._charger_retry_source)
+        self.assertIsNone(service._charger_retry_until)
         self.assertEqual(service.active_phase_selection, "P1_P2")
         service._mark_recovery.assert_called_once_with("charger", "Charger state reads recovered")
 
@@ -588,7 +596,11 @@ class TestShellyIoController(unittest.TestCase):
             pm_component="Switch",
             pm_id=0,
             rpc_call=MagicMock(return_value={"output": False}),
-            _charger_backend=SimpleNamespace(read_charger_state=MagicMock(side_effect=RuntimeError("charger down"))),
+            _charger_backend=SimpleNamespace(
+                read_charger_state=MagicMock(
+                    side_effect=ModbusSlaveOfflineError("Modbus slave 1 on /dev/ttyS7 did not respond")
+                )
+            ),
             supported_phase_selections=("P1",),
             requested_phase_selection="P1",
             active_phase_selection="P1",
@@ -596,6 +608,8 @@ class TestShellyIoController(unittest.TestCase):
             _mark_failure=MagicMock(),
             _warning_throttled=MagicMock(),
             _mark_recovery=MagicMock(),
+            _time_now=MagicMock(return_value=100.0),
+            _source_retry_after={},
         )
 
         controller = ShellyIoController(service)
@@ -605,6 +619,42 @@ class TestShellyIoController(unittest.TestCase):
         service._mark_failure.assert_called_once_with("charger")
         service._warning_throttled.assert_called_once()
         service._mark_recovery.assert_not_called()
+        self.assertEqual(service._last_charger_transport_reason, "offline")
+        self.assertEqual(service._last_charger_transport_source, "read")
+        self.assertEqual(service._last_charger_transport_detail, "Modbus slave 1 on /dev/ttyS7 did not respond")
+        self.assertEqual(service._last_charger_transport_at, 100.0)
+        self.assertEqual(service._charger_retry_reason, "offline")
+        self.assertEqual(service._charger_retry_source, "read")
+        self.assertEqual(service._charger_retry_until, 120.0)
+        self.assertEqual(service._source_retry_after["charger"], 120.0)
+
+    def test_fetch_pm_status_skips_native_charger_readback_while_retry_backoff_is_active(self):
+        charger_backend = SimpleNamespace(read_charger_state=MagicMock())
+        service = SimpleNamespace(
+            host="192.168.178.76",
+            pm_component="Switch",
+            pm_id=0,
+            rpc_call=MagicMock(return_value={"output": False}),
+            _charger_backend=charger_backend,
+            supported_phase_selections=("P1",),
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            auto_shelly_soft_fail_seconds=10.0,
+            _mark_failure=MagicMock(),
+            _warning_throttled=MagicMock(),
+            _mark_recovery=MagicMock(),
+            _time_now=MagicMock(return_value=100.0),
+            _charger_retry_reason="offline",
+            _charger_retry_source="read",
+            _charger_retry_until=110.0,
+        )
+
+        controller = ShellyIoController(service)
+        pm_status = controller.fetch_pm_status()
+
+        self.assertFalse(pm_status["output"])
+        charger_backend.read_charger_state.assert_not_called()
+        service._mark_failure.assert_not_called()
 
     def test_phase_selection_requires_pause_uses_switch_capabilities(self):
         switch_backend = SimpleNamespace(

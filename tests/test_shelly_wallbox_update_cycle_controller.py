@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from shelly_wallbox.backend.factory import build_service_backends
+from shelly_wallbox.backend.modbus_transport import ModbusSlaveOfflineError
 from shelly_wallbox.backend.shelly_io import ShellyIoController
 from shelly_wallbox.auto.policy import AutoPolicy
 from shelly_wallbox.update.controller import UpdateCycleController
@@ -466,6 +467,7 @@ class TestUpdateCycleController(unittest.TestCase):
             _publish_local_pm_status=MagicMock(),
             _save_runtime_state=MagicMock(),
             _mark_failure=MagicMock(),
+            _mark_recovery=MagicMock(),
             _warning_throttled=MagicMock(),
             auto_shelly_soft_fail_seconds=10.0,
         )
@@ -650,6 +652,7 @@ class TestUpdateCycleController(unittest.TestCase):
             _publish_local_pm_status=MagicMock(),
             _save_runtime_state=MagicMock(),
             _mark_failure=MagicMock(),
+            _mark_recovery=MagicMock(),
             _warning_throttled=MagicMock(),
             auto_shelly_soft_fail_seconds=10.0,
         )
@@ -1329,6 +1332,7 @@ class TestUpdateCycleController(unittest.TestCase):
             _queue_relay_command=MagicMock(),
             _publish_local_pm_status=MagicMock(return_value=published_pm_status),
             _mark_failure=MagicMock(),
+            _mark_recovery=MagicMock(),
             _warning_throttled=MagicMock(),
         )
 
@@ -1343,6 +1347,34 @@ class TestUpdateCycleController(unittest.TestCase):
         service._publish_local_pm_status.assert_called_once_with(False, 123.0)
         self.assertIsNone(service._startup_manual_target)
         self.assertIs(updated, published_pm_status)
+
+    def test_apply_startup_manual_target_keeps_pending_target_while_charger_retry_is_active(self):
+        charger_backend = SimpleNamespace(set_enabled=MagicMock())
+        service = SimpleNamespace(
+            _startup_manual_target=False,
+            _charger_backend=charger_backend,
+            _charger_retry_reason="offline",
+            _charger_retry_source="enable",
+            _charger_retry_until=130.0,
+            virtual_mode=0,
+            auto_shelly_soft_fail_seconds=10.0,
+            _mode_uses_auto_logic=lambda mode: int(mode) in (1, 2),
+            _queue_relay_command=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _mark_failure=MagicMock(),
+            _mark_recovery=MagicMock(),
+            _warning_throttled=MagicMock(),
+        )
+
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+        pm_status = {"output": True, "apower": 1200.0, "current": 5.2}
+
+        updated = controller.apply_startup_manual_target(pm_status, 123.0)
+
+        charger_backend.set_enabled.assert_not_called()
+        service._publish_local_pm_status.assert_not_called()
+        self.assertIs(updated, pm_status)
+        self.assertIs(service._startup_manual_target, False)
 
     def test_apply_startup_manual_target_falls_back_to_local_pm_status_update_without_helper(self):
         service = SimpleNamespace(
@@ -2345,6 +2377,55 @@ class TestUpdateCycleController(unittest.TestCase):
 
         self.assertIsNone(controller.charger_health_override(service, 100.0))
 
+    def test_charger_health_override_prefers_fresh_transport_issue(self):
+        service = SimpleNamespace(
+            _charger_backend=SimpleNamespace(set_enabled=MagicMock()),
+            _last_charger_state_status="charging",
+            _last_charger_state_fault="",
+            _last_charger_state_at=100.0,
+            _last_charger_transport_reason="offline",
+            _last_charger_transport_source="read",
+            _last_charger_transport_detail="Modbus slave 1 did not respond",
+            _last_charger_transport_at=100.0,
+            auto_shelly_soft_fail_seconds=10.0,
+        )
+        controller = UpdateCycleController(
+            service,
+            _phase_values,
+            lambda reason: {
+                "charger-fault": 26,
+                "charger-transport-offline": 37,
+            }.get(reason, 99),
+        )
+
+        self.assertEqual(controller.charger_health_override(service, 100.0), "charger-transport-offline")
+
+    def test_charger_health_override_falls_back_to_active_retry_reason(self):
+        service = SimpleNamespace(
+            _charger_backend=SimpleNamespace(set_enabled=MagicMock()),
+            _last_charger_state_status="charging",
+            _last_charger_state_fault="",
+            _last_charger_state_at=100.0,
+            _last_charger_transport_reason=None,
+            _last_charger_transport_source=None,
+            _last_charger_transport_detail=None,
+            _last_charger_transport_at=None,
+            _charger_retry_reason="offline",
+            _charger_retry_source="read",
+            _charger_retry_until=105.0,
+            auto_shelly_soft_fail_seconds=10.0,
+        )
+        controller = UpdateCycleController(
+            service,
+            _phase_values,
+            lambda reason: {
+                "charger-fault": 26,
+                "charger-transport-offline": 37,
+            }.get(reason, 99),
+        )
+
+        self.assertEqual(controller.charger_health_override(service, 100.0), "charger-transport-offline")
+
     def test_switch_feedback_health_override_detects_interlock_block(self):
         service = SimpleNamespace(
             _last_switch_feedback_closed=True,
@@ -2704,7 +2785,46 @@ class TestUpdateCycleController(unittest.TestCase):
         self.assertEqual(service._charger_target_current_amps, 11.0)
 
     def test_apply_charger_current_target_marks_charger_failure_when_current_write_raises(self):
-        charger_backend = SimpleNamespace(set_current=MagicMock(side_effect=RuntimeError("boom")))
+        charger_backend = SimpleNamespace(
+            set_current=MagicMock(side_effect=ModbusSlaveOfflineError("Modbus slave 1 did not respond"))
+        )
+        service = SimpleNamespace(
+            _charger_backend=charger_backend,
+            auto_shelly_soft_fail_seconds=10.0,
+            _mark_failure=MagicMock(),
+            _mark_recovery=MagicMock(),
+            _warning_throttled=MagicMock(),
+            _delay_source_retry=MagicMock(),
+            virtual_set_current=11.0,
+            min_current=6.0,
+            max_current=16.0,
+            learned_charge_power_state="unknown",
+            learned_charge_power_watts=None,
+            learned_charge_power_updated_at=None,
+            learned_charge_power_phase="L1",
+            learned_charge_power_voltage=230.0,
+            phase="L1",
+            voltage_mode="phase",
+            auto_dbus_backoff_base_seconds=5.0,
+            auto_learn_charge_power_max_age_seconds=21600.0,
+            _charger_target_current_amps=None,
+            _charger_target_current_applied_at=None,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        applied = controller.apply_charger_current_target(service, True, 100.0, True)
+
+        self.assertIsNone(applied)
+        service._mark_failure.assert_called_once_with("charger")
+        service._warning_throttled.assert_called_once()
+        self.assertEqual(service._last_charger_transport_reason, "offline")
+        self.assertEqual(service._charger_retry_reason, "offline")
+        self.assertEqual(service._charger_retry_source, "current")
+        self.assertEqual(service._charger_retry_until, 120.0)
+        service._delay_source_retry.assert_called_once_with("charger", 100.0, 20.0)
+
+    def test_apply_charger_current_target_skips_write_while_retry_backoff_is_active(self):
+        charger_backend = SimpleNamespace(set_current=MagicMock())
         service = SimpleNamespace(
             _charger_backend=charger_backend,
             auto_shelly_soft_fail_seconds=10.0,
@@ -2722,16 +2842,18 @@ class TestUpdateCycleController(unittest.TestCase):
             phase="L1",
             voltage_mode="phase",
             auto_learn_charge_power_max_age_seconds=21600.0,
-            _charger_target_current_amps=None,
-            _charger_target_current_applied_at=None,
+            _charger_target_current_amps=9.0,
+            _charger_target_current_applied_at=95.0,
+            _charger_retry_reason="offline",
+            _charger_retry_source="current",
+            _charger_retry_until=105.0,
         )
         controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
 
         applied = controller.apply_charger_current_target(service, True, 100.0, True)
 
-        self.assertIsNone(applied)
-        service._mark_failure.assert_called_once_with("charger")
-        service._warning_throttled.assert_called_once()
+        self.assertEqual(applied, 9.0)
+        charger_backend.set_current.assert_not_called()
 
     def test_apply_relay_decision_marks_charger_failure_when_native_backend_raises(self):
         charger_backend = SimpleNamespace(set_enabled=MagicMock(side_effect=RuntimeError("boom")))
@@ -2766,6 +2888,45 @@ class TestUpdateCycleController(unittest.TestCase):
         service._mark_failure.assert_called_once_with("charger")
         service._warning_throttled.assert_called_once()
         service._queue_relay_command.assert_not_called()
+
+    def test_apply_relay_decision_skips_native_enable_while_charger_retry_is_active(self):
+        charger_backend = SimpleNamespace(set_enabled=MagicMock())
+        service = SimpleNamespace(
+            _last_auto_metrics={"surplus": None, "grid": None, "soc": None},
+            _last_health_reason="init",
+            auto_audit_log=False,
+            auto_shelly_soft_fail_seconds=10.0,
+            _charger_backend=charger_backend,
+            _queue_relay_command=MagicMock(),
+            _mark_failure=MagicMock(),
+            _mark_recovery=MagicMock(),
+            _warning_throttled=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _relay_sync_expected_state=None,
+            _relay_sync_requested_at=None,
+            _relay_sync_deadline_at=None,
+            _relay_sync_failure_reported=False,
+            _charger_retry_reason="offline",
+            _charger_retry_source="enable",
+            _charger_retry_until=105.0,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        relay_on, power, current, confirmed = controller.apply_relay_decision(
+            True,
+            False,
+            {"output": False, "_pm_confirmed": True},
+            1200.0,
+            5.2,
+            100.0,
+            False,
+        )
+
+        self.assertEqual((relay_on, power, current, confirmed), (False, 1200.0, 5.2, True))
+        charger_backend.set_enabled.assert_not_called()
+        service._queue_relay_command.assert_not_called()
+        service._mark_failure.assert_not_called()
+        service._warning_throttled.assert_not_called()
 
     def test_apply_relay_decision_does_not_requeue_same_target_while_confirmation_is_pending(self):
         service = SimpleNamespace(

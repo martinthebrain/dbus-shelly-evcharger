@@ -12,6 +12,8 @@ import time
 from datetime import datetime
 from typing import Any, cast
 
+from shelly_wallbox.core.contracts import finite_float_or_none
+
 PhaseMeasurements = dict[str, dict[str, float]]
 TimeWindow = tuple[int, int]
 MonthRange = tuple[int, int]
@@ -85,6 +87,12 @@ HEALTH_CODES: dict[str, int] = {
     "contactor-suspected-welded": 31,
     "contactor-lockout-open": 32,
     "contactor-lockout-welded": 33,
+    "charger-transport-busy": 34,
+    "charger-transport-ownership": 35,
+    "charger-transport-timeout": 36,
+    "charger-transport-offline": 37,
+    "charger-transport-response": 38,
+    "charger-transport-error": 39,
 }
 
 AUTO_STATE_CODES: dict[str, int] = {
@@ -111,6 +119,12 @@ RECOVERY_AUTO_REASONS = {
     "contactor-suspected-welded",
     "contactor-lockout-open",
     "contactor-lockout-welded",
+    "charger-transport-busy",
+    "charger-transport-ownership",
+    "charger-transport-timeout",
+    "charger-transport-offline",
+    "charger-transport-response",
+    "charger-transport-error",
 }
 BLOCKED_AUTO_REASONS = {
     "disabled",
@@ -214,6 +228,141 @@ def _reason_auto_state(base_reason: str) -> str | None:
         if base_reason in reasons:
             return state
     return None
+
+
+_CHARGER_TRANSPORT_REASONS = frozenset(
+    {"busy", "ownership", "timeout", "offline", "response", "error"}
+)
+
+
+def _normalized_charger_transport_reason(reason: Any) -> str | None:
+    """Return one normalized charger-transport reason label when supported."""
+    normalized = str(reason).strip().lower() if reason is not None else ""
+    return normalized if normalized in _CHARGER_TRANSPORT_REASONS else None
+
+
+def _charger_transport_health_reason(reason: Any) -> str | None:
+    """Return one health-reason label for the current charger-transport issue."""
+    normalized = _normalized_charger_transport_reason(reason)
+    return None if normalized is None else f"charger-transport-{normalized}"
+
+
+def _charger_transport_max_age_seconds(svc: Any) -> float:
+    """Return how fresh charger-transport diagnostics must be before they stay active."""
+    candidates = [2.0]
+    worker_poll_seconds = _positive_service_float(svc, "_worker_poll_interval_seconds")
+    if worker_poll_seconds is not None:
+        candidates.append(worker_poll_seconds * 2.0)
+    live_publish_seconds = _positive_service_float(svc, "_dbus_live_publish_interval_seconds")
+    if live_publish_seconds is not None:
+        candidates.append(live_publish_seconds * 2.0)
+    soft_fail_seconds = _positive_service_float(svc, "auto_shelly_soft_fail_seconds")
+    if soft_fail_seconds is not None:
+        candidates.append(soft_fail_seconds)
+    return max(1.0, min(candidates))
+
+
+def _charger_transport_now(svc: Any, now: float | int | None = None) -> float:
+    """Return the timestamp used to judge charger-transport freshness."""
+    if now is not None:
+        return float(now)
+    time_now = getattr(svc, "_time_now", None)
+    if callable(time_now):
+        raw_value = time_now()
+        if isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool):
+            return float(raw_value)
+    return time.time()
+
+
+def _fresh_charger_transport_timestamp(svc: Any, now: float | int | None = None) -> float | None:
+    """Return the timestamp of one still-fresh charger-transport issue."""
+    transport_at = _positive_service_float(svc, "_last_charger_transport_at")
+    if transport_at is None:
+        raw_value = getattr(svc, "_last_charger_transport_at", None)
+        if raw_value is None:
+            return None
+        try:
+            transport_at = float(raw_value)
+        except (TypeError, ValueError):
+            return None
+    current = _charger_transport_now(svc, now)
+    if abs(current - transport_at) > _charger_transport_max_age_seconds(svc):
+        return None
+    return float(transport_at)
+
+
+def _fresh_charger_transport_reason(svc: Any, now: float | int | None = None) -> str | None:
+    """Return one still-active charger-transport reason label when present."""
+    if _fresh_charger_transport_timestamp(svc, now) is None:
+        return None
+    return _normalized_charger_transport_reason(getattr(svc, "_last_charger_transport_reason", None))
+
+
+def _fresh_charger_transport_source(svc: Any, now: float | int | None = None) -> str | None:
+    """Return the current charger-transport source label when its issue is still active."""
+    if _fresh_charger_transport_timestamp(svc, now) is None:
+        return None
+    source = str(getattr(svc, "_last_charger_transport_source", "") or "").strip()
+    return source or None
+
+
+def _fresh_charger_transport_detail(svc: Any, now: float | int | None = None) -> str | None:
+    """Return the current charger-transport detail text when its issue is still active."""
+    if _fresh_charger_transport_timestamp(svc, now) is None:
+        return None
+    detail = str(getattr(svc, "_last_charger_transport_detail", "") or "").strip()
+    return detail or None
+
+
+def _charger_transport_retry_delay_seconds(svc: Any, reason: Any) -> float:
+    """Return one charger-specific retry delay for the given transport failure reason."""
+    normalized = _normalized_charger_transport_reason(reason)
+    base_delay_seconds = _positive_service_float(svc, "auto_dbus_backoff_base_seconds") or 5.0
+    soft_fail_seconds = _positive_service_float(svc, "auto_shelly_soft_fail_seconds") or 10.0
+    if normalized == "busy":
+        return max(1.0, min(base_delay_seconds, 5.0))
+    if normalized == "ownership":
+        return max(3.0, base_delay_seconds * 2.0)
+    if normalized == "timeout":
+        return max(2.0, min(soft_fail_seconds, max(base_delay_seconds * 1.5, 2.0)))
+    if normalized == "offline":
+        return max(10.0, soft_fail_seconds, base_delay_seconds * 4.0)
+    if normalized == "response":
+        return max(3.0, base_delay_seconds * 2.0)
+    return max(2.0, base_delay_seconds * 2.0)
+
+
+def _fresh_charger_retry_until(svc: Any, now: float | int | None = None) -> float | None:
+    """Return the active charger retry-until timestamp when one is still in the future."""
+    retry_until = finite_float_or_none(getattr(svc, "_charger_retry_until", None))
+    if retry_until is None:
+        return None
+    current = _charger_transport_now(svc, now)
+    return retry_until if retry_until > current else None
+
+
+def _fresh_charger_retry_reason(svc: Any, now: float | int | None = None) -> str | None:
+    """Return the active charger retry reason while a retry backoff is still active."""
+    if _fresh_charger_retry_until(svc, now) is None:
+        return None
+    return _normalized_charger_transport_reason(getattr(svc, "_charger_retry_reason", None))
+
+
+def _fresh_charger_retry_source(svc: Any, now: float | int | None = None) -> str | None:
+    """Return the active charger retry source while a retry backoff is still active."""
+    if _fresh_charger_retry_until(svc, now) is None:
+        return None
+    source = str(getattr(svc, "_charger_retry_source", "") or "").strip()
+    return source or None
+
+
+def _charger_retry_remaining_seconds(svc: Any, now: float | int | None = None) -> int:
+    """Return how many whole seconds remain until the next charger retry may run."""
+    retry_until = _fresh_charger_retry_until(svc, now)
+    if retry_until is None:
+        return -1
+    current = _charger_transport_now(svc, now)
+    return max(0, int(math.ceil(retry_until - current)))
 
 
 def _age_seconds(timestamp: float | int | None, now: float | int | None = None) -> int:

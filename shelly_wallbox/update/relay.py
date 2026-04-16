@@ -19,7 +19,16 @@ from shelly_wallbox.backend.models import (
     normalize_phase_selection,
     switch_feedback_mismatch,
 )
-from shelly_wallbox.core.common import evse_fault_reason, fresh_confirmed_relay_output
+from shelly_wallbox.backend.modbus_transport import modbus_transport_issue_reason
+from shelly_wallbox.core.common import (
+    _charger_transport_health_reason,
+    _charger_transport_retry_delay_seconds,
+    _fresh_charger_retry_reason,
+    _fresh_charger_retry_until,
+    _fresh_charger_transport_reason,
+    evse_fault_reason,
+    fresh_confirmed_relay_output,
+)
 from shelly_wallbox.core.contracts import (
     finite_float_or_none,
     normalize_learning_phase,
@@ -969,6 +978,70 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
             raise
 
     @staticmethod
+    def _charger_transport_detail(error: BaseException) -> str:
+        """Return one compact charger-transport detail string."""
+        detail = str(error).strip()
+        return detail or error.__class__.__name__
+
+    @classmethod
+    def _remember_charger_transport_issue(
+        cls,
+        svc: Any,
+        reason: str,
+        source: str,
+        error: BaseException,
+        now: float | None = None,
+    ) -> None:
+        """Persist one normalized charger-transport issue for health and diagnostics."""
+        captured_at = cls._charger_readback_now(svc, now)
+        cls._set_runtime_attr(svc, "_last_charger_transport_reason", str(reason).strip() or None)
+        cls._set_runtime_attr(svc, "_last_charger_transport_source", str(source).strip() or None)
+        cls._set_runtime_attr(svc, "_last_charger_transport_detail", cls._charger_transport_detail(error))
+        cls._set_runtime_attr(svc, "_last_charger_transport_at", captured_at)
+
+    @classmethod
+    def _clear_charger_transport_issue(cls, svc: Any) -> None:
+        """Clear the remembered charger-transport issue after one successful request."""
+        cls._set_runtime_attr(svc, "_last_charger_transport_reason", None)
+        cls._set_runtime_attr(svc, "_last_charger_transport_source", None)
+        cls._set_runtime_attr(svc, "_last_charger_transport_detail", None)
+        cls._set_runtime_attr(svc, "_last_charger_transport_at", None)
+
+    @classmethod
+    def _remember_charger_retry(
+        cls,
+        svc: Any,
+        reason: str,
+        source: str,
+        now: float | None = None,
+    ) -> None:
+        """Persist one charger retry-backoff window after a transport failure."""
+        captured_at = cls._charger_readback_now(svc, now)
+        delay_seconds = _charger_transport_retry_delay_seconds(svc, reason)
+        delay_retry = getattr(svc, "_delay_source_retry", None)
+        if callable(delay_retry):
+            delay_retry("charger", captured_at, delay_seconds)
+        elif isinstance(getattr(svc, "_source_retry_after", None), dict):
+            svc._source_retry_after["charger"] = captured_at + delay_seconds
+        cls._set_runtime_attr(svc, "_charger_retry_reason", str(reason).strip() or None)
+        cls._set_runtime_attr(svc, "_charger_retry_source", str(source).strip() or None)
+        cls._set_runtime_attr(svc, "_charger_retry_until", captured_at + delay_seconds)
+
+    @classmethod
+    def _clear_charger_retry(cls, svc: Any) -> None:
+        """Clear the remembered charger retry-backoff state after recovery."""
+        cls._set_runtime_attr(svc, "_charger_retry_reason", None)
+        cls._set_runtime_attr(svc, "_charger_retry_source", None)
+        cls._set_runtime_attr(svc, "_charger_retry_until", None)
+        if isinstance(getattr(svc, "_source_retry_after", None), dict):
+            svc._source_retry_after["charger"] = 0.0
+
+    @classmethod
+    def _charger_retry_active(cls, svc: Any, now: float | None = None) -> bool:
+        """Return whether charger operations are currently paused by retry backoff."""
+        return _fresh_charger_retry_until(svc, cls._charger_readback_now(svc, now)) is not None
+
+    @staticmethod
     def _base_contactor_fault_reason(reason: object) -> str | None:
         """Return one normalized heuristic contactor-fault reason when supported."""
         normalized = str(reason).strip() if reason is not None else ""
@@ -1078,6 +1151,12 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
     @classmethod
     def charger_health_override(cls, svc: Any, now: float | None = None) -> str | None:
         """Return one charger-derived health override when readback reports a hard fault."""
+        transport_reason = _fresh_charger_transport_reason(svc, now)
+        if transport_reason is not None:
+            return _charger_transport_health_reason(transport_reason)
+        retry_reason = _fresh_charger_retry_reason(svc, now)
+        if retry_reason is not None:
+            return _charger_transport_health_reason(retry_reason)
         if cls._charger_text_indicates_fault(cls._fresh_charger_text_readback(svc, "_last_charger_state_fault", now)):
             return "charger-fault"
         if cls._charger_text_indicates_fault(
@@ -1387,11 +1466,15 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         last_target: float | None,
     ) -> float | None:
         """Apply one new charger-current target and remember the result when successful."""
+        if cls._charger_retry_active(svc, now):
+            return last_target
         try:
             backend.set_current(float(target_amps))
         except Exception as error:  # pylint: disable=broad-except
-            cls._handle_charger_current_target_failure(svc, error)
+            cls._handle_charger_current_target_failure(svc, error, now)
             return last_target
+        cls._clear_charger_transport_issue(svc)
+        cls._clear_charger_retry(svc)
         return cls._remember_charger_current_target(svc, target_amps, now)
 
     @staticmethod
@@ -1411,8 +1494,12 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         return last_target is not None and abs(last_target - target_amps) < 0.01
 
     @staticmethod
-    def _handle_charger_current_target_failure(svc: Any, error: Exception) -> None:
+    def _handle_charger_current_target_failure(svc: Any, error: Exception, now: float | None = None) -> None:
         """Record one failed native charger-current write."""
+        transport_reason = modbus_transport_issue_reason(error)
+        if transport_reason is not None:
+            _UpdateCycleRelayMixin._remember_charger_transport_issue(svc, transport_reason, "current", error, now)
+            _UpdateCycleRelayMixin._remember_charger_retry(svc, transport_reason, "current", now)
         svc._mark_failure("charger")
         svc._warning_throttled(
             "charger-current-failed",
@@ -1431,13 +1518,19 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         return float(target_amps)
 
     @classmethod
-    def _apply_enabled_target(cls, svc: Any, enabled: bool, now: float) -> None:
+    def _apply_enabled_target(cls, svc: Any, enabled: bool, now: float) -> bool:
         """Apply one on/off target through the native charger when available."""
         backend = cls._charger_enable_backend(svc)
         if backend is not None:
+            if cls._charger_retry_active(svc, now):
+                return False
             cast(Any, backend).set_enabled(bool(enabled))
-            return
+            cls._clear_charger_transport_issue(svc)
+            cls._clear_charger_retry(svc)
+            svc._mark_recovery("charger", "Charger enable writes recovered")
+            return True
         svc._queue_relay_command(bool(enabled), now)
+        return True
 
     @staticmethod
     def _phase_tuple(raw_value: Any) -> tuple[float, float, float] | None:
@@ -1839,7 +1932,7 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
             svc._save_runtime_state()
             return relay_on, power, current, pm_confirmed
         try:
-            self._apply_enabled_target(svc, True, now)
+            applied = self._apply_enabled_target(svc, True, now)
         except Exception as error:  # pylint: disable=broad-except
             source_key = self._enable_control_source_key(svc)
             source_label = self._enable_control_label(svc)
@@ -1852,6 +1945,9 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
                 error,
                 exc_info=error,
             )
+            svc._save_runtime_state()
+            return relay_on, power, current, pm_confirmed
+        if not applied:
             svc._save_runtime_state()
             return relay_on, power, current, pm_confirmed
         relay_on = True
@@ -2076,9 +2172,11 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
             self.log_auto_relay_change(svc, desired_relay)
 
         try:
-            self._apply_enabled_target(svc, desired_relay, now)
+            applied = self._apply_enabled_target(svc, desired_relay, now)
         except Exception as error:  # pylint: disable=broad-except
             self._handle_relay_decision_failure(svc, error)
+            return relay_on, power, current, pm_confirmed
+        if not applied:
             return relay_on, power, current, pm_confirmed
 
         relay_on = desired_relay
@@ -2099,6 +2197,10 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         """Record one failed relay/enable backend request during Auto update."""
         source_key = cls._enable_control_source_key(svc)
         source_label = cls._enable_control_label(svc)
+        transport_reason = modbus_transport_issue_reason(error)
+        if source_key == "charger" and transport_reason is not None:
+            cls._remember_charger_transport_issue(svc, transport_reason, "enable", error)
+            cls._remember_charger_retry(svc, transport_reason, "enable")
         svc._mark_failure(source_key)
         svc._warning_throttled(
             f"{source_key}-switch-failed",

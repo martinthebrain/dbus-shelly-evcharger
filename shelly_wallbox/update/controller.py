@@ -823,6 +823,17 @@ class UpdateCycleController(
         charger_health = self.charger_health_override(svc, now)
         if charger_health is None:
             return None
+        if charger_health.startswith("charger-transport-"):
+            if bool(desired_relay) or bool(relay_on):
+                svc._warning_throttled(
+                    "charger-transport-blocking",
+                    svc.auto_shelly_soft_fail_seconds,
+                    "Native charger transport override %s blocks charging (source=%s detail=%s)",
+                    charger_health,
+                    getattr(svc, "_last_charger_transport_source", None),
+                    getattr(svc, "_last_charger_transport_detail", None),
+                )
+            return charger_health
         if bool(desired_relay) or bool(relay_on):
             svc._warning_throttled(
                 "charger-health-blocking",

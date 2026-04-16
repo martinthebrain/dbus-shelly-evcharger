@@ -11,7 +11,17 @@ from shelly_wallbox.backend.models import (
     effective_supported_phase_selections,
     switch_feedback_mismatch,
 )
-from shelly_wallbox.core.common import evse_fault_reason
+from shelly_wallbox.core.common import (
+    _charger_retry_remaining_seconds,
+    _fresh_charger_retry_reason,
+    _fresh_charger_retry_source,
+    _fresh_charger_retry_until,
+    _fresh_charger_transport_detail,
+    _fresh_charger_transport_reason,
+    _fresh_charger_transport_source,
+    _fresh_charger_transport_timestamp,
+    evse_fault_reason,
+)
 from shelly_wallbox.core.contracts import (
     displayable_confirmed_read_timestamp,
     finite_float_or_none,
@@ -377,6 +387,34 @@ class DbusPublishController:
         raw_value = getattr(self.service, attribute_name, None)
         text = str(raw_value).strip() if raw_value is not None else ""
         return text
+
+    def _charger_transport_active(self, now: float) -> int:
+        """Return whether a charger-transport issue is currently active."""
+        return int(_fresh_charger_transport_timestamp(self.service, now) is not None)
+
+    def _charger_transport_reason(self, now: float) -> str:
+        """Return the current charger-transport reason label for diagnostics."""
+        return self._diagnostic_text_value(_fresh_charger_transport_reason(self.service, now))
+
+    def _charger_transport_source(self, now: float) -> str:
+        """Return the current charger-transport source label for diagnostics."""
+        return self._diagnostic_text_value(_fresh_charger_transport_source(self.service, now))
+
+    def _charger_transport_detail(self, now: float) -> str:
+        """Return the current charger-transport detail text for diagnostics."""
+        return self._diagnostic_text_value(_fresh_charger_transport_detail(self.service, now))
+
+    def _charger_retry_active(self, now: float) -> int:
+        """Return whether charger retry backoff is currently active."""
+        return int(_fresh_charger_retry_until(self.service, now) is not None)
+
+    def _charger_retry_reason(self, now: float) -> str:
+        """Return the current charger retry reason label for diagnostics."""
+        return self._diagnostic_text_value(_fresh_charger_retry_reason(self.service, now))
+
+    def _charger_retry_source(self, now: float) -> str:
+        """Return the current charger retry source label for diagnostics."""
+        return self._diagnostic_text_value(_fresh_charger_retry_source(self.service, now))
 
     def _learned_charge_power_expired_for_display(self, now: float | None) -> bool:
         """Return True when learned charging power is too old for GUI display reuse."""
@@ -744,6 +782,13 @@ class DbusPublishController:
             "/Auto/ChargerStatus": self._charger_text_observed("_last_charger_state_status"),
             "/Auto/ChargerFault": self._charger_text_observed("_last_charger_state_fault"),
             "/Auto/ChargerFaultActive": int(bool(getattr(self.service, "_last_charger_fault_active", 0))),
+            "/Auto/ChargerTransportActive": self._charger_transport_active(now),
+            "/Auto/ChargerTransportReason": self._charger_transport_reason(now),
+            "/Auto/ChargerTransportSource": self._charger_transport_source(now),
+            "/Auto/ChargerTransportDetail": self._charger_transport_detail(now),
+            "/Auto/ChargerRetryActive": self._charger_retry_active(now),
+            "/Auto/ChargerRetryReason": self._charger_retry_reason(now),
+            "/Auto/ChargerRetrySource": self._charger_retry_source(now),
             "/Auto/ErrorCount": error_count,
             "/Auto/DbusReadErrors": int(error_state.get("dbus", 0)),
             "/Auto/ShellyReadErrors": int(error_state.get("shelly", 0)),
@@ -819,6 +864,10 @@ class DbusPublishController:
             "/Auto/LastChargerReadAge": self._age_seconds(
                 getattr(svc, "_last_charger_state_at", None), now
             ),
+            "/Auto/LastChargerTransportAge": self._age_seconds(
+                _fresh_charger_transport_timestamp(svc, now), now
+            ),
+            "/Auto/ChargerRetryRemaining": float(_charger_retry_remaining_seconds(svc, now)),
             "/Auto/LastSuccessfulUpdateAge": self._age_seconds(svc._last_successful_update_at, now),
             "/Auto/StaleSeconds": self._age_seconds(stale_base, now),
         }

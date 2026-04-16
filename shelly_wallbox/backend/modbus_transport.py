@@ -81,6 +81,23 @@ class ModbusSlaveOfflineError(ModbusTimeoutError):
     """Raised when repeated Modbus timeouts indicate an offline slave."""
 
 
+def modbus_transport_issue_reason(error: BaseException) -> str | None:
+    """Return one normalized reason label for a transport-layer Modbus failure."""
+    if isinstance(error, ModbusPortBusyError):
+        return "busy"
+    if isinstance(error, ModbusPortOwnershipError):
+        return "ownership"
+    if isinstance(error, ModbusSlaveOfflineError):
+        return "offline"
+    if isinstance(error, (ModbusTimeoutError, TimeoutError)):
+        return "timeout"
+    if isinstance(error, ModbusResponseError):
+        return "response"
+    if isinstance(error, (ModbusTransportError, OSError)):
+        return "error"
+    return None
+
+
 def _normalized_transport_kind(value: object) -> ModbusTransportKind:
     """Return one supported transport kind."""
     normalized = str(value).strip().lower()

@@ -129,7 +129,7 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
             # Startup manual state is best-effort. If Shelly access is currently
             # unavailable, we keep the live status and let the normal update loop
             # retry on the next cycle instead of failing startup.
-            self._apply_enabled_target(svc, target_on, now)
+            applied = self._apply_enabled_target(svc, target_on, now)
         except Exception as error:  # pylint: disable=broad-except
             source_key = self._enable_control_source_key(svc)
             source_label = self._enable_control_label(svc)
@@ -143,6 +143,8 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
                 error,
                 exc_info=error,
             )
+            return pm_status
+        if not applied:
             return pm_status
         svc._startup_manual_target = None
         return self._publish_startup_local_pm_status(pm_status, target_on, now)

@@ -14,7 +14,14 @@ import os
 import time
 from typing import Any, cast
 
-from shelly_wallbox.core.common import _fresh_confirmed_relay_output, evse_fault_reason
+from shelly_wallbox.core.common import (
+    _fresh_charger_retry_reason,
+    _fresh_charger_retry_source,
+    _fresh_charger_transport_reason,
+    _fresh_charger_transport_source,
+    _fresh_confirmed_relay_output,
+    evse_fault_reason,
+)
 from shelly_wallbox.backend.models import effective_supported_phase_selections, switch_feedback_mismatch
 from shelly_wallbox.core.contracts import (
     finite_float_or_none,
@@ -44,6 +51,26 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
     def _charger_target_for_audit(cls, svc: Any) -> float | None:
         """Return the last applied native-charger target for diagnostics."""
         return finite_float_or_none(getattr(svc, "_charger_target_current_amps", None))
+
+    @staticmethod
+    def _charger_transport_reason_for_audit(svc: Any) -> str | None:
+        """Return the active charger-transport reason when one is currently fresh."""
+        return _fresh_charger_transport_reason(svc)
+
+    @staticmethod
+    def _charger_transport_source_for_audit(svc: Any) -> str | None:
+        """Return the active charger-transport source when one is currently fresh."""
+        return _fresh_charger_transport_source(svc)
+
+    @staticmethod
+    def _charger_retry_reason_for_audit(svc: Any) -> str | None:
+        """Return the active charger-retry reason while retry backoff is active."""
+        return _fresh_charger_retry_reason(svc)
+
+    @staticmethod
+    def _charger_retry_source_for_audit(svc: Any) -> str | None:
+        """Return the active charger-retry source while retry backoff is active."""
+        return _fresh_charger_retry_source(svc)
 
     @staticmethod
     def _observed_phase_for_audit(svc: Any) -> str | None:
@@ -255,43 +282,7 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
         svc: Any,
         reason: str,
         cached: bool,
-    ) -> tuple[
-        str,
-        str | None,
-        int,
-        int,
-        int,
-        int,
-        int,
-        str | None,
-        str | None,
-        str | None,
-        str | None,
-        str | None,
-        float | None,
-        float | None,
-        float | None,
-        str,
-        str,
-        str,
-        str | None,
-        float | None,
-        str | None,
-        int,
-        str | None,
-        int,
-        str | None,
-        int,
-        int | None,
-        int | None,
-        int,
-        int,
-        str | None,
-        int,
-        int,
-        str | None,
-        int,
-    ]:
+    ) -> tuple[object, ...]:
         """Return a de-duplication key for audit entries."""
         metrics = cls._normalized_auto_audit_metrics(svc)
         state, _state_code = normalized_auto_state_pair(
@@ -319,6 +310,10 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
             cls._backend_value(svc, "switch_backend_type", "shelly_combined"),
             cls._string_metric(getattr(svc, "charger_backend_type", None)),
             cls._bucket_metric(cls._charger_target_for_audit(svc), step=1.0),
+            cls._string_metric(cls._charger_transport_reason_for_audit(svc)),
+            cls._string_metric(cls._charger_transport_source_for_audit(svc)),
+            cls._string_metric(cls._charger_retry_reason_for_audit(svc)),
+            cls._string_metric(cls._charger_retry_source_for_audit(svc)),
             cls._string_metric(cls._observed_phase_for_audit(svc)),
             int(cls._phase_mismatch_active_for_audit(svc)),
             cls._string_metric(cls._phase_lockout_target_for_audit(svc)),
@@ -372,6 +367,10 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
             f"switch_backend={fields['switch_backend']}\t"
             f"charger_backend={fields['charger_backend']}\t"
             f"charger_target={fields['charger_target']}\t"
+            f"charger_transport_reason={fields['charger_transport_reason']}\t"
+            f"charger_transport_source={fields['charger_transport_source']}\t"
+            f"charger_retry_reason={fields['charger_retry_reason']}\t"
+            f"charger_retry_source={fields['charger_retry_source']}\t"
             f"phase_observed={fields['phase_observed']}\t"
             f"phase_mismatch={fields['phase_mismatch']}\t"
             f"phase_lockout_target={fields['phase_lockout_target']}\t"
@@ -415,6 +414,10 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
             "switch_backend": ("switch_backend", None),
             "charger_backend": ("charger_backend", None),
             "charger_target": ("charger_target", "{:.1f}A"),
+            "charger_transport_reason": ("charger_transport_reason", None),
+            "charger_transport_source": ("charger_transport_source", None),
+            "charger_retry_reason": ("charger_retry_reason", None),
+            "charger_retry_source": ("charger_retry_source", None),
             "phase_observed": ("phase_observed", None),
             "phase_mismatch": ("phase_mismatch", None),
             "phase_lockout_target": ("phase_lockout_target", None),
@@ -453,6 +456,10 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
         )
         metrics["charger_backend"] = getattr(svc, "charger_backend_type", None) or "na"
         metrics["charger_target"] = _RuntimeSupportAuditMixin._charger_target_for_audit(svc)
+        metrics["charger_transport_reason"] = _RuntimeSupportAuditMixin._charger_transport_reason_for_audit(svc)
+        metrics["charger_transport_source"] = _RuntimeSupportAuditMixin._charger_transport_source_for_audit(svc)
+        metrics["charger_retry_reason"] = _RuntimeSupportAuditMixin._charger_retry_reason_for_audit(svc)
+        metrics["charger_retry_source"] = _RuntimeSupportAuditMixin._charger_retry_source_for_audit(svc)
         metrics["phase_observed"] = _RuntimeSupportAuditMixin._observed_phase_for_audit(svc)
         metrics["phase_mismatch"] = int(_RuntimeSupportAuditMixin._phase_mismatch_active_for_audit(svc))
         metrics["phase_lockout_target"] = _RuntimeSupportAuditMixin._phase_lockout_target_for_audit(svc)

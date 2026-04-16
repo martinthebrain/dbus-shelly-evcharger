@@ -408,6 +408,13 @@ class TestDbusPublishController(unittest.TestCase):
             _last_charger_state_fault="",
             _last_charger_fault_active=1,
             _last_charger_state_at=97.0,
+            _last_charger_transport_reason="offline",
+            _last_charger_transport_source="read",
+            _last_charger_transport_detail="Modbus slave 1 on /dev/ttyS7 did not respond",
+            _last_charger_transport_at=98.0,
+            _charger_retry_reason="offline",
+            _charger_retry_source="read",
+            _charger_retry_until=105.0,
             _last_confirmed_pm_status={"_phase_selection": "P1"},
             _last_switch_feedback_closed=False,
             _last_switch_interlock_ok=True,
@@ -459,6 +466,16 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(counter_values["/Auto/ChargerStatus"], "charging")
         self.assertEqual(counter_values["/Auto/ChargerFault"], "")
         self.assertEqual(counter_values["/Auto/ChargerFaultActive"], 1)
+        self.assertEqual(counter_values["/Auto/ChargerTransportActive"], 1)
+        self.assertEqual(counter_values["/Auto/ChargerTransportReason"], "offline")
+        self.assertEqual(counter_values["/Auto/ChargerTransportSource"], "read")
+        self.assertEqual(
+            counter_values["/Auto/ChargerTransportDetail"],
+            "Modbus slave 1 on /dev/ttyS7 did not respond",
+        )
+        self.assertEqual(counter_values["/Auto/ChargerRetryActive"], 1)
+        self.assertEqual(counter_values["/Auto/ChargerRetryReason"], "offline")
+        self.assertEqual(counter_values["/Auto/ChargerRetrySource"], "read")
         self.assertEqual(counter_values["/Auto/ChargerWriteErrors"], 2)
         self.assertEqual(counter_values["/Auto/ErrorCount"], 4)
         self.assertEqual(counter_values["/Auto/ChargerCurrentTarget"], 13.0)
@@ -490,6 +507,8 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(age_values["/Auto/ContactorLockoutAge"], -1.0)
         self.assertEqual(age_values["/Auto/LastSwitchFeedbackAge"], 4.0)
         self.assertEqual(age_values["/Auto/LastChargerReadAge"], 3.0)
+        self.assertEqual(age_values["/Auto/LastChargerTransportAge"], 2.0)
+        self.assertEqual(age_values["/Auto/ChargerRetryRemaining"], 5.0)
 
         service._last_health_reason = "contactor-suspected-welded"
         welded_counter_values = controller._diagnostic_counter_values(100.0)
