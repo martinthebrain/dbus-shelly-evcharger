@@ -388,6 +388,14 @@ class TestDbusPublishController(unittest.TestCase):
             _last_charger_state_fault="",
             _last_charger_fault_active=1,
             _last_charger_state_at=97.0,
+            _last_auto_metrics={
+                "phase_current": "P1",
+                "phase_target": "P1_P2",
+                "phase_reason": "phase-upshift-pending",
+                "phase_threshold_watts": 3010.0,
+                "phase_candidate": "P1_P2",
+            },
+            _auto_phase_target_since=92.0,
             _is_update_stale=self._never_stale,
             _recovery_attempts=4,
             _last_confirmed_pm_status_at=95.0,
@@ -416,5 +424,11 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(counter_values["/Auto/ChargerWriteErrors"], 2)
         self.assertEqual(counter_values["/Auto/ErrorCount"], 4)
         self.assertEqual(counter_values["/Auto/ChargerCurrentTarget"], 13.0)
+        self.assertEqual(counter_values["/Auto/PhaseCurrent"], "P1")
+        self.assertEqual(counter_values["/Auto/PhaseTarget"], "P1_P2")
+        self.assertEqual(counter_values["/Auto/PhaseReason"], "phase-upshift-pending")
+        self.assertEqual(counter_values["/Auto/PhaseThresholdWatts"], 3010.0)
+        self.assertEqual(counter_values["/Auto/PhaseCandidate"], "P1_P2")
         self.assertEqual(age_values["/Auto/ChargerCurrentTargetAge"], 4.0)
+        self.assertEqual(age_values["/Auto/PhaseCandidateAge"], 8.0)
         self.assertEqual(age_values["/Auto/LastChargerReadAge"], 3.0)

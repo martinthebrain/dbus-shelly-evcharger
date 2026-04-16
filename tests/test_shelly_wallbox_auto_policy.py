@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from shelly_wallbox.auto.policy import (
     AutoLearnChargePowerPolicy,
+    AutoPhasePolicy,
     AutoPolicy,
     AutoStopEwmaPolicy,
     AutoThresholdProfile,
@@ -75,6 +76,46 @@ class TestAutoPolicy(unittest.TestCase):
         self.assertEqual(policy.learn_charge_power.start_delay_seconds, 40.0)
         self.assertEqual(policy.learn_charge_power.window_seconds, 120.0)
         self.assertEqual(policy.learn_charge_power.max_age_seconds, 1800.0)
+
+    def test_auto_policy_from_config_reads_phase_switch_settings(self) -> None:
+        parser = configparser.ConfigParser()
+        parser.read_dict(
+            {
+                "DEFAULT": {
+                    "AutoPhaseSwitching": "0",
+                    "AutoPhaseUpshiftDelaySeconds": "90",
+                    "AutoPhaseDownshiftDelaySeconds": "45",
+                    "AutoPhaseUpshiftHeadroomWatts": "400",
+                    "AutoPhaseDownshiftMarginWatts": "200",
+                    "AutoPhasePreferLowestWhenIdle": "0",
+                }
+            }
+        )
+
+        policy = AutoPolicy.from_config(parser["DEFAULT"])
+
+        self.assertFalse(policy.phase.enabled)
+        self.assertEqual(policy.phase.upshift_delay_seconds, 90.0)
+        self.assertEqual(policy.phase.downshift_delay_seconds, 45.0)
+        self.assertEqual(policy.phase.upshift_headroom_watts, 400.0)
+        self.assertEqual(policy.phase.downshift_margin_watts, 200.0)
+        self.assertFalse(policy.phase.prefer_lowest_phase_when_idle)
+
+    def test_auto_phase_policy_clamps_negative_values(self) -> None:
+        policy = AutoPhasePolicy(
+            enabled=True,
+            upshift_delay_seconds=-1.0,
+            downshift_delay_seconds=-2.0,
+            upshift_headroom_watts=-3.0,
+            downshift_margin_watts=-4.0,
+        )
+
+        policy.clamp()
+
+        self.assertEqual(policy.upshift_delay_seconds, 0.0)
+        self.assertEqual(policy.downshift_delay_seconds, 0.0)
+        self.assertEqual(policy.upshift_headroom_watts, 0.0)
+        self.assertEqual(policy.downshift_margin_watts, 0.0)
 
     def test_learn_charge_policy_warns_about_semantically_odd_values(self) -> None:
         policy = AutoLearnChargePowerPolicy(

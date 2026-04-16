@@ -528,6 +528,24 @@ class DbusPublishController:
         target_amps = finite_float_or_none(getattr(service, "_charger_target_current_amps", None))
         return -1.0 if target_amps is None else float(target_amps)
 
+    @staticmethod
+    def _auto_metrics(service: Any) -> dict[str, Any]:
+        """Return the latest Auto metrics mapping used for outward diagnostics."""
+        metrics = getattr(service, "_last_auto_metrics", None)
+        return dict(cast(dict[str, Any], metrics)) if isinstance(metrics, dict) else {}
+
+    @classmethod
+    def _auto_phase_metric_text(cls, service: Any, field_name: str) -> str:
+        """Return one outward-safe Auto phase metric text value."""
+        raw_value = cls._auto_metrics(service).get(field_name)
+        return "" if raw_value is None else str(raw_value).strip()
+
+    @classmethod
+    def _auto_phase_metric_float(cls, service: Any, field_name: str) -> float:
+        """Return one outward-safe Auto phase metric float value or -1 when absent."""
+        value = finite_float_or_none(cls._auto_metrics(service).get(field_name))
+        return -1.0 if value is None else float(value)
+
     def publish_config_paths(self, startstop_display: int, now: float | None) -> bool:
         """Publish configuration-like EV charger paths only when they change."""
         self.ensure_state()
@@ -571,6 +589,11 @@ class DbusPublishController:
             "/Auto/GridReadErrors": int(error_state.get("grid", 0)),
             "/Auto/InputCacheHits": int(error_state.get("cache_hits", 0)),
             "/Auto/ChargerCurrentTarget": self._charger_current_target_value(self.service),
+            "/Auto/PhaseCurrent": self._auto_phase_metric_text(self.service, "phase_current"),
+            "/Auto/PhaseTarget": self._auto_phase_metric_text(self.service, "phase_target"),
+            "/Auto/PhaseReason": self._auto_phase_metric_text(self.service, "phase_reason"),
+            "/Auto/PhaseThresholdWatts": self._auto_phase_metric_float(self.service, "phase_threshold_watts"),
+            "/Auto/PhaseCandidate": self._auto_phase_metric_text(self.service, "phase_candidate"),
             "/Auto/Stale": 1 if self.service._is_update_stale(now) else 0,
             "/Auto/RecoveryAttempts": int(self.service._recovery_attempts),
         }
@@ -597,6 +620,9 @@ class DbusPublishController:
             "/Auto/LastDbusReadAge": self._age_seconds(svc._last_dbus_ok_at, now),
             "/Auto/ChargerCurrentTargetAge": self._age_seconds(
                 getattr(svc, "_charger_target_current_applied_at", None), now
+            ),
+            "/Auto/PhaseCandidateAge": self._age_seconds(
+                getattr(svc, "_auto_phase_target_since", None), now
             ),
             "/Auto/LastChargerReadAge": self._age_seconds(
                 getattr(svc, "_last_charger_state_at", None), now

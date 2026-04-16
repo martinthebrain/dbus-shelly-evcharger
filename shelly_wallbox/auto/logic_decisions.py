@@ -12,6 +12,7 @@ into many small helper methods. The high-level behavior is:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, cast
 
 from .logic_types import NO_RELAY_DECISION, RelayDecisionState
@@ -276,10 +277,11 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
         cached_inputs: bool,
     ) -> tuple[RelayDecisionState, float | None] | None:
         """Return the first terminal result from the pre-average mode/input gate chain."""
-        for decision_factory in (
+        decision_factories: tuple[Callable[[], RelayDecisionState], ...] = (
             lambda: self._pre_average_mode_decision(svc, relay_on, cached_inputs),
             lambda: self._pre_average_input_gate_decision(relay_on, grid_power, now, cached_inputs),
-        ):
+        )
+        for decision_factory in decision_factories:
             early_decision = self._pre_average_gate_result(decision_factory())
             if early_decision is not None:
                 return early_decision

@@ -143,6 +143,8 @@ class RuntimeSupportController(
             "_phase_switch_requested_at": lambda: None,
             "_phase_switch_stable_until": lambda: None,
             "_phase_switch_resume_relay": lambda: False,
+            "_auto_phase_target_candidate": lambda: None,
+            "_auto_phase_target_since": lambda: None,
             "_last_pv_at": lambda: None,
             "_last_battery_soc_at": lambda: None,
             "_last_grid_at": lambda: None,

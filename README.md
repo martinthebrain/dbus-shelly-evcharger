@@ -282,6 +282,25 @@ backend.
 case enable/disable control is routed directly through the charger backend, so
 no separate relay/switch adapter is required.
 
+Auto mode can now also switch between supported phase selections
+conservatively. The first implementation is intentionally simple:
+
+- it only runs in Auto mode
+- it switches stepwise between neighboring phase layouts
+- it uses delay plus surplus hysteresis before changing phase count
+- when a backend requires it, the existing relay-off pause and stabilization
+  sequence is reused instead of forcing a second switching path
+
+The corresponding tuning knobs live in
+[`deploy/venus/config.shelly_wallbox.ini`](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/dbus-shelly-evcharger/deploy/venus/config.shelly_wallbox.ini):
+
+- `AutoPhaseSwitching`
+- `AutoPhaseUpshiftDelaySeconds`
+- `AutoPhaseDownshiftDelaySeconds`
+- `AutoPhaseUpshiftHeadroomWatts`
+- `AutoPhaseDownshiftMarginWatts`
+- `AutoPhasePreferLowestWhenIdle`
+
 ## Troubleshooting
 
 ### Service does not start

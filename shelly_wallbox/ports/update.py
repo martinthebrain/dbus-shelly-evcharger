@@ -21,6 +21,7 @@ class UpdateCyclePort(_BaseServicePort):
 
     _ALLOWED_ATTRS = {
         "_startup_manual_target",
+        "auto_policy",
         "virtual_mode",
         "auto_shelly_soft_fail_seconds",
         "_last_health_reason",
@@ -56,6 +57,7 @@ class UpdateCyclePort(_BaseServicePort):
         "_last_auto_metrics",
         "charging_threshold_watts",
         "idle_status",
+        "min_current",
         "_last_successful_update_at",
         "_last_recovery_attempt_at",
         "last_update",
@@ -90,6 +92,8 @@ class UpdateCyclePort(_BaseServicePort):
         "_phase_switch_requested_at",
         "_phase_switch_stable_until",
         "_phase_switch_resume_relay",
+        "_auto_phase_target_candidate",
+        "_auto_phase_target_since",
     }
 
     _ALLOWED_METHODS = {
@@ -117,6 +121,7 @@ class UpdateCyclePort(_BaseServicePort):
         "_state_summary",
         "_peek_pending_relay_command",
         "_apply_phase_selection",
+        "_phase_selection_requires_pause",
     }
 
     _MUTABLE_ATTRS = {
@@ -169,6 +174,8 @@ class UpdateCyclePort(_BaseServicePort):
         "_phase_switch_requested_at",
         "_phase_switch_stable_until",
         "_phase_switch_resume_relay",
+        "_auto_phase_target_candidate",
+        "_auto_phase_target_since",
     }
 
     def __init__(self, service: Any) -> None:

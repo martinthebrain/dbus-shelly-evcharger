@@ -694,6 +694,7 @@ class UpdateCycleController(
             pm_status,
             relay_on,
             power,
+            voltage,
             current,
             pm_confirmed,
             now,
@@ -747,6 +748,7 @@ class UpdateCycleController(
         pm_status: dict[str, Any],
         relay_on: bool,
         power: float,
+        voltage: float,
         current: float,
         pm_confirmed: bool,
         now: float,
@@ -776,6 +778,16 @@ class UpdateCycleController(
         charger_health = self._blocking_charger_health(desired_relay, relay_on, now)
         if charger_health is not None:
             desired_relay = False
+        phase_override = self.maybe_apply_auto_phase_selection(
+            svc,
+            desired_relay,
+            relay_on,
+            voltage,
+            now,
+            auto_mode_active,
+        )
+        if phase_override is not None:
+            desired_relay = bool(phase_override)
         self.apply_charger_current_target(svc, desired_relay, now, auto_mode_active)
         return relay_on, power, current, pm_confirmed, desired_relay, charger_health
 

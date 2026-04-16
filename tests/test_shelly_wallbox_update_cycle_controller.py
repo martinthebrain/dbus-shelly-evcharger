@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from shelly_wallbox.auto.policy import AutoPolicy
 from shelly_wallbox.update.controller import UpdateCycleController
 
 
@@ -16,7 +17,122 @@ def _phase_values(total_power, voltage, _phase, _voltage_mode):
     }
 
 
+def _auto_phase_service(**overrides):
+    auto_policy = AutoPolicy()
+    auto_policy.phase.upshift_delay_seconds = 10.0
+    auto_policy.phase.downshift_delay_seconds = 5.0
+    auto_policy.phase.upshift_headroom_watts = 250.0
+    auto_policy.phase.downshift_margin_watts = 150.0
+    data = {
+        "auto_policy": auto_policy,
+        "supported_phase_selections": ("P1", "P1_P2"),
+        "requested_phase_selection": "P1",
+        "active_phase_selection": "P1",
+        "_last_auto_metrics": {"surplus": 3200.0},
+        "min_current": 6.0,
+        "voltage_mode": "phase",
+        "_phase_selection_requires_pause": MagicMock(return_value=True),
+        "_peek_pending_relay_command": MagicMock(return_value=(None, None)),
+        "_apply_phase_selection": MagicMock(return_value="P1"),
+        "_save_runtime_state": MagicMock(),
+        "_publish_local_pm_status": MagicMock(),
+        "_warning_throttled": MagicMock(),
+        "_mark_failure": MagicMock(),
+        "auto_shelly_soft_fail_seconds": 10.0,
+        "_worker_poll_interval_seconds": 1.0,
+        "relay_sync_timeout_seconds": 3.0,
+        "_last_confirmed_pm_status": {"output": False},
+        "_last_confirmed_pm_status_at": 99.0,
+        "_phase_switch_pending_selection": None,
+        "_phase_switch_state": None,
+        "_phase_switch_requested_at": None,
+        "_phase_switch_stable_until": None,
+        "_phase_switch_resume_relay": False,
+        "_auto_phase_target_candidate": None,
+        "_auto_phase_target_since": None,
+    }
+    data.update(overrides)
+    return SimpleNamespace(**data)
+
+
 class TestUpdateCycleController(unittest.TestCase):
+    def test_auto_phase_selection_tracks_candidate_before_staged_upshift(self):
+        service = _auto_phase_service(
+            _last_confirmed_pm_status={"output": True},
+            _last_confirmed_pm_status_at=99.5,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        override = controller.maybe_apply_auto_phase_selection(
+            service,
+            True,
+            True,
+            230.0,
+            100.0,
+            True,
+        )
+
+        self.assertIsNone(override)
+        self.assertEqual(service._auto_phase_target_candidate, "P1_P2")
+        self.assertEqual(service._auto_phase_target_since, 100.0)
+        self.assertIsNone(service._phase_switch_pending_selection)
+        self.assertEqual(service._last_auto_metrics["phase_reason"], "phase-upshift-pending")
+
+    def test_auto_phase_selection_stages_upshift_after_delay_when_relay_is_on(self):
+        service = _auto_phase_service(
+            _last_confirmed_pm_status={"output": True},
+            _last_confirmed_pm_status_at=99.5,
+            _auto_phase_target_candidate="P1_P2",
+            _auto_phase_target_since=80.0,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        override = controller.maybe_apply_auto_phase_selection(
+            service,
+            True,
+            True,
+            230.0,
+            100.0,
+            True,
+        )
+
+        self.assertFalse(override)
+        self.assertEqual(service.requested_phase_selection, "P1_P2")
+        self.assertEqual(service._phase_switch_pending_selection, "P1_P2")
+        self.assertEqual(service._phase_switch_state, "waiting-relay-off")
+        self.assertTrue(service._phase_switch_resume_relay)
+        service._save_runtime_state.assert_called_once()
+        service._publish_local_pm_status.assert_called_once_with(False, 100.0)
+
+    def test_auto_phase_selection_applies_lowest_phase_while_idle_after_delay(self):
+        service = _auto_phase_service(
+            requested_phase_selection="P1_P2",
+            active_phase_selection="P1_P2",
+            _last_auto_metrics={"surplus": 400.0},
+            _last_confirmed_pm_status={"output": False},
+            _last_confirmed_pm_status_at=99.5,
+            _auto_phase_target_candidate="P1",
+            _auto_phase_target_since=90.0,
+            _apply_phase_selection=MagicMock(return_value="P1"),
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        override = controller.maybe_apply_auto_phase_selection(
+            service,
+            False,
+            False,
+            230.0,
+            100.0,
+            True,
+        )
+
+        self.assertIsNone(override)
+        service._apply_phase_selection.assert_called_once_with("P1")
+        self.assertEqual(service.requested_phase_selection, "P1")
+        self.assertEqual(service.active_phase_selection, "P1")
+        self.assertIsNone(service._phase_switch_pending_selection)
+        service._save_runtime_state.assert_called_once()
+
     def test_normalize_learned_charge_power_state_falls_back_to_unknown_for_invalid_values(self):
         self.assertEqual(UpdateCycleController._normalize_learned_charge_power_state("weird"), "unknown")
 

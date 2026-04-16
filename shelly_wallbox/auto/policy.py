@@ -170,6 +170,44 @@ class AutoLearnChargePowerPolicy:
 
 
 @dataclass
+class AutoPhasePolicy:
+    """Policy for conservative automatic multi-phase selection in Auto mode."""
+
+    enabled: bool = True
+    upshift_delay_seconds: float = 120.0
+    downshift_delay_seconds: float = 30.0
+    upshift_headroom_watts: float = 250.0
+    downshift_margin_watts: float = 150.0
+    prefer_lowest_phase_when_idle: bool = True
+
+    @staticmethod
+    def _clamp_non_negative(value: float, label: str) -> float:
+        if value >= 0:
+            return float(value)
+        logging.warning("%s %s invalid, clamping to 0", label, value)
+        return 0.0
+
+    def clamp(self) -> None:
+        """Clamp invalid phase-switch settings to safe conservative defaults."""
+        self.upshift_delay_seconds = self._clamp_non_negative(
+            self.upshift_delay_seconds,
+            "AutoPhaseUpshiftDelaySeconds",
+        )
+        self.downshift_delay_seconds = self._clamp_non_negative(
+            self.downshift_delay_seconds,
+            "AutoPhaseDownshiftDelaySeconds",
+        )
+        self.upshift_headroom_watts = self._clamp_non_negative(
+            self.upshift_headroom_watts,
+            "AutoPhaseUpshiftHeadroomWatts",
+        )
+        self.downshift_margin_watts = self._clamp_non_negative(
+            self.downshift_margin_watts,
+            "AutoPhaseDownshiftMarginWatts",
+        )
+
+
+@dataclass
 class AutoPolicy:
     """Centralized Auto-mode policy used by bootstrap, validation, and logic."""
 
@@ -189,6 +227,7 @@ class AutoPolicy:
     stop_surplus_delay_seconds: float = 10.0
     ewma: AutoStopEwmaPolicy = field(default_factory=AutoStopEwmaPolicy)
     learn_charge_power: AutoLearnChargePowerPolicy = field(default_factory=AutoLearnChargePowerPolicy)
+    phase: AutoPhasePolicy = field(default_factory=AutoPhasePolicy)
 
     @classmethod
     def from_config(cls, defaults: SectionProxy) -> AutoPolicy:
@@ -232,6 +271,17 @@ class AutoPolicy:
                 window_seconds=float(_config_value(defaults, "AutoLearnChargePowerWindowSeconds", 180)),
                 max_age_seconds=float(_config_value(defaults, "AutoLearnChargePowerMaxAgeSeconds", 21600)),
             ),
+            phase=AutoPhasePolicy(
+                enabled=defaults.get("AutoPhaseSwitching", "1").strip().lower() in ("1", "true", "yes", "on"),
+                upshift_delay_seconds=float(_config_value(defaults, "AutoPhaseUpshiftDelaySeconds", 120)),
+                downshift_delay_seconds=float(_config_value(defaults, "AutoPhaseDownshiftDelaySeconds", 30)),
+                upshift_headroom_watts=float(_config_value(defaults, "AutoPhaseUpshiftHeadroomWatts", 250)),
+                downshift_margin_watts=float(_config_value(defaults, "AutoPhaseDownshiftMarginWatts", 150)),
+                prefer_lowest_phase_when_idle=defaults.get(
+                    "AutoPhasePreferLowestWhenIdle",
+                    "1",
+                ).strip().lower() in ("1", "true", "yes", "on"),
+            ),
         )
 
     @classmethod
@@ -271,6 +321,14 @@ class AutoPolicy:
                 start_delay_seconds=float(getattr(svc, "auto_learn_charge_power_start_delay_seconds", 30.0)),
                 window_seconds=float(getattr(svc, "auto_learn_charge_power_window_seconds", 180.0)),
                 max_age_seconds=float(getattr(svc, "auto_learn_charge_power_max_age_seconds", 21600.0)),
+            ),
+            phase=AutoPhasePolicy(
+                enabled=bool(getattr(svc, "auto_phase_switching_enabled", True)),
+                upshift_delay_seconds=float(getattr(svc, "auto_phase_upshift_delay_seconds", 120.0)),
+                downshift_delay_seconds=float(getattr(svc, "auto_phase_downshift_delay_seconds", 30.0)),
+                upshift_headroom_watts=float(getattr(svc, "auto_phase_upshift_headroom_watts", 250.0)),
+                downshift_margin_watts=float(getattr(svc, "auto_phase_downshift_margin_watts", 150.0)),
+                prefer_lowest_phase_when_idle=bool(getattr(svc, "auto_phase_prefer_lowest_when_idle", True)),
             ),
         )
 
@@ -378,6 +436,7 @@ class AutoPolicy:
         self.high_soc_profile.clamp("AutoHighSocStartSurplusWatts", "AutoHighSocStopSurplusWatts")
         self.ewma.clamp()
         self.learn_charge_power.clamp()
+        self.phase.clamp()
         self._warn_semantic_relationships()
 
     def apply_to_service(self, svc: Any) -> None:
@@ -407,6 +466,12 @@ class AutoPolicy:
         svc.auto_learn_charge_power_start_delay_seconds = float(self.learn_charge_power.start_delay_seconds)
         svc.auto_learn_charge_power_window_seconds = float(self.learn_charge_power.window_seconds)
         svc.auto_learn_charge_power_max_age_seconds = float(self.learn_charge_power.max_age_seconds)
+        svc.auto_phase_switching_enabled = bool(self.phase.enabled)
+        svc.auto_phase_upshift_delay_seconds = float(self.phase.upshift_delay_seconds)
+        svc.auto_phase_downshift_delay_seconds = float(self.phase.downshift_delay_seconds)
+        svc.auto_phase_upshift_headroom_watts = float(self.phase.upshift_headroom_watts)
+        svc.auto_phase_downshift_margin_watts = float(self.phase.downshift_margin_watts)
+        svc.auto_phase_prefer_lowest_when_idle = bool(self.phase.prefer_lowest_phase_when_idle)
 
     def resolve_threshold_profile(
         self,
