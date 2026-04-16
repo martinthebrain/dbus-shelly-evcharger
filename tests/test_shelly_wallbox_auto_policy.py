@@ -87,6 +87,9 @@ class TestAutoPolicy(unittest.TestCase):
                     "AutoPhaseDownshiftDelaySeconds": "45",
                     "AutoPhaseUpshiftHeadroomWatts": "400",
                     "AutoPhaseDownshiftMarginWatts": "200",
+                    "AutoPhaseMismatchRetrySeconds": "600",
+                    "AutoPhaseMismatchLockoutCount": "4",
+                    "AutoPhaseMismatchLockoutSeconds": "2400",
                     "AutoPhasePreferLowestWhenIdle": "0",
                 }
             }
@@ -99,6 +102,9 @@ class TestAutoPolicy(unittest.TestCase):
         self.assertEqual(policy.phase.downshift_delay_seconds, 45.0)
         self.assertEqual(policy.phase.upshift_headroom_watts, 400.0)
         self.assertEqual(policy.phase.downshift_margin_watts, 200.0)
+        self.assertEqual(policy.phase.mismatch_retry_seconds, 600.0)
+        self.assertEqual(policy.phase.mismatch_lockout_count, 4)
+        self.assertEqual(policy.phase.mismatch_lockout_seconds, 2400.0)
         self.assertFalse(policy.phase.prefer_lowest_phase_when_idle)
 
     def test_auto_phase_policy_clamps_negative_values(self) -> None:
@@ -108,6 +114,9 @@ class TestAutoPolicy(unittest.TestCase):
             downshift_delay_seconds=-2.0,
             upshift_headroom_watts=-3.0,
             downshift_margin_watts=-4.0,
+            mismatch_retry_seconds=-5.0,
+            mismatch_lockout_count=-6,
+            mismatch_lockout_seconds=-7.0,
         )
 
         policy.clamp()
@@ -116,6 +125,9 @@ class TestAutoPolicy(unittest.TestCase):
         self.assertEqual(policy.downshift_delay_seconds, 0.0)
         self.assertEqual(policy.upshift_headroom_watts, 0.0)
         self.assertEqual(policy.downshift_margin_watts, 0.0)
+        self.assertEqual(policy.mismatch_retry_seconds, 0.0)
+        self.assertEqual(policy.mismatch_lockout_count, 0)
+        self.assertEqual(policy.mismatch_lockout_seconds, 0.0)
 
     def test_learn_charge_policy_warns_about_semantically_odd_values(self) -> None:
         policy = AutoLearnChargePowerPolicy(

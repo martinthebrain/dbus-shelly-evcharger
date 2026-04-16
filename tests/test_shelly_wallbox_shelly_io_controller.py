@@ -141,6 +141,51 @@ class TestShellyIoController(unittest.TestCase):
         self.assertEqual(service.supported_phase_selections, ("P1", "P1_P2"))
         self.assertEqual(service.requested_phase_selection, "P1")
         self.assertEqual(service.active_phase_selection, "P1_P2")
+        self.assertIsNone(getattr(service, "_last_switch_feedback_closed", None))
+        self.assertIsNone(getattr(service, "_last_switch_interlock_ok", None))
+
+    def test_fetch_pm_status_remembers_optional_switch_feedback_runtime_state(self):
+        meter_backend = SimpleNamespace(
+            read_meter=MagicMock(
+                return_value=MeterReading(
+                    relay_on=True,
+                    power_w=1200.0,
+                    voltage_v=230.0,
+                    current_a=5.2,
+                    energy_kwh=2.5,
+                    phase_selection="P1",
+                )
+            )
+        )
+        switch_backend = SimpleNamespace(
+            read_switch_state=MagicMock(
+                return_value=SimpleNamespace(
+                    enabled=True,
+                    phase_selection="P1",
+                    feedback_closed=False,
+                    interlock_ok=True,
+                )
+            ),
+            capabilities=MagicMock(return_value=SimpleNamespace(supported_phase_selections=("P1",))),
+            set_enabled=MagicMock(),
+        )
+        service = SimpleNamespace(
+            _backend_selection=SimpleNamespace(mode="split"),
+            _meter_backend=meter_backend,
+            _switch_backend=switch_backend,
+            rpc_call=MagicMock(),
+            supported_phase_selections=("P1",),
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            _time_now=lambda: 100.0,
+        )
+
+        controller = ShellyIoController(service)
+        controller.fetch_pm_status()
+
+        self.assertFalse(service._last_switch_feedback_closed)
+        self.assertTrue(service._last_switch_interlock_ok)
+        self.assertEqual(service._last_switch_feedback_at, 100.0)
 
     def test_queue_relay_command_warns_when_direct_switch_breaks_over_limit_load(self):
         switch_backend = SimpleNamespace(

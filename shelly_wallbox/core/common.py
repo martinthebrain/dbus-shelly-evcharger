@@ -78,6 +78,11 @@ HEALTH_CODES: dict[str, int] = {
     "command-mismatch": 24,
     "relay-sync-failed": 25,
     "charger-fault": 26,
+    "phase-switch-mismatch": 27,
+    "contactor-interlock": 28,
+    "contactor-feedback-mismatch": 29,
+    "contactor-suspected-open": 30,
+    "contactor-suspected-welded": 31,
 }
 
 AUTO_STATE_CODES: dict[str, int] = {
@@ -98,6 +103,10 @@ RECOVERY_AUTO_REASONS = {
     "charger-fault",
     "command-mismatch",
     "relay-sync-failed",
+    "phase-switch-mismatch",
+    "contactor-feedback-mismatch",
+    "contactor-suspected-open",
+    "contactor-suspected-welded",
 }
 BLOCKED_AUTO_REASONS = {
     "disabled",
@@ -110,6 +119,7 @@ BLOCKED_AUTO_REASONS = {
     "waiting-soc",
     "night-lock",
     "mode-transition",
+    "contactor-interlock",
 }
 CHARGING_AUTO_REASONS = {"running", "auto-start", "auto-stop"}
 WAITING_AUTO_REASONS = {"waiting", "waiting-surplus", "averaging"}

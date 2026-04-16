@@ -123,3 +123,36 @@ class TestShellyWallboxBackendSwitch(unittest.TestCase):
 
             self.assertEqual(capabilities.switching_mode, "contactor")
             self.assertIsNone(capabilities.max_direct_switch_power_w)
+
+    def test_read_switch_state_exposes_optional_shelly_feedback_and_interlock(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "switch.ini"
+            path.write_text(
+                "[Adapter]\nType=shelly_contactor_switch\nHost=192.168.1.11\nComponent=Switch\nId=0\n"
+                "[Feedback]\nComponent=Input\nId=7\nValuePath=state\n"
+                "[Interlock]\nComponent=Input\nId=8\nValuePath=state\nInvert=1\n",
+                encoding="utf-8",
+            )
+            session = MagicMock()
+            session.get.side_effect = [
+                _FakeResponse({"output": True}),
+                _FakeResponse({"state": True}),
+                _FakeResponse({"state": False}),
+            ]
+            backend = ShellyContactorSwitchBackend(self._service(session), config_path=str(path))
+
+            state = backend.read_switch_state()
+
+            self.assertTrue(state.enabled)
+            self.assertEqual(state.phase_selection, "P1")
+            self.assertTrue(state.feedback_closed)
+            self.assertTrue(state.interlock_ok)
+            urls = [call.kwargs["url"] for call in session.get.call_args_list]
+            self.assertEqual(
+                urls,
+                [
+                    "http://192.168.1.11/rpc/Switch.GetStatus?id=0",
+                    "http://192.168.1.11/rpc/Input.GetStatus?id=7",
+                    "http://192.168.1.11/rpc/Input.GetStatus?id=8",
+                ],
+            )

@@ -119,6 +119,8 @@ def probe_switch_backend(path: str) -> dict[str, object]:
         "type": adapter_type,
         "capabilities": _json_ready(backend.capabilities()),
         "phase_switch_targets": _json_ready(getattr(settings, "phase_switch_targets", {})),
+        "feedback_readback": _json_ready(getattr(settings, "feedback_readback", None)),
+        "interlock_readback": _json_ready(getattr(settings, "interlock_readback", None)),
         "switch_state": _json_ready(backend.read_switch_state()),
     }
 

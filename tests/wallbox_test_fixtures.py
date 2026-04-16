@@ -91,6 +91,9 @@ def make_auto_controller_service(**overrides: object) -> SimpleNamespace:
         "auto_phase_downshift_delay_seconds": 30.0,
         "auto_phase_upshift_headroom_watts": 250.0,
         "auto_phase_downshift_margin_watts": 150.0,
+        "auto_phase_mismatch_retry_seconds": 300.0,
+        "auto_phase_mismatch_lockout_count": 3,
+        "auto_phase_mismatch_lockout_seconds": 1800.0,
         "auto_phase_prefer_lowest_when_idle": True,
         "auto_start_delay_seconds": 10.0,
         "auto_start_surplus_watts": 2000.0,
@@ -124,6 +127,13 @@ def make_auto_controller_service(**overrides: object) -> SimpleNamespace:
         "_last_charger_state_at": None,
         "_charger_target_current_amps": None,
         "_charger_target_current_applied_at": None,
+        "_phase_switch_mismatch_counts": {},
+        "_phase_switch_last_mismatch_selection": None,
+        "_phase_switch_last_mismatch_at": None,
+        "_phase_switch_lockout_selection": None,
+        "_phase_switch_lockout_reason": "",
+        "_phase_switch_lockout_at": None,
+        "_phase_switch_lockout_until": None,
         "_time_now": lambda: 1000.0,
         "_last_battery_allow_warning": None,
         "_grid_recovery_required": False,
@@ -196,6 +206,10 @@ def make_runtime_support_service(**overrides: object) -> SimpleNamespace:
         "_relay_sync_requested_at": None,
         "_relay_sync_deadline_at": None,
         "_relay_sync_failure_reported": False,
+        "_phase_switch_lockout_selection": None,
+        "_phase_switch_lockout_reason": "",
+        "_phase_switch_lockout_at": None,
+        "_phase_switch_lockout_until": None,
     }
     data.update(overrides)
     return SimpleNamespace(**data)
@@ -234,6 +248,9 @@ def make_state_validation_service(**overrides: object) -> SimpleNamespace:
         "auto_phase_downshift_delay_seconds": 1.0,
         "auto_phase_upshift_headroom_watts": 1.0,
         "auto_phase_downshift_margin_watts": 1.0,
+        "auto_phase_mismatch_retry_seconds": 1.0,
+        "auto_phase_mismatch_lockout_count": 1,
+        "auto_phase_mismatch_lockout_seconds": 1.0,
         "startup_device_info_retry_seconds": 1.0,
         "startup_device_info_retries": 1,
         "shelly_request_timeout_seconds": 1.0,
@@ -283,6 +300,13 @@ def make_runtime_state_service(**overrides: object) -> SimpleNamespace:
         "_last_charger_state_fault": None,
         "_last_charger_state_at": None,
         "_charger_target_current_amps": None,
+        "_phase_switch_mismatch_counts": {},
+        "_phase_switch_last_mismatch_selection": None,
+        "_phase_switch_last_mismatch_at": None,
+        "_phase_switch_lockout_selection": None,
+        "_phase_switch_lockout_reason": "",
+        "_phase_switch_lockout_at": None,
+        "_phase_switch_lockout_until": None,
     }
     data.update(overrides)
     return SimpleNamespace(**data)

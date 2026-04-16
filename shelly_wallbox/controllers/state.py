@@ -10,9 +10,11 @@ from typing import Any, Callable, cast
 
 from shelly_wallbox.auto.policy import validate_auto_policy
 from shelly_wallbox.backend.models import (
+    effective_supported_phase_selections,
     PhaseSelection,
     normalize_phase_selection,
     normalize_phase_selection_tuple,
+    switch_feedback_mismatch,
 )
 from shelly_wallbox.core.contracts import (
     finite_float_or_none,
@@ -48,6 +50,8 @@ class ServiceStateController:
         "auto_manual_override_seconds",
         "auto_phase_upshift_delay_seconds",
         "auto_phase_downshift_delay_seconds",
+        "auto_phase_mismatch_retry_seconds",
+        "auto_phase_mismatch_lockout_seconds",
         "startup_device_info_retry_seconds",
         "auto_audit_log_max_age_hours",
         "auto_audit_log_repeat_seconds",
@@ -84,6 +88,96 @@ class ServiceStateController:
         normalized = finite_float_or_none(value)
         return default if normalized is None else f"{normalized:.1f}"
 
+    @classmethod
+    def _summary_observed_phase(cls, svc: Any) -> str:
+        """Return the latest observed phase selection for debug summaries."""
+        confirmed_pm_status = getattr(svc, "_last_confirmed_pm_status", None)
+        if isinstance(confirmed_pm_status, dict):
+            observed = cls._summary_text(confirmed_pm_status.get("_phase_selection"), "")
+            if observed:
+                return observed
+        return cls._summary_text(getattr(svc, "_last_charger_state_phase_selection", None), "na")
+
+    @staticmethod
+    def _summary_phase_mismatch_active(svc: Any) -> str:
+        """Return the active phase-mismatch state as one compact flag."""
+        active = bool(getattr(svc, "_phase_switch_mismatch_active", False))
+        if active:
+            return "1"
+        return "1" if str(getattr(svc, "_last_health_reason", "")) == "phase-switch-mismatch" else "0"
+
+    @classmethod
+    def _summary_phase_lockout_active(cls, svc: Any) -> str:
+        """Return whether a phase-switch lockout is currently active."""
+        current_time = time.time()
+        lockout_until = finite_float_or_none(getattr(svc, "_phase_switch_lockout_until", None))
+        lockout_selection = getattr(svc, "_phase_switch_lockout_selection", None)
+        if lockout_until is None or lockout_selection is None:
+            return "0"
+        return "1" if lockout_until > current_time else "0"
+
+    @classmethod
+    def _summary_phase_lockout_target(cls, svc: Any) -> str:
+        """Return the active phase-lockout target for debug summaries."""
+        if cls._summary_phase_lockout_active(svc) != "1":
+            return "na"
+        return cls._summary_text(getattr(svc, "_phase_switch_lockout_selection", None), "na")
+
+    @classmethod
+    def _summary_phase_supported_effective(cls, svc: Any) -> str:
+        """Return the effective supported phase layouts for debug summaries."""
+        effective_supported = effective_supported_phase_selections(
+            getattr(svc, "supported_phase_selections", ("P1",)),
+            lockout_selection=getattr(svc, "_phase_switch_lockout_selection", None),
+            lockout_until=getattr(svc, "_phase_switch_lockout_until", None),
+            now=time.time(),
+        )
+        return ",".join(effective_supported)
+
+    @classmethod
+    def _summary_phase_degraded_active(cls, svc: Any) -> str:
+        """Return whether runtime phase support is currently degraded."""
+        configured = normalize_phase_selection_tuple(getattr(svc, "supported_phase_selections", ("P1",)), ("P1",))
+        effective = effective_supported_phase_selections(
+            configured,
+            lockout_selection=getattr(svc, "_phase_switch_lockout_selection", None),
+            lockout_until=getattr(svc, "_phase_switch_lockout_until", None),
+            now=time.time(),
+        )
+        return "1" if configured != effective else "0"
+
+    @staticmethod
+    def _summary_switch_feedback_closed(svc: Any) -> str:
+        """Return explicit switch feedback as one compact debug value."""
+        feedback_closed = getattr(svc, "_last_switch_feedback_closed", None)
+        return "na" if feedback_closed is None else str(int(bool(feedback_closed)))
+
+    @staticmethod
+    def _summary_switch_interlock_ok(svc: Any) -> str:
+        """Return explicit switch interlock state as one compact debug value."""
+        interlock_ok = getattr(svc, "_last_switch_interlock_ok", None)
+        return "na" if interlock_ok is None else str(int(bool(interlock_ok)))
+
+    @classmethod
+    def _summary_switch_feedback_mismatch(cls, svc: Any) -> str:
+        """Return whether explicit switch feedback currently disagrees with relay state."""
+        feedback_closed = getattr(svc, "_last_switch_feedback_closed", None)
+        if feedback_closed is None:
+            return "1" if str(getattr(svc, "_last_health_reason", "")) == "contactor-feedback-mismatch" else "0"
+        confirmed_pm_status = getattr(svc, "_last_confirmed_pm_status", None)
+        relay_on = False if not isinstance(confirmed_pm_status, dict) else bool(confirmed_pm_status.get("output", False))
+        return str(int(switch_feedback_mismatch(relay_on, feedback_closed)))
+
+    @staticmethod
+    def _summary_contactor_suspected_open(svc: Any) -> str:
+        """Return whether runtime currently suspects an open contactor without explicit feedback."""
+        return "1" if str(getattr(svc, "_last_health_reason", "")) == "contactor-suspected-open" else "0"
+
+    @staticmethod
+    def _summary_contactor_suspected_welded(svc: Any) -> str:
+        """Return whether runtime currently suspects a welded contactor without explicit feedback."""
+        return "1" if str(getattr(svc, "_last_health_reason", "")) == "contactor-suspected-welded" else "0"
+
     def state_summary(self) -> str:
         """Return a compact runtime state summary for debug logging."""
         svc = self.service
@@ -96,7 +190,18 @@ class ServiceStateController:
             f"ignore_offtime={self._summary_flag(getattr(svc, '_ignore_min_offtime_once', False))}",
             f"phase={getattr(svc, 'active_phase_selection', 'na')}",
             f"phase_req={getattr(svc, 'requested_phase_selection', 'na')}",
+            f"phase_obs={self._summary_observed_phase(svc)}",
             f"phase_switch={self._summary_text(getattr(svc, '_phase_switch_state', 'na'), 'idle')}",
+            f"phase_mismatch={self._summary_phase_mismatch_active(svc)}",
+            f"phase_lockout={self._summary_phase_lockout_active(svc)}",
+            f"phase_lockout_target={self._summary_phase_lockout_target(svc)}",
+            f"phase_effective={self._summary_phase_supported_effective(svc)}",
+            f"phase_degraded={self._summary_phase_degraded_active(svc)}",
+            f"switch_feedback={self._summary_switch_feedback_closed(svc)}",
+            f"switch_interlock={self._summary_switch_interlock_ok(svc)}",
+            f"switch_feedback_mismatch={self._summary_switch_feedback_mismatch(svc)}",
+            f"contactor_suspected_open={self._summary_contactor_suspected_open(svc)}",
+            f"contactor_suspected_welded={self._summary_contactor_suspected_welded(svc)}",
             f"backend={getattr(svc, 'backend_mode', 'combined')}",
             f"meter_backend={getattr(svc, 'meter_backend_type', 'shelly_combined')}",
             f"switch_backend={getattr(svc, 'switch_backend_type', 'shelly_combined')}",
@@ -182,6 +287,27 @@ class ServiceStateController:
                 getattr(svc, "_phase_switch_stable_until", None)
             ),
             "phase_switch_resume_relay": 1 if bool(getattr(svc, "_phase_switch_resume_relay", False)) else 0,
+            "phase_switch_mismatch_counts": dict(getattr(svc, "_phase_switch_mismatch_counts", {}) or {}),
+            "phase_switch_last_mismatch_selection": (
+                None
+                if getattr(svc, "_phase_switch_last_mismatch_selection", None) is None
+                else self._normalize_runtime_phase_selection(getattr(svc, "_phase_switch_last_mismatch_selection"))
+            ),
+            "phase_switch_last_mismatch_at": self._coerce_optional_runtime_past_time(
+                getattr(svc, "_phase_switch_last_mismatch_at", None)
+            ),
+            "phase_switch_lockout_selection": (
+                None
+                if getattr(svc, "_phase_switch_lockout_selection", None) is None
+                else self._normalize_runtime_phase_selection(getattr(svc, "_phase_switch_lockout_selection"))
+            ),
+            "phase_switch_lockout_reason": str(getattr(svc, "_phase_switch_lockout_reason", "") or ""),
+            "phase_switch_lockout_at": self._coerce_optional_runtime_past_time(
+                getattr(svc, "_phase_switch_lockout_at", None)
+            ),
+            "phase_switch_lockout_until": self._coerce_optional_runtime_float(
+                getattr(svc, "_phase_switch_lockout_until", None)
+            ),
             "relay_last_changed_at": svc.relay_last_changed_at,
             "relay_last_off_at": svc.relay_last_off_at,
         }
@@ -393,6 +519,47 @@ class ServiceStateController:
                 1 if bool(getattr(svc, "_phase_switch_resume_relay", False)) else 0,
             )
         )
+        raw_mismatch_counts = state.get(
+            "phase_switch_mismatch_counts",
+            getattr(svc, "_phase_switch_mismatch_counts", {}),
+        )
+        svc._phase_switch_mismatch_counts = {}
+        if isinstance(raw_mismatch_counts, dict):
+            for raw_selection, raw_count in raw_mismatch_counts.items():
+                normalized_selection = self._normalize_runtime_phase_selection(raw_selection, svc.requested_phase_selection)
+                svc._phase_switch_mismatch_counts[normalized_selection] = non_negative_int(raw_count, 0)
+        last_mismatch_selection = state.get(
+            "phase_switch_last_mismatch_selection",
+            getattr(svc, "_phase_switch_last_mismatch_selection", None),
+        )
+        svc._phase_switch_last_mismatch_selection = (
+            None
+            if last_mismatch_selection is None
+            else self._normalize_runtime_phase_selection(last_mismatch_selection, svc.requested_phase_selection)
+        )
+        svc._phase_switch_last_mismatch_at = self._coerce_optional_runtime_past_time(
+            state.get("phase_switch_last_mismatch_at", getattr(svc, "_phase_switch_last_mismatch_at", None)),
+            current_time,
+        )
+        lockout_selection = state.get(
+            "phase_switch_lockout_selection",
+            getattr(svc, "_phase_switch_lockout_selection", None),
+        )
+        svc._phase_switch_lockout_selection = (
+            None
+            if lockout_selection is None
+            else self._normalize_runtime_phase_selection(lockout_selection, svc.requested_phase_selection)
+        )
+        svc._phase_switch_lockout_reason = str(
+            state.get("phase_switch_lockout_reason", getattr(svc, "_phase_switch_lockout_reason", "")) or ""
+        )
+        svc._phase_switch_lockout_at = self._coerce_optional_runtime_past_time(
+            state.get("phase_switch_lockout_at", getattr(svc, "_phase_switch_lockout_at", None)),
+            current_time,
+        )
+        svc._phase_switch_lockout_until = self._coerce_optional_runtime_float(
+            state.get("phase_switch_lockout_until", getattr(svc, "_phase_switch_lockout_until", None))
+        )
         if svc._phase_switch_state is None or svc._phase_switch_pending_selection is None:
             svc._phase_switch_pending_selection = None
             svc._phase_switch_state = None
@@ -591,6 +758,17 @@ class ServiceStateController:
         )
         svc.startup_device_info_retries = 0
 
+    @staticmethod
+    def _validate_optional_non_negative_int(svc: Any, attr_name: str, label: str) -> None:
+        """Clamp one optional integer runtime setting to zero or above."""
+        if not hasattr(svc, attr_name):
+            return
+        value = getattr(svc, attr_name)
+        if value >= 0:
+            return
+        logging.warning("%s %s invalid, clamping to 0", label, value)
+        setattr(svc, attr_name, 0)
+
     def _validate_timeout_settings(self, svc: Any) -> None:
         """Clamp request and audit timeout-style settings."""
         timeout_specs = (
@@ -615,6 +793,11 @@ class ServiceStateController:
         self._clamp_surplus_thresholds(svc)
         self._clamp_legacy_fractional_values(svc)
         self._clamp_legacy_volatility_band(svc)
+        self._validate_optional_non_negative_int(
+            svc,
+            "auto_phase_mismatch_lockout_count",
+            "AutoPhaseMismatchLockoutCount",
+        )
 
     def _clamp_legacy_non_negative_auto_values(self, svc: Any) -> None:
         """Clamp non-negative legacy Auto settings."""
@@ -629,6 +812,8 @@ class ServiceStateController:
             "auto_learn_charge_power_start_delay_seconds",
             "auto_learn_charge_power_window_seconds",
             "auto_learn_charge_power_max_age_seconds",
+            "auto_phase_mismatch_retry_seconds",
+            "auto_phase_mismatch_lockout_seconds",
         ):
             if hasattr(svc, attr_name):
                 self._clamp_non_negative_float(svc, attr_name)

@@ -156,6 +156,15 @@ class TestRuntimeSupportController(unittest.TestCase):
                     "shelly_combined",
                     None,
                     None,
+                    None,
+                    0,
+                    None,
+                    0,
+                    "P1",
+                    0,
+                    None,
+                    None,
+                    0,
                 ),
                 _last_auto_audit_event_at=995.0,
                 auto_watchdog_stale_seconds=0.0,
@@ -176,6 +185,18 @@ class TestRuntimeSupportController(unittest.TestCase):
             )
             self.assertIn(
                 "learned_charge_power_state=na",
+                controller._format_auto_audit_line(service, "waiting", False, 1000.0),
+            )
+            self.assertIn("phase_observed=na", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn("phase_mismatch=0", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn("phase_lockout_target=na", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn("phase_lockout=0", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn("phase_effective=P1", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn("phase_degraded=0", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn("switch_feedback=na", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn("switch_interlock=na", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn(
+                "switch_feedback_mismatch=0",
                 controller._format_auto_audit_line(service, "waiting", False, 1000.0),
             )
             self.assertEqual(
@@ -330,6 +351,7 @@ class TestRuntimeSupportController(unittest.TestCase):
             service = make_runtime_support_service(
                 _time_now=lambda: current_time[0],
                 auto_audit_log_path=path,
+                supported_phase_selections=("P1", "P1_P2", "P1_P2_P3"),
                 _last_auto_metrics=make_auto_metrics(),
             )
 
@@ -461,6 +483,11 @@ class TestRuntimeSupportController(unittest.TestCase):
                 switch_backend_type="template_switch",
                 charger_backend_type="template_charger",
                 _charger_target_current_amps=13.0,
+                _last_confirmed_pm_status={"_phase_selection": "P1_P2", "output": True},
+                _last_confirmed_pm_status_at=1000.0,
+                _phase_switch_mismatch_active=True,
+                _last_switch_feedback_closed=False,
+                _last_switch_interlock_ok=True,
                 auto_stop_condition_reason="auto-stop-surplus",
                 _last_auto_metrics=make_auto_metrics(
                     surplus=900.0,
@@ -498,6 +525,11 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertIn("switch_backend=template_switch", payload)
         self.assertIn("charger_backend=template_charger", payload)
         self.assertIn("charger_target=13.0A", payload)
+        self.assertIn("phase_observed=P1_P2", payload)
+        self.assertIn("phase_mismatch=1", payload)
+        self.assertIn("switch_feedback=0", payload)
+        self.assertIn("switch_interlock=1", payload)
+        self.assertIn("switch_feedback_mismatch=1", payload)
         self.assertIn("stop_alpha=0.15", payload)
         self.assertIn("stop_alpha_stage=volatile", payload)
         self.assertIn("surplus_volatility=520W", payload)
@@ -614,3 +646,32 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertEqual(len(lines), 2)
         self.assertIn("charger_target=10.0A", lines[0])
         self.assertIn("charger_target=13.0A", lines[1])
+
+    def test_write_auto_audit_event_repeats_same_reason_when_phase_lockout_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = f"{temp_dir}/auto-reasons.log"
+            current_time = [1000.0]
+            service = make_runtime_support_service(
+                _time_now=lambda: current_time[0],
+                auto_audit_log_path=path,
+                _last_auto_metrics=make_auto_metrics(),
+                supported_phase_selections=("P1", "P1_P2", "P1_P2_P3"),
+            )
+
+            controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
+            controller.write_auto_audit_event("waiting-surplus", cached=False)
+            current_time[0] = 1005.0
+            service._phase_switch_lockout_selection = "P1_P2"
+            service._phase_switch_lockout_reason = "mismatch-threshold"
+            service._phase_switch_lockout_at = 1005.0
+            service._phase_switch_lockout_until = 1065.0
+            controller.write_auto_audit_event("waiting-surplus", cached=False)
+
+            with open(path, "r", encoding="utf-8") as handle:
+                lines = handle.readlines()
+
+        self.assertEqual(len(lines), 2)
+        self.assertIn("phase_lockout=0", lines[0])
+        self.assertIn("phase_lockout=1", lines[1])
+        self.assertIn("phase_lockout_target=P1_P2", lines[1])
+        self.assertIn("phase_degraded=1", lines[1])

@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
+from shelly_wallbox.backend.models import effective_supported_phase_selections
 from shelly_wallbox.core.contracts import write_failure_is_reversible
 from shelly_wallbox.controllers.write_snapshot import (
     SNAPSHOT_ATTRS,
@@ -170,9 +171,15 @@ class DbusWriteController:
         DbusWriteController._publish_startstop_enable(svc, current_time, auto_mode_active)
 
     @staticmethod
-    def _supported_phase_selection_text(svc: Any) -> str:
+    def _supported_phase_selection_text(svc: Any, current_time: float) -> str:
         """Return the DBus-facing CSV form of supported phase selections."""
-        return ",".join(tuple(getattr(svc, "supported_phase_selections", ("P1",))))
+        effective_supported = effective_supported_phase_selections(
+            getattr(svc, "supported_phase_selections", ("P1",)),
+            lockout_selection=getattr(svc, "_phase_switch_lockout_selection", None),
+            lockout_until=getattr(svc, "_phase_switch_lockout_until", None),
+            now=current_time,
+        )
+        return ",".join(effective_supported)
 
     @staticmethod
     def _queue_phase_switch_state(
@@ -197,10 +204,41 @@ class DbusWriteController:
         svc._publish_dbus_path("/PhaseSelectionActive", svc.active_phase_selection, current_time, force=True)
         svc._publish_dbus_path(
             "/SupportedPhaseSelections",
-            cls._supported_phase_selection_text(svc),
+            cls._supported_phase_selection_text(svc, current_time),
             current_time,
             force=True,
         )
+
+    @staticmethod
+    def _clear_phase_lockout_state(svc: Any) -> None:
+        """Clear phase mismatch and lockout runtime state after an operator reset."""
+        svc._phase_switch_mismatch_active = False
+        svc._phase_switch_mismatch_counts = {}
+        svc._phase_switch_last_mismatch_selection = None
+        svc._phase_switch_last_mismatch_at = None
+        svc._phase_switch_lockout_selection = None
+        svc._phase_switch_lockout_reason = ""
+        svc._phase_switch_lockout_at = None
+        svc._phase_switch_lockout_until = None
+
+    @classmethod
+    def _publish_phase_lockout_paths(cls, svc: Any, current_time: float) -> None:
+        """Force-publish phase lockout and degradation diagnostics after operator actions."""
+        configured_supported = ",".join(tuple(getattr(svc, "supported_phase_selections", ("P1",))))
+        effective_supported = cls._supported_phase_selection_text(svc, current_time)
+        svc._publish_dbus_path("/Auto/PhaseLockoutActive", 0, current_time, force=True)
+        svc._publish_dbus_path("/Auto/PhaseLockoutTarget", "", current_time, force=True)
+        svc._publish_dbus_path("/Auto/PhaseLockoutReason", "", current_time, force=True)
+        svc._publish_dbus_path("/Auto/PhaseSupportedConfigured", configured_supported, current_time, force=True)
+        svc._publish_dbus_path("/Auto/PhaseSupportedEffective", effective_supported, current_time, force=True)
+        svc._publish_dbus_path(
+            "/Auto/PhaseDegradedActive",
+            int(configured_supported != effective_supported),
+            current_time,
+            force=True,
+        )
+        svc._publish_dbus_path("/Auto/PhaseLockoutAge", -1, current_time, force=True)
+        svc._publish_dbus_path("/Auto/PhaseLockoutReset", 0, current_time, force=True)
 
     def _apply_auto_disable(self, svc: Any, current_time: float) -> None:
         """Queue a relay-off transition after an Auto deny request."""
@@ -364,6 +402,18 @@ class DbusWriteController:
             port.state_summary(),
         )
 
+    def _handle_phase_lockout_reset_write(self, value: Any) -> None:
+        """Clear phase lockout and mismatch tracking on explicit operator request."""
+        port = self.port
+        current_time = port.time_now()
+        if not bool(int(value)):
+            port.publish_dbus_path("/Auto/PhaseLockoutReset", 0, current_time, force=True)
+            return
+        self._clear_phase_lockout_state(port._service)
+        self._publish_phase_selection_paths(port, current_time)
+        self._publish_phase_lockout_paths(port, current_time)
+        logging.info("DBus write /Auto/PhaseLockoutReset=1 cleared phase lockout state %s", port.state_summary())
+
     def _handle_mode_value_write(self, value: Any) -> None:
         """Normalize and dispatch one /Mode write value."""
         self._handle_mode_write(int(value))
@@ -384,6 +434,7 @@ class DbusWriteController:
             "/StartStop": self._handle_startstop_value_write,
             "/Enable": self._handle_enable_value_write,
             "/PhaseSelection": self._handle_phase_selection_write,
+            "/Auto/PhaseLockoutReset": self._handle_phase_lockout_reset_write,
         }
 
     def _execute_write(self, path: str, value: Any) -> None:

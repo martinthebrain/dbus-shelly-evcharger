@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, cast
 
 
 from shelly_wallbox.backend.models import (
+    effective_supported_phase_selections,
     PhaseSelection,
     normalize_phase_selection,
     normalize_phase_selection_tuple,
@@ -111,7 +113,13 @@ class WriteControllerPort(_BaseServicePort):
             getattr(self._service, "supported_phase_selections", ("P1",)),
             ("P1",),
         )
-        return normalized
+        current_time = self.time_now() if callable(getattr(self._service, "_time_now", None)) else time.time()
+        return effective_supported_phase_selections(
+            normalized,
+            lockout_selection=getattr(self._service, "_phase_switch_lockout_selection", None),
+            lockout_until=getattr(self._service, "_phase_switch_lockout_until", None),
+            now=current_time,
+        )
 
     @supported_phase_selections.setter
     def supported_phase_selections(self, value: Any) -> None:

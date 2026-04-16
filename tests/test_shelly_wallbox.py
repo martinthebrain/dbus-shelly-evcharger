@@ -1903,6 +1903,12 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         service._error_state["charger"] = 2
         service._charger_target_current_amps = 13.0
         service._charger_target_current_applied_at = 96.0
+        service._last_confirmed_pm_status = {"output": False, "_phase_selection": "P1"}
+        service._phase_switch_mismatch_active = True
+        service._phase_switch_lockout_selection = "P1_P2"
+        service._phase_switch_lockout_reason = "mismatch-threshold"
+        service._phase_switch_lockout_at = 91.0
+        service._phase_switch_lockout_until = 150.0
 
         service._publish_diagnostic_paths(100.0)
 
@@ -1914,6 +1920,19 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         self.assertEqual(service._dbusservice["/Auto/ChargerFaultActive"], 0)
         self.assertEqual(service._dbusservice["/Auto/ChargerWriteErrors"], 2)
         self.assertEqual(service._dbusservice["/Auto/ChargerCurrentTarget"], 13.0)
+        self.assertEqual(service._dbusservice["/Auto/PhaseObserved"], "P1")
+        self.assertEqual(service._dbusservice["/Auto/PhaseMismatchActive"], 1)
+        self.assertEqual(service._dbusservice["/Auto/PhaseLockoutActive"], 1)
+        self.assertEqual(service._dbusservice["/Auto/PhaseLockoutTarget"], "P1_P2")
+        self.assertEqual(service._dbusservice["/Auto/PhaseLockoutReason"], "mismatch-threshold")
+        self.assertEqual(service._dbusservice["/Auto/PhaseSupportedConfigured"], "P1")
+        self.assertEqual(service._dbusservice["/Auto/PhaseSupportedEffective"], "P1")
+        self.assertEqual(service._dbusservice["/Auto/PhaseDegradedActive"], 0)
+        self.assertEqual(service._dbusservice["/Auto/SwitchFeedbackClosed"], -1)
+        self.assertEqual(service._dbusservice["/Auto/SwitchInterlockOk"], -1)
+        self.assertEqual(service._dbusservice["/Auto/SwitchFeedbackMismatch"], 0)
+        self.assertEqual(service._dbusservice["/Auto/PhaseLockoutAge"], 9)
+        self.assertEqual(service._dbusservice["/Auto/LastSwitchFeedbackAge"], -1)
         self.assertEqual(service._dbusservice["/Auto/ChargerCurrentTargetAge"], 4)
         self.assertEqual(service._dbusservice["/Auto/ErrorCount"], 2)
 

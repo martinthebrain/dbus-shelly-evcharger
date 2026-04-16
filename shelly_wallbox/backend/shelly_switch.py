@@ -82,6 +82,8 @@ class ShellySwitchBackend(ShellyBackendBase):
         return SwitchState(
             enabled=bool(active_switch_ids),
             phase_selection=self._phase_selection_from_outputs(active_switch_ids),
+            feedback_closed=self._signal_readback_flag(self.settings.feedback_readback),
+            interlock_ok=self._signal_readback_flag(self.settings.interlock_readback),
         )
 
     def set_enabled(self, enabled: bool) -> None:

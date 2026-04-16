@@ -218,6 +218,38 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             self.assertEqual(payload["capabilities"]["switching_mode"], "contactor")
             self.assertIsNone(payload["capabilities"]["max_direct_switch_power_w"])
 
+    def test_probe_switch_prints_native_feedback_and_interlock_readback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            switch_path = self._write_config(
+                temp_dir,
+                "switch.ini",
+                "[Adapter]\nType=shelly_contactor_switch\nHost=192.168.1.11\nComponent=Switch\nId=1\n"
+                "[Feedback]\nComponent=Input\nId=7\nValuePath=state\n"
+                "[Interlock]\nComponent=Input\nId=8\nValuePath=state\nInvert=1\n",
+            )
+            session = MagicMock()
+            session.get.side_effect = [
+                _FakeResponse({"output": True}),
+                _FakeResponse({"state": True}),
+                _FakeResponse({"state": False}),
+            ]
+
+            stdout = io.StringIO()
+            with patch("shelly_wallbox.backend.probe.requests.Session", return_value=session):
+                with redirect_stdout(stdout):
+                    rc = main(["probe-switch", switch_path])
+
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(rc, 0)
+            self.assertEqual(payload["switch_state"]["feedback_closed"], True)
+            self.assertEqual(payload["switch_state"]["interlock_ok"], True)
+            self.assertEqual(payload["feedback_readback"]["component"], "Input")
+            self.assertEqual(payload["feedback_readback"]["device_id"], 7)
+            self.assertEqual(payload["feedback_readback"]["value_path"], "state")
+            self.assertEqual(payload["interlock_readback"]["component"], "Input")
+            self.assertEqual(payload["interlock_readback"]["device_id"], 8)
+            self.assertEqual(payload["interlock_readback"]["invert"], True)
+
     def test_probe_template_switch_prints_normalized_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             switch_path = self._write_config(

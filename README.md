@@ -282,6 +282,34 @@ backend.
 case enable/disable control is routed directly through the charger backend, so
 no separate relay/switch adapter is required.
 
+For `template_switch` adapters, `[StateResponse]` can now optionally expose
+two additional booleans:
+
+- `FeedbackClosedPath`
+- `InterlockOkPath`
+
+This is useful for contactor setups with an auxiliary feedback contact or an
+external interlock/freigabe signal. When those paths are configured, the
+service publishes the extra diagnostics:
+
+- `/Auto/SwitchFeedbackClosed`
+- `/Auto/SwitchInterlockOk`
+- `/Auto/SwitchFeedbackMismatch`
+- `/Auto/LastSwitchFeedbackAge`
+
+For native `shelly_contactor_switch` setups you can now model the same signals
+without a template adapter by adding optional `[Feedback]` and `[Interlock]`
+sections to the switch backend config. Each section supports:
+
+- `Component`
+- `Id`
+- `ValuePath`
+- `Invert`
+
+Typical example: an auxiliary contact on `Input` channel `7` with `ValuePath=state`.
+The service reads these Shelly RPC states directly and feeds them into the same
+health, DBus, summary, and audit diagnostics.
+
 Auto mode can now also switch between supported phase selections
 conservatively. The first implementation is intentionally simple:
 
@@ -299,7 +327,33 @@ The corresponding tuning knobs live in
 - `AutoPhaseDownshiftDelaySeconds`
 - `AutoPhaseUpshiftHeadroomWatts`
 - `AutoPhaseDownshiftMarginWatts`
+- `AutoPhaseMismatchRetrySeconds`
+- `AutoPhaseMismatchLockoutCount`
+- `AutoPhaseMismatchLockoutSeconds`
 - `AutoPhasePreferLowestWhenIdle`
+
+Once the service starts observing phase transitions, the following diagnostics
+also help when a backend or topology does not switch as requested:
+
+- `/Auto/PhaseObserved`
+- `/Auto/PhaseMismatchActive`
+- `/Auto/PhaseLockoutActive`
+- `/Auto/PhaseLockoutTarget`
+- `/Auto/PhaseLockoutReason`
+- `/Auto/PhaseSupportedConfigured`
+- `/Auto/PhaseSupportedEffective`
+- `/Auto/PhaseDegradedActive`
+- `/Auto/PhaseLockoutReset`
+
+`/Auto/PhaseSupportedConfigured` shows the configured phase layouts, while
+`/Auto/PhaseSupportedEffective` shows the currently usable subset after an
+active mismatch lockout degraded the runtime capability. `/Auto/PhaseDegradedActive`
+turns on while such degradation is active.
+
+Operators can acknowledge and clear the current mismatch/lockout state by
+writing `1` to `/Auto/PhaseLockoutReset`. That immediately removes the current
+phase lockout, restores the effective supported set to the configured one, and
+lets Auto try phase changes again.
 
 ## Troubleshooting
 

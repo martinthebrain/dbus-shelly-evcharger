@@ -15,6 +15,7 @@ import time
 from typing import Any, cast
 
 from shelly_wallbox.core.common import _fresh_confirmed_relay_output
+from shelly_wallbox.backend.models import effective_supported_phase_selections, switch_feedback_mismatch
 from shelly_wallbox.core.contracts import (
     finite_float_or_none,
     normalized_auto_state_pair,
@@ -43,6 +44,90 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
     def _charger_target_for_audit(cls, svc: Any) -> float | None:
         """Return the last applied native-charger target for diagnostics."""
         return finite_float_or_none(getattr(svc, "_charger_target_current_amps", None))
+
+    @staticmethod
+    def _observed_phase_for_audit(svc: Any) -> str | None:
+        """Return the last observed phase selection from PM status or charger readback."""
+        confirmed_pm_status = getattr(svc, "_last_confirmed_pm_status", None)
+        if isinstance(confirmed_pm_status, dict):
+            observed = confirmed_pm_status.get("_phase_selection")
+            if observed is not None:
+                normalized = str(observed).strip()
+                if normalized:
+                    return normalized
+        observed = getattr(svc, "_last_charger_state_phase_selection", None)
+        if observed is None:
+            return None
+        normalized = str(observed).strip()
+        return normalized or None
+
+    @staticmethod
+    def _phase_mismatch_active_for_audit(svc: Any) -> bool:
+        """Return whether a phase-switch mismatch is currently active."""
+        if bool(getattr(svc, "_phase_switch_mismatch_active", False)):
+            return True
+        return str(getattr(svc, "_last_health_reason", "")) == "phase-switch-mismatch"
+
+    @classmethod
+    def _phase_lockout_active_for_audit(cls, svc: Any) -> bool:
+        """Return whether a phase-switch lockout is currently active."""
+        current_time = cls._callable_time_or_none(getattr(svc, "_time_now", None))
+        if current_time is None:
+            current_time = time.time()
+        lockout_selection = getattr(svc, "_phase_switch_lockout_selection", None)
+        lockout_until = finite_float_or_none(getattr(svc, "_phase_switch_lockout_until", None))
+        return lockout_selection is not None and lockout_until is not None and float(current_time) < lockout_until
+
+    @classmethod
+    def _phase_lockout_target_for_audit(cls, svc: Any) -> str | None:
+        """Return the currently locked-out target phase selection when active."""
+        if not cls._phase_lockout_active_for_audit(svc):
+            return None
+        selection = getattr(svc, "_phase_switch_lockout_selection", None)
+        if selection is None:
+            return None
+        normalized = str(selection).strip()
+        return normalized or None
+
+    @classmethod
+    def _phase_supported_effective_for_audit(cls, svc: Any) -> str:
+        """Return the effective supported phase layouts for audit output."""
+        current_time = cls._callable_time_or_none(getattr(svc, "_time_now", None))
+        effective_supported = effective_supported_phase_selections(
+            getattr(svc, "supported_phase_selections", ("P1",)),
+            lockout_selection=getattr(svc, "_phase_switch_lockout_selection", None),
+            lockout_until=getattr(svc, "_phase_switch_lockout_until", None),
+            now=current_time,
+        )
+        return ",".join(effective_supported)
+
+    @classmethod
+    def _phase_degraded_active_for_audit(cls, svc: Any) -> bool:
+        """Return whether runtime phase support is currently degraded."""
+        configured = ",".join(tuple(getattr(svc, "supported_phase_selections", ("P1",))))
+        return configured != cls._phase_supported_effective_for_audit(svc)
+
+    @staticmethod
+    def _switch_feedback_closed_for_audit(svc: Any) -> bool | None:
+        """Return the last explicit switch-feedback state when available."""
+        value = getattr(svc, "_last_switch_feedback_closed", None)
+        return None if value is None else bool(value)
+
+    @staticmethod
+    def _switch_interlock_ok_for_audit(svc: Any) -> bool | None:
+        """Return the last explicit switch interlock state when available."""
+        value = getattr(svc, "_last_switch_interlock_ok", None)
+        return None if value is None else bool(value)
+
+    @classmethod
+    def _switch_feedback_mismatch_for_audit(cls, svc: Any) -> bool:
+        """Return whether explicit switch feedback currently disagrees with relay state."""
+        current_time = cls._callable_time_or_none(getattr(svc, "_time_now", None))
+        relay_on = _fresh_confirmed_relay_output(svc, current_time)
+        feedback_closed = cls._switch_feedback_closed_for_audit(svc)
+        if feedback_closed is None:
+            return str(getattr(svc, "_last_health_reason", "")) == "contactor-feedback-mismatch"
+        return switch_feedback_mismatch(relay_on, feedback_closed)
 
     @staticmethod
     def _callable_time_or_none(time_func: Any) -> float | None:
@@ -149,6 +234,15 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
         str,
         str | None,
         float | None,
+        str | None,
+        int,
+        str | None,
+        int,
+        str | None,
+        int,
+        int | None,
+        int | None,
+        int,
     ]:
         """Return a de-duplication key for audit entries."""
         metrics = cls._normalized_auto_audit_metrics(svc)
@@ -177,6 +271,15 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
             cls._backend_value(svc, "switch_backend_type", "shelly_combined"),
             cls._string_metric(getattr(svc, "charger_backend_type", None)),
             cls._bucket_metric(cls._charger_target_for_audit(svc), step=1.0),
+            cls._string_metric(cls._observed_phase_for_audit(svc)),
+            int(cls._phase_mismatch_active_for_audit(svc)),
+            cls._string_metric(cls._phase_lockout_target_for_audit(svc)),
+            int(cls._phase_lockout_active_for_audit(svc)),
+            cls._string_metric(cls._phase_supported_effective_for_audit(svc)),
+            int(cls._phase_degraded_active_for_audit(svc)),
+            metrics.get("switch_feedback"),
+            metrics.get("switch_interlock"),
+            int(metrics.get("switch_feedback_mismatch", 0)),
         )
 
     @staticmethod
@@ -215,6 +318,15 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
             f"switch_backend={fields['switch_backend']}\t"
             f"charger_backend={fields['charger_backend']}\t"
             f"charger_target={fields['charger_target']}\t"
+            f"phase_observed={fields['phase_observed']}\t"
+            f"phase_mismatch={fields['phase_mismatch']}\t"
+            f"phase_lockout_target={fields['phase_lockout_target']}\t"
+            f"phase_lockout={fields['phase_lockout']}\t"
+            f"phase_effective={fields['phase_effective']}\t"
+            f"phase_degraded={fields['phase_degraded']}\t"
+            f"switch_feedback={fields['switch_feedback']}\t"
+            f"switch_interlock={fields['switch_interlock']}\t"
+            f"switch_feedback_mismatch={fields['switch_feedback_mismatch']}\t"
             f"stop_alpha={fields['stop_alpha']}\t"
             f"stop_alpha_stage={fields['stop_alpha_stage']}\t"
             f"surplus_volatility={fields['surplus_volatility']}\t"
@@ -243,6 +355,15 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
             "switch_backend": ("switch_backend", None),
             "charger_backend": ("charger_backend", None),
             "charger_target": ("charger_target", "{:.1f}A"),
+            "phase_observed": ("phase_observed", None),
+            "phase_mismatch": ("phase_mismatch", None),
+            "phase_lockout_target": ("phase_lockout_target", None),
+            "phase_lockout": ("phase_lockout", None),
+            "phase_effective": ("phase_effective", None),
+            "phase_degraded": ("phase_degraded", None),
+            "switch_feedback": ("switch_feedback", None),
+            "switch_interlock": ("switch_interlock", None),
+            "switch_feedback_mismatch": ("switch_feedback_mismatch", None),
             "stop_alpha": ("stop_alpha", "{:.2f}"),
             "stop_alpha_stage": ("stop_alpha_stage", None),
             "surplus_volatility": ("surplus_volatility", "{:.0f}W"),
@@ -266,6 +387,17 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
         )
         metrics["charger_backend"] = getattr(svc, "charger_backend_type", None) or "na"
         metrics["charger_target"] = _RuntimeSupportAuditMixin._charger_target_for_audit(svc)
+        metrics["phase_observed"] = _RuntimeSupportAuditMixin._observed_phase_for_audit(svc)
+        metrics["phase_mismatch"] = int(_RuntimeSupportAuditMixin._phase_mismatch_active_for_audit(svc))
+        metrics["phase_lockout_target"] = _RuntimeSupportAuditMixin._phase_lockout_target_for_audit(svc)
+        metrics["phase_lockout"] = int(_RuntimeSupportAuditMixin._phase_lockout_active_for_audit(svc))
+        metrics["phase_effective"] = _RuntimeSupportAuditMixin._phase_supported_effective_for_audit(svc)
+        metrics["phase_degraded"] = int(_RuntimeSupportAuditMixin._phase_degraded_active_for_audit(svc))
+        switch_feedback = _RuntimeSupportAuditMixin._switch_feedback_closed_for_audit(svc)
+        switch_interlock = _RuntimeSupportAuditMixin._switch_interlock_ok_for_audit(svc)
+        metrics["switch_feedback"] = None if switch_feedback is None else int(switch_feedback)
+        metrics["switch_interlock"] = None if switch_interlock is None else int(switch_interlock)
+        metrics["switch_feedback_mismatch"] = int(_RuntimeSupportAuditMixin._switch_feedback_mismatch_for_audit(svc))
         return metrics
 
     @staticmethod

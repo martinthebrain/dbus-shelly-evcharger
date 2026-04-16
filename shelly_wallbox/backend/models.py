@@ -4,11 +4,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Literal, cast
 
 PhaseSelection = Literal["P1", "P1_P2", "P1_P2_P3"]
 SwitchingMode = Literal["direct", "contactor"]
 BackendMode = Literal["combined", "split"]
+
+
+def phase_selection_count(value: object) -> int:
+    """Return how many energized phases one normalized phase selection represents."""
+    normalized = normalize_phase_selection(value, "P1")
+    if normalized == "P1_P2_P3":
+        return 3
+    if normalized == "P1_P2":
+        return 2
+    return 1
 
 
 def normalize_phase_selection(value: object, default: PhaseSelection = "P1") -> PhaseSelection:
@@ -47,6 +58,51 @@ def _phase_selection_text(values: object) -> str:
     return str(values).strip() if values is not None else ""
 
 
+def phase_switch_lockout_active(
+    lockout_selection: object,
+    lockout_until: object,
+    *,
+    now: float | None = None,
+) -> bool:
+    """Return whether one phase-switch lockout is currently active."""
+    if not _phase_selection_text(lockout_selection):
+        return False
+    if not isinstance(lockout_until, (int, float, str)):
+        return False
+    try:
+        normalized_until = float(lockout_until)
+    except (TypeError, ValueError):
+        return False
+    current = time.time() if now is None else float(now)
+    return current < normalized_until
+
+
+def effective_supported_phase_selections(
+    values: object,
+    *,
+    lockout_selection: object = None,
+    lockout_until: object = None,
+    now: float | None = None,
+) -> tuple[PhaseSelection, ...]:
+    """Return the effective supported phase layouts after lockout degradation."""
+    normalized = normalize_phase_selection_tuple(values, ("P1",))
+    if not phase_switch_lockout_active(lockout_selection, lockout_until, now=now):
+        return normalized
+    allowed_phase_count = max(1, phase_selection_count(lockout_selection) - 1)
+    filtered = cast(
+        tuple[PhaseSelection, ...],
+        tuple(selection for selection in normalized if phase_selection_count(selection) <= allowed_phase_count),
+    )
+    return filtered or normalized
+
+
+def switch_feedback_mismatch(enabled: object, feedback_closed: object) -> bool:
+    """Return whether command state and explicit switch feedback disagree."""
+    if feedback_closed is None:
+        return False
+    return bool(enabled) != bool(feedback_closed)
+
+
 @dataclass(frozen=True)
 class MeterReading:
     """Normalized meter reading returned by one meter backend."""
@@ -77,6 +133,8 @@ class SwitchState:
 
     enabled: bool
     phase_selection: PhaseSelection
+    feedback_closed: bool | None = None
+    interlock_ok: bool | None = None
 
 
 @dataclass(frozen=True)

@@ -60,6 +60,29 @@ class TestShellyWallboxBackendTemplateSwitch(unittest.TestCase):
                 timeout=2.0,
             )
 
+    def test_read_switch_state_exposes_optional_feedback_and_interlock_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=template_switch\nBaseUrl=http://adapter.local\n"
+                "[Capabilities]\nSupportedPhaseSelections=P1\nSwitchingMode=contactor\n"
+                "[StateRequest]\nMethod=GET\nUrl=/switch/state\n"
+                "[StateResponse]\nEnabledPath=data.enabled\nFeedbackClosedPath=data.feedback_closed\nInterlockOkPath=data.interlock_ok\n"
+                "[CommandRequest]\nMethod=POST\nUrl=/switch/control\n",
+            )
+            session = MagicMock()
+            session.get.return_value = _FakeResponse(
+                {"data": {"enabled": True, "feedback_closed": False, "interlock_ok": True}}
+            )
+            backend = TemplateSwitchBackend(self._service(session), config_path=config_path)
+
+            state = backend.read_switch_state()
+
+            self.assertTrue(state.enabled)
+            self.assertEqual(state.phase_selection, "P1")
+            self.assertFalse(state.feedback_closed)
+            self.assertTrue(state.interlock_ok)
+
     def test_set_enabled_posts_rendered_json_template(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = self._write_config(

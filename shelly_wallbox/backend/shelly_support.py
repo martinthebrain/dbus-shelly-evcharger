@@ -201,6 +201,18 @@ class ShellyBackendSettings:
     requires_charge_pause_for_phase_change: bool
     max_direct_switch_power_w: float | None
     phase_switch_targets: dict[PhaseSelection, tuple[int, ...]]
+    feedback_readback: ShellySignalReadbackSettings | None
+    interlock_readback: ShellySignalReadbackSettings | None
+
+
+@dataclass(frozen=True)
+class ShellySignalReadbackSettings:
+    """Optional Shelly RPC signal readback for feedback/interlock semantics."""
+
+    component: str
+    device_id: int
+    value_path: str
+    invert: bool
 
 
 def _config_value(defaults: configparser.SectionProxy, key: str, fallback: object) -> str:
@@ -223,6 +235,56 @@ def _section(parser: configparser.ConfigParser, name: str) -> configparser.Secti
     return parser[name] if parser.has_section(name) else parser["DEFAULT"]
 
 
+def _empty_signal_section(section: configparser.SectionProxy) -> bool:
+    """Return whether one optional signal-readback section is effectively absent."""
+    if not section:
+        return True
+    return str(getattr(section, "name", "")).upper() == "DEFAULT" and not tuple(section.items())
+
+
+def _default_signal_value_path(component: str) -> str:
+    """Return the most likely scalar status field for one Shelly component."""
+    normalized = str(component).strip().lower()
+    if normalized == "switch":
+        return "output"
+    return "state"
+
+
+def _optional_signal_readback_settings(
+    section: configparser.SectionProxy,
+    *,
+    default_component: str = "Input",
+    default_id: int = 0,
+) -> ShellySignalReadbackSettings | None:
+    """Return one optional Shelly signal-readback descriptor from config."""
+    if _empty_signal_section(section):
+        return None
+    component = str(section.get("Component", default_component)).strip() or str(default_component)
+    device_id = int(section.get("Id", str(default_id)))
+    value_path = str(section.get("ValuePath", _default_signal_value_path(component))).strip()
+    if not value_path:
+        raise ValueError(f"Shelly signal readback for [{section.name}] requires ValuePath")
+    return ShellySignalReadbackSettings(
+        component=component,
+        device_id=device_id,
+        value_path=value_path,
+        invert=bool(normalize_binary_flag(section.get("Invert", 0))),
+    )
+
+
+def _mapping_path_value(payload: Mapping[str, object], path: str) -> object:
+    """Return one nested mapping value addressed by a dotted path."""
+    current: object = dict(payload)
+    for part in str(path).split("."):
+        token = part.strip()
+        if not token:
+            continue
+        if not isinstance(current, Mapping) or token not in current:
+            raise ValueError(f"Missing Shelly signal response path '{path}'")
+        current = current[token]
+    return current
+
+
 def load_shelly_backend_settings(
     service: Any,
     config_path: str = "",
@@ -235,6 +297,8 @@ def load_shelly_backend_settings(
     phase = _section(parser, "Phase")
     capabilities = _section(parser, "Capabilities")
     phase_map = _section(parser, "PhaseMap")
+    feedback = _section(parser, "Feedback")
+    interlock = _section(parser, "Interlock")
     default_phase = normalize_phase_selection(getattr(service, "phase", "L1"))
     device_id = int(_config_value(adapter, "Id", getattr(service, "pm_id", 0)))
     switching_mode = _resolved_switching_mode(capabilities, default_switching_mode)
@@ -259,6 +323,8 @@ def load_shelly_backend_settings(
         ),
         max_direct_switch_power_w=max_power,
         phase_switch_targets=_phase_switch_targets(phase_map, device_id, supported_phase_selections),
+        feedback_readback=_optional_signal_readback_settings(feedback),
+        interlock_readback=_optional_signal_readback_settings(interlock),
     )
 
 
@@ -389,3 +455,16 @@ class ShellyBackendBase:
     def _pm_status(self) -> ShellyPmStatus:
         """Return one Shelly PM status payload."""
         return cast(ShellyPmStatus, self._rpc_call(f"{self.settings.component}.GetStatus", id=self.settings.device_id))
+
+    def _component_status(self, component: str, device_id: int) -> dict[str, object]:
+        """Return one Shelly status payload for an arbitrary configured component."""
+        return self._rpc_call(f"{str(component).strip()}.GetStatus", id=int(device_id))
+
+    def _signal_readback_flag(self, settings: ShellySignalReadbackSettings | None) -> bool | None:
+        """Return one optional normalized bool from Shelly status readback config."""
+        if settings is None:
+            return None
+        payload = self._component_status(settings.component, settings.device_id)
+        value = _mapping_path_value(payload, settings.value_path)
+        normalized = bool(normalize_binary_flag(value))
+        return not normalized if settings.invert else normalized

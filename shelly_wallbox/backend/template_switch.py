@@ -34,6 +34,8 @@ class TemplateSwitchSettings:
     state_url: str
     state_enabled_path: str
     state_phase_selection_path: str | None
+    state_feedback_closed_path: str | None
+    state_interlock_ok_path: str | None
     command_method: str
     command_url: str
     command_json_template: str | None
@@ -97,6 +99,16 @@ def _template_switch_enabled_path(state_response: object) -> str:
 def _template_switch_phase_path(state_response: object) -> str | None:
     """Return the optional phase-selection response path."""
     return str(getattr(state_response, "get")("PhaseSelectionPath", "")).strip() or None
+
+
+def _template_switch_feedback_closed_path(state_response: object) -> str | None:
+    """Return the optional feedback-closed response path."""
+    return str(getattr(state_response, "get")("FeedbackClosedPath", "")).strip() or None
+
+
+def _template_switch_interlock_ok_path(state_response: object) -> str | None:
+    """Return the optional interlock-ok response path."""
+    return str(getattr(state_response, "get")("InterlockOkPath", "")).strip() or None
 
 
 def _template_switch_json_template(section: object, key: str = "JsonTemplate") -> str | None:
@@ -175,6 +187,8 @@ def load_template_switch_settings(service: object, config_path: str) -> Template
     urls = _template_switch_urls(base_url, state_request, command_request, phase_request)
     state_enabled_path = _template_switch_enabled_path(state_response)
     state_phase_selection_path = _template_switch_phase_path(state_response)
+    state_feedback_closed_path = _template_switch_feedback_closed_path(state_response)
+    state_interlock_ok_path = _template_switch_interlock_ok_path(state_response)
     command_json_template = _template_switch_json_template(command_request)
     phase_json_template = _template_switch_phase_json_template(phase_request, urls.phase_url)
 
@@ -187,6 +201,8 @@ def load_template_switch_settings(service: object, config_path: str) -> Template
         state_url=urls.state_url,
         state_enabled_path=state_enabled_path,
         state_phase_selection_path=state_phase_selection_path,
+        state_feedback_closed_path=state_feedback_closed_path,
+        state_interlock_ok_path=state_interlock_ok_path,
         command_method=normalize_http_method(command_request.get("Method", "POST"), "POST"),
         command_url=urls.command_url,
         command_json_template=command_json_template,
@@ -254,6 +270,13 @@ class TemplateSwitchBackend(TemplateHttpBackendBase):
             max_direct_switch_power_w=self.settings.max_direct_switch_power_w,
         )
 
+    @classmethod
+    def _optional_state_flag(cls, payload: dict[str, object], path: str | None) -> bool | None:
+        """Return one optional boolean state from the configured response path."""
+        if not path:
+            return None
+        return cls._enabled_state(json_path_value(payload, path))
+
     def read_switch_state(self) -> SwitchState:
         """Read one normalized switch state from the configured state endpoint."""
         payload = self._perform_request(
@@ -272,6 +295,8 @@ class TemplateSwitchBackend(TemplateHttpBackendBase):
         return SwitchState(
             enabled=enabled,
             phase_selection=phase_selection,
+            feedback_closed=self._optional_state_flag(payload, self.settings.state_feedback_closed_path),
+            interlock_ok=self._optional_state_flag(payload, self.settings.state_interlock_ok_path),
         )
 
     def set_enabled(self, enabled: bool) -> None:

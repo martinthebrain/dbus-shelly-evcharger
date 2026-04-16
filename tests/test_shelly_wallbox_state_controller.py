@@ -35,11 +35,18 @@ class TestServiceStateController(unittest.TestCase):
             _ignore_min_offtime_once=False,
             active_phase_selection="P1_P2",
             requested_phase_selection="P1_P2_P3",
+            supported_phase_selections=("P1", "P1_P2", "P1_P2_P3"),
             backend_mode="split",
             meter_backend_type="template_meter",
             switch_backend_type="template_switch",
             charger_backend_type="template_charger",
             _charger_target_current_amps=13.0,
+            _last_confirmed_pm_status={"_phase_selection": "P1", "output": True},
+            _phase_switch_mismatch_active=True,
+            _phase_switch_lockout_selection="P1_P2_P3",
+            _phase_switch_lockout_until=130.0,
+            _last_switch_feedback_closed=False,
+            _last_switch_interlock_ok=True,
             _last_charger_state_status="charging",
             _last_charger_state_fault="none",
             _last_status_source="charger-fault",
@@ -47,6 +54,8 @@ class TestServiceStateController(unittest.TestCase):
             _last_health_reason="running",
         )
         controller = ServiceStateController(service, self._normalize_mode)
+        with patch("shelly_wallbox.controllers.state.time.time", return_value=100.0):
+            summary = controller.state_summary()
 
         self.assertTrue(controller.config_path().endswith("config.shelly_wallbox.ini"))
         self.assertEqual(controller.coerce_runtime_int("7"), 7)
@@ -61,19 +70,72 @@ class TestServiceStateController(unittest.TestCase):
         self.assertEqual(controller._coerce_optional_runtime_float("7.5"), 7.5)
         self.assertIsNone(controller._coerce_optional_runtime_past_time(110.0, 100.0))
         self.assertEqual(controller._coerce_optional_runtime_past_time(100.5, 100.0), 100.5)
-        self.assertIn("mode=1", controller.state_summary())
-        self.assertIn("phase=P1_P2", controller.state_summary())
-        self.assertIn("phase_req=P1_P2_P3", controller.state_summary())
-        self.assertIn("backend=split", controller.state_summary())
-        self.assertIn("meter_backend=template_meter", controller.state_summary())
-        self.assertIn("switch_backend=template_switch", controller.state_summary())
-        self.assertIn("charger_backend=template_charger", controller.state_summary())
-        self.assertIn("charger_target=13.0", controller.state_summary())
-        self.assertIn("charger_status=charging", controller.state_summary())
-        self.assertIn("charger_fault=none", controller.state_summary())
-        self.assertIn("status_source=charger-fault", controller.state_summary())
-        self.assertIn("auto_state=waiting", controller.state_summary())
-        self.assertIn("health=running", controller.state_summary())
+        self.assertIn("mode=1", summary)
+        self.assertIn("phase=P1_P2", summary)
+        self.assertIn("phase_req=P1_P2_P3", summary)
+        self.assertIn("phase_obs=P1", summary)
+        self.assertIn("phase_mismatch=1", summary)
+        self.assertIn("phase_lockout=1", summary)
+        self.assertIn("phase_lockout_target=P1_P2_P3", summary)
+        self.assertIn("phase_effective=P1,P1_P2", summary)
+        self.assertIn("phase_degraded=1", summary)
+        self.assertIn("switch_feedback=0", summary)
+        self.assertIn("switch_interlock=1", summary)
+        self.assertIn("switch_feedback_mismatch=1", summary)
+        self.assertIn("contactor_suspected_open=0", summary)
+        self.assertIn("contactor_suspected_welded=0", summary)
+        self.assertIn("backend=split", summary)
+        self.assertIn("meter_backend=template_meter", summary)
+        self.assertIn("switch_backend=template_switch", summary)
+        self.assertIn("charger_backend=template_charger", summary)
+        self.assertIn("charger_target=13.0", summary)
+        self.assertIn("charger_status=charging", summary)
+        self.assertIn("charger_fault=none", summary)
+        self.assertIn("status_source=charger-fault", summary)
+        self.assertIn("auto_state=waiting", summary)
+        self.assertIn("health=running", summary)
+
+    def test_state_summary_marks_contactor_suspicions_from_health_reason(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_enable=1,
+            virtual_startstop=1,
+            virtual_autostart=1,
+            _auto_mode_cutover_pending=False,
+            _ignore_min_offtime_once=False,
+            active_phase_selection="P1",
+            requested_phase_selection="P1",
+            supported_phase_selections=("P1",),
+            backend_mode="split",
+            meter_backend_type="template_meter",
+            switch_backend_type="template_switch",
+            charger_backend_type=None,
+            _charger_target_current_amps=None,
+            _last_confirmed_pm_status={"_phase_selection": "P1", "output": False},
+            _phase_switch_mismatch_active=False,
+            _phase_switch_lockout_selection=None,
+            _phase_switch_lockout_until=None,
+            _last_switch_feedback_closed=None,
+            _last_switch_interlock_ok=None,
+            _last_charger_state_status="",
+            _last_charger_state_fault="",
+            _last_status_source="switch-feedback",
+            _last_auto_state="waiting",
+            _last_health_reason="contactor-suspected-open",
+        )
+        controller = ServiceStateController(service, self._normalize_mode)
+        with patch("shelly_wallbox.controllers.state.time.time", return_value=100.0):
+            open_summary = controller.state_summary()
+
+        self.assertIn("contactor_suspected_open=1", open_summary)
+        self.assertIn("contactor_suspected_welded=0", open_summary)
+
+        service._last_health_reason = "contactor-suspected-welded"
+        with patch("shelly_wallbox.controllers.state.time.time", return_value=100.0):
+            welded_summary = controller.state_summary()
+
+        self.assertIn("contactor_suspected_open=0", welded_summary)
+        self.assertIn("contactor_suspected_welded=1", welded_summary)
 
     def test_load_runtime_state_missing_file_and_load_config_success(self) -> None:
         service = SimpleNamespace(runtime_state_path="/tmp/does-not-exist.json")
@@ -306,6 +368,13 @@ class TestServiceStateController(unittest.TestCase):
                 _phase_switch_requested_at=118.0,
                 _phase_switch_stable_until=130.0,
                 _phase_switch_resume_relay=True,
+                _phase_switch_mismatch_counts={"P1_P2_P3": 2},
+                _phase_switch_last_mismatch_selection="P1_P2_P3",
+                _phase_switch_last_mismatch_at=119.0,
+                _phase_switch_lockout_selection="P1_P2_P3",
+                _phase_switch_lockout_reason="mismatch-threshold",
+                _phase_switch_lockout_at=120.0,
+                _phase_switch_lockout_until=180.0,
                 relay_last_changed_at=111.0,
                 relay_last_off_at=112.0,
                 _runtime_state_serialized=None,
@@ -338,6 +407,13 @@ class TestServiceStateController(unittest.TestCase):
             self.assertEqual(saved["phase_switch_requested_at"], 118.0)
             self.assertEqual(saved["phase_switch_stable_until"], 130.0)
             self.assertEqual(saved["phase_switch_resume_relay"], 1)
+            self.assertEqual(saved["phase_switch_mismatch_counts"], {"P1_P2_P3": 2})
+            self.assertEqual(saved["phase_switch_last_mismatch_selection"], "P1_P2_P3")
+            self.assertEqual(saved["phase_switch_last_mismatch_at"], 119.0)
+            self.assertEqual(saved["phase_switch_lockout_selection"], "P1_P2_P3")
+            self.assertEqual(saved["phase_switch_lockout_reason"], "mismatch-threshold")
+            self.assertEqual(saved["phase_switch_lockout_at"], 120.0)
+            self.assertEqual(saved["phase_switch_lockout_until"], 180.0)
 
             service.virtual_mode = 0
             service.virtual_autostart = 1
@@ -363,6 +439,13 @@ class TestServiceStateController(unittest.TestCase):
             service._phase_switch_requested_at = None
             service._phase_switch_stable_until = None
             service._phase_switch_resume_relay = False
+            service._phase_switch_mismatch_counts = {}
+            service._phase_switch_last_mismatch_selection = None
+            service._phase_switch_last_mismatch_at = None
+            service._phase_switch_lockout_selection = None
+            service._phase_switch_lockout_reason = ""
+            service._phase_switch_lockout_at = None
+            service._phase_switch_lockout_until = None
             service.relay_last_changed_at = None
             service.relay_last_off_at = None
 
@@ -392,6 +475,13 @@ class TestServiceStateController(unittest.TestCase):
             self.assertEqual(service._phase_switch_requested_at, 118.0)
             self.assertEqual(service._phase_switch_stable_until, 130.0)
             self.assertTrue(service._phase_switch_resume_relay)
+            self.assertEqual(service._phase_switch_mismatch_counts, {"P1_P2_P3": 2})
+            self.assertEqual(service._phase_switch_last_mismatch_selection, "P1_P2_P3")
+            self.assertEqual(service._phase_switch_last_mismatch_at, 119.0)
+            self.assertEqual(service._phase_switch_lockout_selection, "P1_P2_P3")
+            self.assertEqual(service._phase_switch_lockout_reason, "mismatch-threshold")
+            self.assertEqual(service._phase_switch_lockout_at, 120.0)
+            self.assertEqual(service._phase_switch_lockout_until, 180.0)
             self.assertEqual(service.relay_last_changed_at, 111.0)
             self.assertEqual(service.relay_last_off_at, 112.0)
 

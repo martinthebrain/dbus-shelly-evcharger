@@ -23,6 +23,7 @@ def _auto_phase_service(**overrides):
     auto_policy.phase.downshift_delay_seconds = 5.0
     auto_policy.phase.upshift_headroom_watts = 250.0
     auto_policy.phase.downshift_margin_watts = 150.0
+    auto_policy.phase.mismatch_retry_seconds = 60.0
     data = {
         "auto_policy": auto_policy,
         "supported_phase_selections": ("P1", "P1_P2"),
@@ -48,6 +49,9 @@ def _auto_phase_service(**overrides):
         "_phase_switch_requested_at": None,
         "_phase_switch_stable_until": None,
         "_phase_switch_resume_relay": False,
+        "_phase_switch_mismatch_active": False,
+        "_phase_switch_last_mismatch_selection": None,
+        "_phase_switch_last_mismatch_at": None,
         "_auto_phase_target_candidate": None,
         "_auto_phase_target_since": None,
     }
@@ -103,6 +107,75 @@ class TestUpdateCycleController(unittest.TestCase):
         self.assertTrue(service._phase_switch_resume_relay)
         service._save_runtime_state.assert_called_once()
         service._publish_local_pm_status.assert_called_once_with(False, 100.0)
+
+    def test_auto_phase_selection_blocks_repeated_upshift_after_confirmed_mismatch(self):
+        service = _auto_phase_service(
+            _last_confirmed_pm_status={"output": True},
+            _last_confirmed_pm_status_at=99.5,
+            _phase_switch_last_mismatch_selection="P1_P2",
+            _phase_switch_last_mismatch_at=95.0,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        override = controller.maybe_apply_auto_phase_selection(
+            service,
+            True,
+            True,
+            230.0,
+            100.0,
+            True,
+        )
+
+        self.assertIsNone(override)
+        self.assertIsNone(service._auto_phase_target_candidate)
+        self.assertIsNone(service._phase_switch_pending_selection)
+        self.assertEqual(service._last_auto_metrics["phase_reason"], "phase-upshift-blocked-mismatch")
+
+    def test_auto_phase_selection_retries_upshift_after_mismatch_cooldown_expires(self):
+        service = _auto_phase_service(
+            _last_confirmed_pm_status={"output": True},
+            _last_confirmed_pm_status_at=99.5,
+            _phase_switch_last_mismatch_selection="P1_P2",
+            _phase_switch_last_mismatch_at=10.0,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        override = controller.maybe_apply_auto_phase_selection(
+            service,
+            True,
+            True,
+            230.0,
+            100.0,
+            True,
+        )
+
+        self.assertIsNone(override)
+        self.assertEqual(service._auto_phase_target_candidate, "P1_P2")
+        self.assertEqual(service._last_auto_metrics["phase_reason"], "phase-upshift-pending")
+
+    def test_auto_phase_selection_blocks_upshift_while_phase_lockout_is_active(self):
+        service = _auto_phase_service(
+            _last_confirmed_pm_status={"output": True},
+            _last_confirmed_pm_status_at=99.5,
+            _phase_switch_lockout_selection="P1_P2",
+            _phase_switch_lockout_reason="mismatch-threshold",
+            _phase_switch_lockout_at=95.0,
+            _phase_switch_lockout_until=160.0,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        override = controller.maybe_apply_auto_phase_selection(
+            service,
+            True,
+            True,
+            230.0,
+            100.0,
+            True,
+        )
+
+        self.assertIsNone(override)
+        self.assertIsNone(service._auto_phase_target_candidate)
+        self.assertEqual(service._last_auto_metrics["phase_reason"], "phase-upshift-blocked-lockout")
 
     def test_auto_phase_selection_applies_lowest_phase_while_idle_after_delay(self):
         service = _auto_phase_service(
@@ -343,6 +416,7 @@ class TestUpdateCycleController(unittest.TestCase):
         controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
 
         relay_on, power, current, confirmed, desired_override = controller.orchestrate_pending_phase_switch(
+            {"output": False, "_phase_selection": "P1"},
             False,
             0.0,
             0.0,
@@ -358,7 +432,7 @@ class TestUpdateCycleController(unittest.TestCase):
         self.assertFalse(desired_override)
         service._apply_phase_selection.assert_called_once_with("P1_P2")
         self.assertEqual(service.requested_phase_selection, "P1_P2")
-        self.assertEqual(service.active_phase_selection, "P1_P2")
+        self.assertEqual(service.active_phase_selection, "P1")
         self.assertEqual(service._phase_switch_state, "stabilizing")
         self.assertEqual(service._phase_switch_stable_until, 102.0)
 
@@ -380,6 +454,7 @@ class TestUpdateCycleController(unittest.TestCase):
         controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
 
         relay_on, power, current, confirmed, desired_override = controller.orchestrate_pending_phase_switch(
+            {"output": False, "_phase_selection": "P1_P2"},
             False,
             0.0,
             0.0,
@@ -419,6 +494,7 @@ class TestUpdateCycleController(unittest.TestCase):
         controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
 
         relay_on, power, current, confirmed, desired_override = controller.orchestrate_pending_phase_switch(
+            {"output": False, "_phase_selection": "P1_P2"},
             False,
             0.0,
             0.0,
@@ -453,6 +529,7 @@ class TestUpdateCycleController(unittest.TestCase):
         controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
 
         relay_on, power, current, confirmed, desired_override = controller.orchestrate_pending_phase_switch(
+            {"output": False, "_phase_selection": "P1_P2"},
             False,
             0.0,
             0.0,
@@ -469,6 +546,151 @@ class TestUpdateCycleController(unittest.TestCase):
         self.assertTrue(service._ignore_min_offtime_once)
         self.assertIsNone(service._phase_switch_pending_selection)
         self.assertIsNone(service._phase_switch_state)
+
+    def test_orchestrate_pending_phase_switch_waits_for_observed_phase_match(self):
+        service = SimpleNamespace(
+            _phase_switch_pending_selection="P1_P2",
+            _phase_switch_state="stabilizing",
+            _phase_switch_requested_at=98.0,
+            _phase_switch_stable_until=99.0,
+            _phase_switch_resume_relay=True,
+            requested_phase_selection="P1_P2",
+            active_phase_selection="P1",
+            auto_shelly_soft_fail_seconds=10.0,
+            _peek_pending_relay_command=MagicMock(return_value=(None, None)),
+            _queue_relay_command=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _save_runtime_state=MagicMock(),
+            _mark_failure=MagicMock(),
+            _warning_throttled=MagicMock(),
+            _set_health=MagicMock(),
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        relay_on, power, current, confirmed, desired_override = controller.orchestrate_pending_phase_switch(
+            {"output": False, "_phase_selection": "P1"},
+            False,
+            0.0,
+            0.0,
+            True,
+            100.0,
+            False,
+        )
+
+        self.assertFalse(relay_on)
+        self.assertEqual(power, 0.0)
+        self.assertEqual(current, 0.0)
+        self.assertFalse(confirmed)
+        self.assertFalse(desired_override)
+        self.assertEqual(service.active_phase_selection, "P1")
+        self.assertEqual(service._phase_switch_state, "stabilizing")
+        service._queue_relay_command.assert_not_called()
+        service._set_health.assert_not_called()
+
+    def test_orchestrate_pending_phase_switch_marks_mismatch_after_timeout(self):
+        service = SimpleNamespace(
+            _phase_switch_pending_selection="P1_P2",
+            _phase_switch_state="stabilizing",
+            _phase_switch_requested_at=80.0,
+            _phase_switch_stable_until=81.0,
+            _phase_switch_resume_relay=True,
+            requested_phase_selection="P1_P2",
+            active_phase_selection="P1",
+            auto_shelly_soft_fail_seconds=10.0,
+            _phase_switch_mismatch_counts={},
+            _phase_switch_lockout_selection=None,
+            _phase_switch_lockout_reason="",
+            _phase_switch_lockout_at=None,
+            _phase_switch_lockout_until=None,
+            _peek_pending_relay_command=MagicMock(return_value=(None, None)),
+            _queue_relay_command=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _save_runtime_state=MagicMock(),
+            _mark_failure=MagicMock(),
+            _warning_throttled=MagicMock(),
+            _set_health=MagicMock(),
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        relay_on, power, current, confirmed, desired_override = controller.orchestrate_pending_phase_switch(
+            {"output": False, "_phase_selection": "P1"},
+            False,
+            0.0,
+            0.0,
+            True,
+            100.0,
+            False,
+        )
+
+        self.assertTrue(relay_on)
+        self.assertEqual(power, 0.0)
+        self.assertEqual(current, 0.0)
+        self.assertFalse(confirmed)
+        self.assertIsNone(desired_override)
+        self.assertEqual(service.active_phase_selection, "P1")
+        self.assertEqual(service.requested_phase_selection, "P1")
+        self.assertIsNone(service._phase_switch_state)
+        self.assertIsNone(service._phase_switch_pending_selection)
+        service._queue_relay_command.assert_called_once_with(True, 100.0)
+        service._publish_local_pm_status.assert_called_once_with(True, 100.0)
+        service._mark_failure.assert_called_once_with("shelly")
+        service._set_health.assert_called_once_with("phase-switch-mismatch", cached=False)
+        service._warning_throttled.assert_called_once()
+        self.assertFalse(service._phase_switch_mismatch_active)
+        self.assertEqual(service._phase_switch_mismatch_counts["P1_P2"], 1)
+        self.assertEqual(service._phase_switch_last_mismatch_selection, "P1_P2")
+        self.assertEqual(service._phase_switch_last_mismatch_at, 100.0)
+        self.assertIsNone(service._phase_switch_lockout_selection)
+
+    def test_orchestrate_pending_phase_switch_engages_lockout_after_repeated_mismatches(self):
+        service = SimpleNamespace(
+            _phase_switch_pending_selection="P1_P2",
+            _phase_switch_state="stabilizing",
+            _phase_switch_requested_at=80.0,
+            _phase_switch_stable_until=81.0,
+            _phase_switch_resume_relay=True,
+            requested_phase_selection="P1_P2",
+            active_phase_selection="P1",
+            auto_shelly_soft_fail_seconds=10.0,
+            auto_phase_mismatch_lockout_count=3,
+            auto_phase_mismatch_lockout_seconds=60.0,
+            _phase_switch_mismatch_counts={"P1_P2": 2},
+            _phase_switch_lockout_selection=None,
+            _phase_switch_lockout_reason="",
+            _phase_switch_lockout_at=None,
+            _phase_switch_lockout_until=None,
+            _peek_pending_relay_command=MagicMock(return_value=(None, None)),
+            _queue_relay_command=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _save_runtime_state=MagicMock(),
+            _mark_failure=MagicMock(),
+            _warning_throttled=MagicMock(),
+            _set_health=MagicMock(),
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        relay_on, power, current, confirmed, desired_override = controller.orchestrate_pending_phase_switch(
+            {"output": False, "_phase_selection": "P1"},
+            False,
+            0.0,
+            0.0,
+            True,
+            100.0,
+            False,
+        )
+
+        self.assertTrue(relay_on)
+        self.assertEqual(power, 0.0)
+        self.assertEqual(current, 0.0)
+        self.assertFalse(confirmed)
+        self.assertIsNone(desired_override)
+        self.assertEqual(service.requested_phase_selection, "P1")
+        self.assertEqual(service.active_phase_selection, "P1")
+        self.assertEqual(service._phase_switch_mismatch_counts["P1_P2"], 3)
+        self.assertEqual(service._phase_switch_lockout_selection, "P1_P2")
+        self.assertEqual(service._phase_switch_lockout_reason, "mismatch-threshold")
+        self.assertEqual(service._phase_switch_lockout_at, 100.0)
+        self.assertEqual(service._phase_switch_lockout_until, 160.0)
 
     def test_update_learned_charge_power_ignores_unconfirmed_measurements(self):
         service = SimpleNamespace(
@@ -1922,6 +2144,130 @@ class TestUpdateCycleController(unittest.TestCase):
         controller = UpdateCycleController(service, _phase_values, lambda reason: {"charger-fault": 26}.get(reason, 99))
 
         self.assertIsNone(controller.charger_health_override(service, 100.0))
+
+    def test_switch_feedback_health_override_detects_interlock_block(self):
+        service = SimpleNamespace(
+            _last_switch_feedback_closed=True,
+            _last_switch_interlock_ok=False,
+            _last_switch_feedback_at=100.0,
+            auto_shelly_soft_fail_seconds=10.0,
+        )
+        controller = UpdateCycleController(
+            service,
+            _phase_values,
+            lambda reason: {"contactor-interlock": 28, "contactor-feedback-mismatch": 29}.get(reason, 99),
+        )
+
+        self.assertEqual(controller.switch_feedback_health_override(service, True, False, 100.0), "contactor-interlock")
+
+    def test_switch_feedback_health_override_detects_feedback_mismatch(self):
+        service = SimpleNamespace(
+            _last_switch_feedback_closed=False,
+            _last_switch_interlock_ok=True,
+            _last_switch_feedback_at=100.0,
+            auto_shelly_soft_fail_seconds=10.0,
+        )
+        controller = UpdateCycleController(
+            service,
+            _phase_values,
+            lambda reason: {"contactor-interlock": 28, "contactor-feedback-mismatch": 29}.get(reason, 99),
+        )
+
+        self.assertEqual(
+            controller.switch_feedback_health_override(service, True, True, 100.0),
+            "contactor-feedback-mismatch",
+        )
+
+    def test_switch_feedback_health_override_suspects_welded_contactor_without_feedback(self):
+        service = SimpleNamespace(
+            _last_switch_feedback_closed=None,
+            _last_switch_interlock_ok=None,
+            _last_switch_feedback_at=None,
+            _contactor_suspected_open_since=None,
+            _contactor_suspected_welded_since=None,
+            _charger_backend=None,
+            charging_threshold_watts=100.0,
+            min_current=6.0,
+            auto_shelly_soft_fail_seconds=10.0,
+        )
+        controller = UpdateCycleController(
+            service,
+            _phase_values,
+            lambda reason: {"contactor-suspected-welded": 31}.get(reason, 99),
+        )
+
+        self.assertIsNone(
+            controller.switch_feedback_health_override(
+                service,
+                False,
+                False,
+                100.0,
+                power=1200.0,
+                current=5.2,
+                pm_confirmed=True,
+            )
+        )
+        self.assertEqual(service._contactor_suspected_welded_since, 100.0)
+        self.assertEqual(
+            controller.switch_feedback_health_override(
+                service,
+                False,
+                False,
+                111.0,
+                power=1200.0,
+                current=5.2,
+                pm_confirmed=True,
+            ),
+            "contactor-suspected-welded",
+        )
+
+    def test_switch_feedback_health_override_suspects_open_contactor_from_charger_activity(self):
+        service = SimpleNamespace(
+            _last_switch_feedback_closed=None,
+            _last_switch_interlock_ok=None,
+            _last_switch_feedback_at=None,
+            _contactor_suspected_open_since=None,
+            _contactor_suspected_welded_since=None,
+            _charger_backend=object(),
+            _last_charger_state_at=100.0,
+            _last_charger_state_status="charging",
+            _last_charger_state_power_w=0.0,
+            _last_charger_state_actual_current_amps=0.0,
+            charging_threshold_watts=100.0,
+            min_current=6.0,
+            auto_shelly_soft_fail_seconds=10.0,
+        )
+        controller = UpdateCycleController(
+            service,
+            _phase_values,
+            lambda reason: {"contactor-suspected-open": 30}.get(reason, 99),
+        )
+
+        self.assertIsNone(
+            controller.switch_feedback_health_override(
+                service,
+                True,
+                True,
+                100.0,
+                power=0.0,
+                current=0.0,
+                pm_confirmed=True,
+            )
+        )
+        self.assertEqual(service._contactor_suspected_open_since, 100.0)
+        service._last_charger_state_at = 110.0
+        self.assertEqual(
+            controller.switch_feedback_health_override(
+                service,
+                True,
+                True,
+                110.0,
+                power=0.0,
+                current=0.0,
+                pm_confirmed=True,
+            ),
+            "contactor-suspected-open",
+        )
 
     def test_apply_charger_current_target_prefers_stable_learned_current(self):
         charger_backend = SimpleNamespace(set_current=MagicMock())

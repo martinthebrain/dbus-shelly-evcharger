@@ -178,6 +178,9 @@ class AutoPhasePolicy:
     downshift_delay_seconds: float = 30.0
     upshift_headroom_watts: float = 250.0
     downshift_margin_watts: float = 150.0
+    mismatch_retry_seconds: float = 300.0
+    mismatch_lockout_count: int = 3
+    mismatch_lockout_seconds: float = 1800.0
     prefer_lowest_phase_when_idle: bool = True
 
     @staticmethod
@@ -186,6 +189,13 @@ class AutoPhasePolicy:
             return float(value)
         logging.warning("%s %s invalid, clamping to 0", label, value)
         return 0.0
+
+    @staticmethod
+    def _clamp_non_negative_int(value: int, label: str) -> int:
+        if value >= 0:
+            return int(value)
+        logging.warning("%s %s invalid, clamping to 0", label, value)
+        return 0
 
     def clamp(self) -> None:
         """Clamp invalid phase-switch settings to safe conservative defaults."""
@@ -204,6 +214,18 @@ class AutoPhasePolicy:
         self.downshift_margin_watts = self._clamp_non_negative(
             self.downshift_margin_watts,
             "AutoPhaseDownshiftMarginWatts",
+        )
+        self.mismatch_retry_seconds = self._clamp_non_negative(
+            self.mismatch_retry_seconds,
+            "AutoPhaseMismatchRetrySeconds",
+        )
+        self.mismatch_lockout_count = self._clamp_non_negative_int(
+            self.mismatch_lockout_count,
+            "AutoPhaseMismatchLockoutCount",
+        )
+        self.mismatch_lockout_seconds = self._clamp_non_negative(
+            self.mismatch_lockout_seconds,
+            "AutoPhaseMismatchLockoutSeconds",
         )
 
 
@@ -277,6 +299,9 @@ class AutoPolicy:
                 downshift_delay_seconds=float(_config_value(defaults, "AutoPhaseDownshiftDelaySeconds", 30)),
                 upshift_headroom_watts=float(_config_value(defaults, "AutoPhaseUpshiftHeadroomWatts", 250)),
                 downshift_margin_watts=float(_config_value(defaults, "AutoPhaseDownshiftMarginWatts", 150)),
+                mismatch_retry_seconds=float(_config_value(defaults, "AutoPhaseMismatchRetrySeconds", 300)),
+                mismatch_lockout_count=int(_config_value(defaults, "AutoPhaseMismatchLockoutCount", 3)),
+                mismatch_lockout_seconds=float(_config_value(defaults, "AutoPhaseMismatchLockoutSeconds", 1800)),
                 prefer_lowest_phase_when_idle=defaults.get(
                     "AutoPhasePreferLowestWhenIdle",
                     "1",
@@ -328,6 +353,9 @@ class AutoPolicy:
                 downshift_delay_seconds=float(getattr(svc, "auto_phase_downshift_delay_seconds", 30.0)),
                 upshift_headroom_watts=float(getattr(svc, "auto_phase_upshift_headroom_watts", 250.0)),
                 downshift_margin_watts=float(getattr(svc, "auto_phase_downshift_margin_watts", 150.0)),
+                mismatch_retry_seconds=float(getattr(svc, "auto_phase_mismatch_retry_seconds", 300.0)),
+                mismatch_lockout_count=int(getattr(svc, "auto_phase_mismatch_lockout_count", 3)),
+                mismatch_lockout_seconds=float(getattr(svc, "auto_phase_mismatch_lockout_seconds", 1800.0)),
                 prefer_lowest_phase_when_idle=bool(getattr(svc, "auto_phase_prefer_lowest_when_idle", True)),
             ),
         )
@@ -471,6 +499,9 @@ class AutoPolicy:
         svc.auto_phase_downshift_delay_seconds = float(self.phase.downshift_delay_seconds)
         svc.auto_phase_upshift_headroom_watts = float(self.phase.upshift_headroom_watts)
         svc.auto_phase_downshift_margin_watts = float(self.phase.downshift_margin_watts)
+        svc.auto_phase_mismatch_retry_seconds = float(self.phase.mismatch_retry_seconds)
+        svc.auto_phase_mismatch_lockout_count = int(self.phase.mismatch_lockout_count)
+        svc.auto_phase_mismatch_lockout_seconds = float(self.phase.mismatch_lockout_seconds)
         svc.auto_phase_prefer_lowest_when_idle = bool(self.phase.prefer_lowest_phase_when_idle)
 
     def resolve_threshold_profile(

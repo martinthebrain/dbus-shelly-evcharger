@@ -100,6 +100,7 @@ class ServiceBootstrapController(
         "/Mode",
         "/StartStop",
         "/Enable",
+        "/Auto/PhaseLockoutReset",
     }
 
     def __init__(

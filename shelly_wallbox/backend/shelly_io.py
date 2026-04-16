@@ -133,6 +133,9 @@ class ShellyIoHost(Protocol):
     _last_charger_state_status: str | None
     _last_charger_state_fault: str | None
     _last_charger_state_at: float | None
+    _last_switch_feedback_closed: bool | None
+    _last_switch_interlock_ok: bool | None
+    _last_switch_feedback_at: float | None
     _charger_target_current_amps: float | None
     _charger_target_current_applied_at: float | None
 
@@ -401,6 +404,19 @@ class ShellyIoController:
             normalized_requested,
         )
 
+    def _store_runtime_switch_snapshot(self, switch_state: object | None, now: float | None = None) -> None:
+        """Mirror optional switch feedback/interlock readback into runtime state."""
+        svc = self.service
+        feedback_closed = self._optional_bool(None if switch_state is None else getattr(switch_state, "feedback_closed", None))
+        interlock_ok = self._optional_bool(None if switch_state is None else getattr(switch_state, "interlock_ok", None))
+        svc._last_switch_feedback_closed = feedback_closed
+        svc._last_switch_interlock_ok = interlock_ok
+        svc._last_switch_feedback_at = (
+            None
+            if feedback_closed is None and interlock_ok is None
+            else (self._runtime_now() if now is None else float(now))
+        )
+
     def _sync_charger_runtime_state(self, state: ChargerState, now: float | None = None) -> None:
         """Mirror one normalized charger readback into the service runtime state."""
         svc = self.service
@@ -546,8 +562,10 @@ class ShellyIoController:
         """Return the current split switch state when the backend exposes one."""
         backend = self._split_switch_backend()
         if backend is None or not hasattr(backend, "read_switch_state"):
+            self._store_runtime_switch_snapshot(None)
             return None
         switch_state: object = cast(Any, backend).read_switch_state()
+        self._store_runtime_switch_snapshot(switch_state)
         return switch_state
 
     @staticmethod
@@ -757,6 +775,7 @@ class ShellyIoController:
         try:
             return self._split_switch_state()
         except Exception:  # pylint: disable=broad-except
+            self._store_runtime_switch_snapshot(None)
             return None
 
     def _runtime_cached_charger_state_for_split(self, now: float | None) -> ChargerState | None:

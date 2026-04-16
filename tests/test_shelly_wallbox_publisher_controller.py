@@ -198,6 +198,26 @@ class TestDbusPublishController(unittest.TestCase):
 
         self.assertEqual(values["/SetCurrent"], 11.0)
 
+    def test_config_values_degrade_supported_phase_selections_while_lockout_is_active(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1", "P1_P2", "P1_P2_P3"),
+            min_current=6.0,
+            max_current=16.0,
+            _phase_switch_lockout_selection="P1_P2_P3",
+            _phase_switch_lockout_until=140.0,
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        values = controller._config_values(1, now=100.0)
+
+        self.assertEqual(values["/SupportedPhaseSelections"], "P1,P1_P2")
+
     def test_config_values_prefer_fresh_native_charger_readback_for_gui_state(self) -> None:
         service = SimpleNamespace(
             virtual_mode=1,
@@ -388,6 +408,16 @@ class TestDbusPublishController(unittest.TestCase):
             _last_charger_state_fault="",
             _last_charger_fault_active=1,
             _last_charger_state_at=97.0,
+            _last_confirmed_pm_status={"_phase_selection": "P1"},
+            _last_switch_feedback_closed=False,
+            _last_switch_interlock_ok=True,
+            _last_switch_feedback_at=96.0,
+            _phase_switch_mismatch_active=True,
+            supported_phase_selections=("P1", "P1_P2_P3"),
+            _phase_switch_lockout_selection="P1_P2",
+            _phase_switch_lockout_reason="mismatch-threshold",
+            _phase_switch_lockout_at=91.0,
+            _phase_switch_lockout_until=150.0,
             _last_auto_metrics={
                 "phase_current": "P1",
                 "phase_target": "P1_P2",
@@ -425,10 +455,35 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(counter_values["/Auto/ErrorCount"], 4)
         self.assertEqual(counter_values["/Auto/ChargerCurrentTarget"], 13.0)
         self.assertEqual(counter_values["/Auto/PhaseCurrent"], "P1")
+        self.assertEqual(counter_values["/Auto/PhaseObserved"], "P1")
         self.assertEqual(counter_values["/Auto/PhaseTarget"], "P1_P2")
         self.assertEqual(counter_values["/Auto/PhaseReason"], "phase-upshift-pending")
+        self.assertEqual(counter_values["/Auto/PhaseMismatchActive"], 1)
+        self.assertEqual(counter_values["/Auto/PhaseLockoutActive"], 1)
+        self.assertEqual(counter_values["/Auto/PhaseLockoutTarget"], "P1_P2")
+        self.assertEqual(counter_values["/Auto/PhaseLockoutReason"], "mismatch-threshold")
+        self.assertEqual(counter_values["/Auto/PhaseSupportedConfigured"], "P1,P1_P2_P3")
+        self.assertEqual(counter_values["/Auto/PhaseSupportedEffective"], "P1")
+        self.assertEqual(counter_values["/Auto/PhaseDegradedActive"], 1)
+        self.assertEqual(counter_values["/Auto/SwitchFeedbackClosed"], 0)
+        self.assertEqual(counter_values["/Auto/SwitchInterlockOk"], 1)
+        self.assertEqual(counter_values["/Auto/SwitchFeedbackMismatch"], 0)
+        self.assertEqual(counter_values["/Auto/ContactorSuspectedOpen"], 0)
+        self.assertEqual(counter_values["/Auto/ContactorSuspectedWelded"], 0)
         self.assertEqual(counter_values["/Auto/PhaseThresholdWatts"], 3010.0)
         self.assertEqual(counter_values["/Auto/PhaseCandidate"], "P1_P2")
         self.assertEqual(age_values["/Auto/ChargerCurrentTargetAge"], 4.0)
         self.assertEqual(age_values["/Auto/PhaseCandidateAge"], 8.0)
+        self.assertEqual(age_values["/Auto/PhaseLockoutAge"], 9.0)
+        self.assertEqual(age_values["/Auto/LastSwitchFeedbackAge"], 4.0)
         self.assertEqual(age_values["/Auto/LastChargerReadAge"], 3.0)
+
+        service._last_health_reason = "contactor-suspected-welded"
+        welded_counter_values = controller._diagnostic_counter_values(100.0)
+        self.assertEqual(welded_counter_values["/Auto/ContactorSuspectedOpen"], 0)
+        self.assertEqual(welded_counter_values["/Auto/ContactorSuspectedWelded"], 1)
+
+        service._last_health_reason = "contactor-suspected-open"
+        open_counter_values = controller._diagnostic_counter_values(100.0)
+        self.assertEqual(open_counter_values["/Auto/ContactorSuspectedOpen"], 1)
+        self.assertEqual(open_counter_values["/Auto/ContactorSuspectedWelded"], 0)

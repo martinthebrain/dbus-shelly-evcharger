@@ -7,6 +7,10 @@ import math
 import time
 from typing import Any, Callable, Mapping, Sequence, TypeAlias, cast
 
+from shelly_wallbox.backend.models import (
+    effective_supported_phase_selections,
+    switch_feedback_mismatch,
+)
 from shelly_wallbox.core.contracts import (
     displayable_confirmed_read_timestamp,
     finite_float_or_none,
@@ -489,6 +493,13 @@ class DbusPublishController:
     def _config_values(self, startstop_display: int, now: float | None) -> dict[str, Any]:
         """Return mode and control values keyed by DBus path."""
         charger_enabled = self._charger_enabled_readback(now)
+        current_time = time.time() if now is None else float(now)
+        effective_supported = effective_supported_phase_selections(
+            getattr(self.service, "supported_phase_selections", ("P1",)),
+            lockout_selection=getattr(self.service, "_phase_switch_lockout_selection", None),
+            lockout_until=getattr(self.service, "_phase_switch_lockout_until", None),
+            now=current_time,
+        )
         enable_display = (
             int(bool(charger_enabled))
             if charger_enabled is not None
@@ -502,7 +513,7 @@ class DbusPublishController:
             "/Enable": enable_display,
             "/PhaseSelection": str(getattr(self.service, "requested_phase_selection", "P1")),
             "/PhaseSelectionActive": str(getattr(self.service, "active_phase_selection", "P1")),
-            "/SupportedPhaseSelections": ",".join(getattr(self.service, "supported_phase_selections", ("P1",))),
+            "/SupportedPhaseSelections": ",".join(effective_supported),
             "/SetCurrent": self._display_set_current(now),
             "/MinCurrent": getattr(self.service, "min_current", 0.0),
             "/MaxCurrent": getattr(self.service, "max_current", 0.0),
@@ -539,6 +550,105 @@ class DbusPublishController:
         """Return one outward-safe Auto phase metric text value."""
         raw_value = cls._auto_metrics(service).get(field_name)
         return "" if raw_value is None else str(raw_value).strip()
+
+    @staticmethod
+    def _diagnostic_text_value(raw_value: Any) -> str:
+        """Return one stripped diagnostic text value or an empty string."""
+        return "" if raw_value is None else str(raw_value).strip()
+
+    @classmethod
+    def _observed_phase_value(cls, service: Any) -> str:
+        """Return the latest observed phase selection from PM status or charger readback."""
+        pm_status = getattr(service, "_last_confirmed_pm_status", None)
+        if isinstance(pm_status, Mapping):
+            observed = cls._diagnostic_text_value(pm_status.get("_phase_selection"))
+            if observed:
+                return observed
+        return cls._diagnostic_text_value(getattr(service, "_last_charger_state_phase_selection", None))
+
+    @staticmethod
+    def _phase_switch_mismatch_active(service: Any) -> int:
+        """Return whether a phase-switch mismatch is currently active."""
+        active = bool(getattr(service, "_phase_switch_mismatch_active", False))
+        if active:
+            return 1
+        return int(str(getattr(service, "_last_health_reason", "")) == "phase-switch-mismatch")
+
+    @staticmethod
+    def _phase_switch_lockout_active(service: Any, now: float) -> int:
+        """Return whether a phase-switch lockout is currently active."""
+        lockout_selection = getattr(service, "_phase_switch_lockout_selection", None)
+        lockout_until = finite_float_or_none(getattr(service, "_phase_switch_lockout_until", None))
+        if lockout_selection is None or lockout_until is None:
+            return 0
+        return 1 if float(now) < lockout_until else 0
+
+    @classmethod
+    def _phase_switch_lockout_target(cls, service: Any, now: float) -> str:
+        """Return the active phase-switch lockout target or an empty string."""
+        if cls._phase_switch_lockout_active(service, now) == 0:
+            return ""
+        return cls._diagnostic_text_value(getattr(service, "_phase_switch_lockout_selection", None))
+
+    @classmethod
+    def _phase_switch_lockout_reason(cls, service: Any, now: float) -> str:
+        """Return the active phase-switch lockout reason or an empty string."""
+        if cls._phase_switch_lockout_active(service, now) == 0:
+            return ""
+        return cls._diagnostic_text_value(getattr(service, "_phase_switch_lockout_reason", None))
+
+    @staticmethod
+    def _phase_supported_configured(service: Any) -> str:
+        """Return the configured supported phase selections without runtime degradation."""
+        return ",".join(tuple(getattr(service, "supported_phase_selections", ("P1",))))
+
+    @classmethod
+    def _phase_supported_effective(cls, service: Any, now: float) -> str:
+        """Return the effective supported phase selections after lockout degradation."""
+        effective_supported = effective_supported_phase_selections(
+            getattr(service, "supported_phase_selections", ("P1",)),
+            lockout_selection=getattr(service, "_phase_switch_lockout_selection", None),
+            lockout_until=getattr(service, "_phase_switch_lockout_until", None),
+            now=now,
+        )
+        return ",".join(effective_supported)
+
+    @classmethod
+    def _phase_degraded_active(cls, service: Any, now: float) -> int:
+        """Return whether runtime phase support is currently degraded."""
+        return int(cls._phase_supported_configured(service) != cls._phase_supported_effective(service, now))
+
+    @staticmethod
+    def _switch_feedback_closed(service: Any) -> int:
+        """Return explicit switch feedback as 0/1, or -1 when unavailable."""
+        feedback_closed = getattr(service, "_last_switch_feedback_closed", None)
+        return -1 if feedback_closed is None else int(bool(feedback_closed))
+
+    @staticmethod
+    def _switch_interlock_ok(service: Any) -> int:
+        """Return explicit switch interlock state as 0/1, or -1 when unavailable."""
+        interlock_ok = getattr(service, "_last_switch_interlock_ok", None)
+        return -1 if interlock_ok is None else int(bool(interlock_ok))
+
+    @classmethod
+    def _switch_feedback_mismatch(cls, service: Any) -> int:
+        """Return whether explicit switch feedback currently disagrees with relay state."""
+        feedback_closed = getattr(service, "_last_switch_feedback_closed", None)
+        if feedback_closed is None:
+            return int(str(getattr(service, "_last_health_reason", "")) == "contactor-feedback-mismatch")
+        pm_status = getattr(service, "_last_confirmed_pm_status", None)
+        relay_on = False if not isinstance(pm_status, Mapping) else bool(pm_status.get("output", False))
+        return int(switch_feedback_mismatch(relay_on, feedback_closed))
+
+    @staticmethod
+    def _contactor_suspected_open(service: Any) -> int:
+        """Return whether runtime currently suspects an open contactor without explicit feedback."""
+        return int(str(getattr(service, "_last_health_reason", "")) == "contactor-suspected-open")
+
+    @staticmethod
+    def _contactor_suspected_welded(service: Any) -> int:
+        """Return whether runtime currently suspects a welded contactor without explicit feedback."""
+        return int(str(getattr(service, "_last_health_reason", "")) == "contactor-suspected-welded")
 
     @classmethod
     def _auto_phase_metric_float(cls, service: Any, field_name: str) -> float:
@@ -590,8 +700,21 @@ class DbusPublishController:
             "/Auto/InputCacheHits": int(error_state.get("cache_hits", 0)),
             "/Auto/ChargerCurrentTarget": self._charger_current_target_value(self.service),
             "/Auto/PhaseCurrent": self._auto_phase_metric_text(self.service, "phase_current"),
+            "/Auto/PhaseObserved": self._observed_phase_value(self.service),
             "/Auto/PhaseTarget": self._auto_phase_metric_text(self.service, "phase_target"),
             "/Auto/PhaseReason": self._auto_phase_metric_text(self.service, "phase_reason"),
+            "/Auto/PhaseMismatchActive": self._phase_switch_mismatch_active(self.service),
+            "/Auto/PhaseLockoutActive": self._phase_switch_lockout_active(self.service, now),
+            "/Auto/PhaseLockoutTarget": self._phase_switch_lockout_target(self.service, now),
+            "/Auto/PhaseLockoutReason": self._phase_switch_lockout_reason(self.service, now),
+            "/Auto/PhaseSupportedConfigured": self._phase_supported_configured(self.service),
+            "/Auto/PhaseSupportedEffective": self._phase_supported_effective(self.service, now),
+            "/Auto/PhaseDegradedActive": self._phase_degraded_active(self.service, now),
+            "/Auto/SwitchFeedbackClosed": self._switch_feedback_closed(self.service),
+            "/Auto/SwitchInterlockOk": self._switch_interlock_ok(self.service),
+            "/Auto/SwitchFeedbackMismatch": self._switch_feedback_mismatch(self.service),
+            "/Auto/ContactorSuspectedOpen": self._contactor_suspected_open(self.service),
+            "/Auto/ContactorSuspectedWelded": self._contactor_suspected_welded(self.service),
             "/Auto/PhaseThresholdWatts": self._auto_phase_metric_float(self.service, "phase_threshold_watts"),
             "/Auto/PhaseCandidate": self._auto_phase_metric_text(self.service, "phase_candidate"),
             "/Auto/Stale": 1 if self.service._is_update_stale(now) else 0,
@@ -623,6 +746,13 @@ class DbusPublishController:
             ),
             "/Auto/PhaseCandidateAge": self._age_seconds(
                 getattr(svc, "_auto_phase_target_since", None), now
+            ),
+            "/Auto/PhaseLockoutAge": self._age_seconds(
+                getattr(svc, "_phase_switch_lockout_at", None) if self._phase_switch_lockout_active(svc, now) else None,
+                now,
+            ),
+            "/Auto/LastSwitchFeedbackAge": self._age_seconds(
+                getattr(svc, "_last_switch_feedback_at", None), now
             ),
             "/Auto/LastChargerReadAge": self._age_seconds(
                 getattr(svc, "_last_charger_state_at", None), now

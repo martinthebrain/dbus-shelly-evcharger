@@ -760,6 +760,7 @@ class UpdateCycleController(
         """Return relay-state context plus the desired relay target for this cycle."""
         svc = self.service
         relay_on, power, current, pm_confirmed, phase_switch_override = self.orchestrate_pending_phase_switch(
+            pm_status,
             relay_on,
             power,
             current,
@@ -775,6 +776,16 @@ class UpdateCycleController(
             battery_soc,
             grid_power,
         )
+        switch_health = self._blocking_switch_feedback_health(
+            desired_relay,
+            relay_on,
+            power,
+            current,
+            pm_confirmed,
+            now,
+        )
+        if switch_health is not None:
+            desired_relay = False
         charger_health = self._blocking_charger_health(desired_relay, relay_on, now)
         if charger_health is not None:
             desired_relay = False
@@ -789,7 +800,7 @@ class UpdateCycleController(
         if phase_override is not None:
             desired_relay = bool(phase_override)
         self.apply_charger_current_target(svc, desired_relay, now, auto_mode_active)
-        return relay_on, power, current, pm_confirmed, desired_relay, charger_health
+        return relay_on, power, current, pm_confirmed, desired_relay, (switch_health or charger_health)
 
     @staticmethod
     def _desired_relay_target(
@@ -821,6 +832,68 @@ class UpdateCycleController(
                 getattr(svc, "_last_charger_state_fault", None),
             )
         return charger_health
+
+    def _blocking_switch_feedback_health(
+        self,
+        desired_relay: bool,
+        relay_on: bool,
+        power: float,
+        current: float,
+        pm_confirmed: bool,
+        now: float,
+    ) -> str | None:
+        """Return one switch-feedback override and emit one warning when it blocks charging."""
+        svc = self.service
+        switch_health = self.switch_feedback_health_override(
+            svc,
+            desired_relay,
+            relay_on,
+            now,
+            power=power,
+            current=current,
+            pm_confirmed=pm_confirmed,
+        )
+        if switch_health is None:
+            return None
+        if switch_health == "contactor-interlock":
+            svc._warning_throttled(
+                "switch-interlock-blocking",
+                svc.auto_shelly_soft_fail_seconds,
+                "Switch interlock blocks charging (desired=%s relay=%s interlock_ok=%s)",
+                int(bool(desired_relay)),
+                int(bool(relay_on)),
+                getattr(svc, "_last_switch_interlock_ok", None),
+            )
+            return switch_health
+        if switch_health == "contactor-suspected-open":
+            svc._warning_throttled(
+                "switch-suspected-open-blocking",
+                svc.auto_shelly_soft_fail_seconds,
+                "Contactor heuristics suspect OPEN state (relay=%s power=%.1f current=%.1f charger_status=%s)",
+                int(bool(relay_on)),
+                float(power),
+                float(current),
+                getattr(svc, "_last_charger_state_status", None),
+            )
+            return switch_health
+        if switch_health == "contactor-suspected-welded":
+            svc._warning_throttled(
+                "switch-suspected-welded-blocking",
+                svc.auto_shelly_soft_fail_seconds,
+                "Contactor heuristics suspect WELDED state (relay=%s power=%.1f current=%.1f)",
+                int(bool(relay_on)),
+                float(power),
+                float(current),
+            )
+            return switch_health
+        svc._warning_throttled(
+            "switch-feedback-blocking",
+            svc.auto_shelly_soft_fail_seconds,
+            "Switch feedback mismatch blocks charging (relay=%s feedback_closed=%s)",
+            int(bool(relay_on)),
+            getattr(svc, "_last_switch_feedback_closed", None),
+        )
+        return switch_health
 
     def _status_after_relay_decision(
         self,
