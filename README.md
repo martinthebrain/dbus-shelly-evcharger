@@ -277,6 +277,76 @@ The active override state is visible on DBus via:
 
 ## Install on Cerbo GX / Venus OS
 
+### One-File Bootstrap Install
+
+For a minimal first deployment on a GX device, the user can copy only
+[`install.sh`](install.sh)
+to any directory under `/data` and execute it there.
+
+Phase 1 of that bootstrap flow does this:
+
+- checks for a local `noUpdate` marker next to the bootstrap script
+- ensures a local bootstrap updater exists and refreshes it when possible
+- materializes or refreshes the actual wallbox codebase in
+  `${SCRIPT_DIR}/dbus-shelly-wallbox` by default
+- preserves an existing `deploy/venus/config.shelly_wallbox.ini`
+- excludes development-only content such as `tests/`, `docs/`, and
+  `scripts/dev/`
+- calls the existing
+  [`deploy/venus/install_shelly_wallbox.sh`](deploy/venus/install_shelly_wallbox.sh)
+  from the refreshed codebase
+
+Useful bootstrap overrides:
+
+- `SHELLY_WALLBOX_TARGET_DIR`
+  Choose a different repository target directory.
+- `SHELLY_WALLBOX_CHANNEL`
+  Select another branch/channel than the default `main`.
+- `SHELLY_WALLBOX_SOURCE_DIR`
+  Let the updater sync from a local source tree instead of downloading.
+- `SHELLY_WALLBOX_UPDATER_SOURCE`
+  Override where the bootstrap fetches the updater from.
+- `SHELLY_WALLBOX_UPDATER_HASH_SOURCE`
+  Override where the bootstrap fetches the updater hash from.
+
+Phase 2 adds an optional manifest-driven bundle flow on top:
+
+- `SHELLY_WALLBOX_MANIFEST_SOURCE`
+  Let the bootstrap/updater consume one manifest with bundle and updater hashes.
+- manifest-driven updates skip work when the installed bundle hash already
+  matches
+- `deploy/venus/bootstrap_updater.sh` preserves `noUpdate`, `update-channel`,
+  and the local Venus config while refreshing the codebase
+- `deploy/venus/build_bootstrap_bundle.sh` can generate a release-style
+  `wallbox-bundle.tar.gz` plus `bootstrap_manifest.json` for publishing
+
+Phase 3 promotes manifest-based updates into a staged release layout:
+
+- versioned bundles are unpacked into `releases/<version>/`
+- `current/` is updated to the prepared release only after extraction finishes
+- the bootstrap prefers `current/deploy/venus/install_shelly_wallbox.sh` when it
+  exists
+- the root-level bootstrap state and local preserve files stay outside the
+  versioned release tree
+
+Phase 4 adds the missing trust anchor for manifests:
+
+- `bootstrap_manifest.json` can be accompanied by `bootstrap_manifest.json.sig`
+- bootstrap and updater verify that detached signature with `openssl`
+- the public key can be supplied via `SHELLY_WALLBOX_BOOTSTRAP_PUBKEY`
+- the repo also carries a default public key in
+  [`deploy/venus/bootstrap_manifest.pub`](deploy/venus/bootstrap_manifest.pub)
+- `SHELLY_WALLBOX_REQUIRE_SIGNED_MANIFEST=1` makes signed manifests mandatory
+
+Phase 5 hardens the flow for GX-style field deployments:
+
+- bootstrap and updater now fail early with explicit messages when required
+  shell tools are missing
+- bootstrap can roll back from `current/` to `previous/` if the newly selected
+  release installer fails
+- updater preserves the previous release target during manifest-based
+  promotions, so that rollback has a concrete last-known-good release
+
 ### Required Files on the Cerbo
 
 Copy the entire repository content to the Cerbo, except for the
