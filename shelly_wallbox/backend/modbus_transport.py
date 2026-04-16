@@ -210,9 +210,10 @@ def load_modbus_transport_settings(
     transport_kind = _normalized_transport_kind(
         adapter.get("Transport", transport.get("Type", "tcp"))
     )
+    default_timeout_seconds = float(getattr(service, "shelly_request_timeout_seconds", 2.0) or 2.0)
     timeout_seconds = _normalized_timeout_seconds(
-        transport.get("RequestTimeoutSeconds", getattr(service, "shelly_request_timeout_seconds", 2.0)),
-        float(getattr(service, "shelly_request_timeout_seconds", 2.0) or 2.0),
+        transport.get("RequestTimeoutSeconds", str(default_timeout_seconds)),
+        default_timeout_seconds,
     )
     unit_id = _normalized_unit_id(transport.get("UnitId", transport.get("SlaveId", "1")))
     host = str(transport.get("Host", "")).strip() or None

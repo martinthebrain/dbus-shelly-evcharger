@@ -268,7 +268,7 @@ def _optional_signal_readback_settings(
         component=component,
         device_id=device_id,
         value_path=value_path,
-        invert=bool(normalize_binary_flag(section.get("Invert", 0))),
+        invert=bool(normalize_binary_flag(section.get("Invert", "0"))),
     )
 
 
@@ -313,13 +313,15 @@ def load_shelly_backend_settings(
         username=str(adapter.get("Username", getattr(service, "username", ""))).strip(),
         password=str(adapter.get("Password", getattr(service, "password", ""))).strip(),
         use_digest_auth=bool(
-            normalize_binary_flag(adapter.get("DigestAuth", getattr(service, "use_digest_auth", False)))
+            normalize_binary_flag(
+                adapter.get("DigestAuth", "1" if bool(getattr(service, "use_digest_auth", False)) else "0")
+            )
         ),
         phase_selection=_resolved_phase_selection(phase, default_phase),
         switching_mode=switching_mode,
         supported_phase_selections=supported_phase_selections,
         requires_charge_pause_for_phase_change=bool(
-            normalize_binary_flag(capabilities.get("RequiresChargePauseForPhaseChange", 0))
+            normalize_binary_flag(capabilities.get("RequiresChargePauseForPhaseChange", "0"))
         ),
         max_direct_switch_power_w=max_power,
         phase_switch_targets=_phase_switch_targets(phase_map, device_id, supported_phase_selections),

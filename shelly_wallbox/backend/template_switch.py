@@ -216,7 +216,7 @@ def load_template_switch_settings(service: object, config_path: str) -> Template
         switching_mode=switching_mode,
         supported_phase_selections=supported_phase_selections,
         requires_charge_pause_for_phase_change=bool(
-            normalize_binary_flag(capabilities.get("RequiresChargePauseForPhaseChange", 0))
+            normalize_binary_flag(capabilities.get("RequiresChargePauseForPhaseChange", "0"))
         ),
         max_direct_switch_power_w=max_direct_switch_power_w,
     )

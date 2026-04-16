@@ -177,8 +177,9 @@ def load_template_meter_settings(service: object, config_path: str) -> TemplateM
     meter_response = config_section(parser, "MeterResponse")
 
     base_url = str(adapter.get("BaseUrl", "")).strip()
+    default_timeout_seconds = float(getattr(service, "shelly_request_timeout_seconds", 2.0) or 2.0)
     timeout_seconds = finite_float_or_none(
-        adapter.get("RequestTimeoutSeconds", getattr(service, "shelly_request_timeout_seconds", 2.0))
+        adapter.get("RequestTimeoutSeconds", str(default_timeout_seconds))
     )
     meter_url = resolved_url(base_url, meter_request.get("Url", ""))
     power_path = str(meter_response.get("PowerPath", "power_w")).strip()

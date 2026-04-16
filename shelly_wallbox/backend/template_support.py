@@ -31,7 +31,7 @@ def load_template_auth_settings(adapter: configparser.SectionProxy) -> TemplateA
     """Return normalized auth settings shared by all template backends."""
     username = str(adapter.get("Username", "")).strip()
     password = str(adapter.get("Password", ""))
-    use_digest_auth = bool(normalize_binary_flag(adapter.get("DigestAuth", 0)))
+    use_digest_auth = bool(normalize_binary_flag(adapter.get("DigestAuth", "0")))
     auth_header_name = _optional_text(adapter.get("AuthHeaderName", ""))
     auth_header_value = _optional_text(adapter.get("AuthHeaderValue", ""))
     _validate_template_auth_settings(
