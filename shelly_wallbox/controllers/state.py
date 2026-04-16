@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from shelly_wallbox.auto.policy import validate_auto_policy
 from shelly_wallbox.backend.models import (
@@ -65,35 +65,48 @@ class ServiceStateController:
             "config.shelly_wallbox.ini",
         )
 
+    @staticmethod
+    def _summary_flag(value: object) -> str:
+        """Return one runtime flag as 0/1 text."""
+        return str(int(bool(value)))
+
+    @staticmethod
+    def _summary_text(value: object, default: str) -> str:
+        """Return one compact summary text with a fallback."""
+        text = str(value).strip() if value is not None else ""
+        return text or default
+
+    @staticmethod
+    def _summary_float(value: object, default: str = "na") -> str:
+        """Return one compact floating-point summary text with a fallback."""
+        normalized = finite_float_or_none(value)
+        return default if normalized is None else f"{normalized:.1f}"
+
     def state_summary(self) -> str:
         """Return a compact runtime state summary for debug logging."""
         svc = self.service
-        charger_target = finite_float_or_none(getattr(svc, "_charger_target_current_amps", None))
-        charger_target_text = "na" if charger_target is None else f"{charger_target:.1f}"
-        charger_status = str(getattr(svc, "_last_charger_state_status", "") or "").strip() or "na"
-        charger_fault = str(getattr(svc, "_last_charger_state_fault", "") or "").strip() or "na"
-        status_source = str(getattr(svc, "_last_status_source", "") or "").strip() or "unknown"
-        return (
-            f"mode={getattr(svc, 'virtual_mode', 'na')} "
-            f"enable={getattr(svc, 'virtual_enable', 'na')} "
-            f"startstop={getattr(svc, 'virtual_startstop', 'na')} "
-            f"autostart={getattr(svc, 'virtual_autostart', 'na')} "
-            f"cutover={int(bool(getattr(svc, '_auto_mode_cutover_pending', False)))} "
-            f"ignore_offtime={int(bool(getattr(svc, '_ignore_min_offtime_once', False)))} "
-            f"phase={getattr(svc, 'active_phase_selection', 'na')} "
-            f"phase_req={getattr(svc, 'requested_phase_selection', 'na')} "
-            f"phase_switch={getattr(svc, '_phase_switch_state', 'na') or 'idle'} "
-            f"backend={getattr(svc, 'backend_mode', 'combined')} "
-            f"meter_backend={getattr(svc, 'meter_backend_type', 'shelly_combined')} "
-            f"switch_backend={getattr(svc, 'switch_backend_type', 'shelly_combined')} "
-            f"charger_backend={getattr(svc, 'charger_backend_type', None) or 'na'} "
-            f"charger_target={charger_target_text} "
-            f"charger_status={charger_status} "
-            f"charger_fault={charger_fault} "
-            f"status_source={status_source} "
-            f"auto_state={getattr(svc, '_last_auto_state', 'na')} "
-            f"health={getattr(svc, '_last_health_reason', 'na')}"
+        parts = (
+            f"mode={getattr(svc, 'virtual_mode', 'na')}",
+            f"enable={getattr(svc, 'virtual_enable', 'na')}",
+            f"startstop={getattr(svc, 'virtual_startstop', 'na')}",
+            f"autostart={getattr(svc, 'virtual_autostart', 'na')}",
+            f"cutover={self._summary_flag(getattr(svc, '_auto_mode_cutover_pending', False))}",
+            f"ignore_offtime={self._summary_flag(getattr(svc, '_ignore_min_offtime_once', False))}",
+            f"phase={getattr(svc, 'active_phase_selection', 'na')}",
+            f"phase_req={getattr(svc, 'requested_phase_selection', 'na')}",
+            f"phase_switch={self._summary_text(getattr(svc, '_phase_switch_state', 'na'), 'idle')}",
+            f"backend={getattr(svc, 'backend_mode', 'combined')}",
+            f"meter_backend={getattr(svc, 'meter_backend_type', 'shelly_combined')}",
+            f"switch_backend={getattr(svc, 'switch_backend_type', 'shelly_combined')}",
+            f"charger_backend={self._summary_text(getattr(svc, 'charger_backend_type', None), 'na')}",
+            f"charger_target={self._summary_float(getattr(svc, '_charger_target_current_amps', None))}",
+            f"charger_status={self._summary_text(getattr(svc, '_last_charger_state_status', ''), 'na')}",
+            f"charger_fault={self._summary_text(getattr(svc, '_last_charger_state_fault', ''), 'na')}",
+            f"status_source={self._summary_text(getattr(svc, '_last_status_source', ''), 'unknown')}",
+            f"auto_state={getattr(svc, '_last_auto_state', 'na')}",
+            f"health={getattr(svc, '_last_health_reason', 'na')}",
         )
+        return " ".join(parts)
 
     @staticmethod
     def coerce_runtime_int(value: object, default: int = 0) -> int:
@@ -228,24 +241,28 @@ class ServiceStateController:
             return state
         return None
 
-    def load_runtime_state(self) -> None:
-        """Restore volatile runtime state from a RAM-backed file if present."""
-        svc = self.service
-        path = getattr(svc, "runtime_state_path", "").strip()
-        if not path:
-            return
+    @staticmethod
+    def _read_runtime_state_payload(path: str) -> dict[str, object] | None:
+        """Return one persisted runtime-state payload or None when unavailable."""
         try:
             with open(path, "r", encoding="utf-8") as handle:
-                state = json.load(handle)
+                loaded_state = json.load(handle)
         except FileNotFoundError:
-            return
+            return None
         except Exception as error:  # pylint: disable=broad-except
             logging.warning("Unable to read runtime state from %s: %s", path, error)
-            return
+            return None
+        return cast(dict[str, object], loaded_state)
 
+    @staticmethod
+    def _runtime_load_time(svc: Any) -> float:
+        """Return the current timestamp used while restoring persisted runtime state."""
         time_now = getattr(svc, "_time_now", None)
         raw_current_time: object = time_now() if callable(time_now) else time.time()
-        current_time = self.coerce_runtime_float(raw_current_time, time.time())
+        return ServiceStateController.coerce_runtime_float(raw_current_time, time.time())
+
+    def _restore_basic_runtime_state(self, svc: Any, state: dict[str, object]) -> None:
+        """Restore mode, enable, and manual-override runtime values."""
         svc.virtual_mode = self._normalize_mode(state.get("mode", svc.virtual_mode))
         svc.virtual_autostart = self.coerce_runtime_int(state.get("autostart"), svc.virtual_autostart)
         svc.virtual_enable = self.coerce_runtime_int(state.get("enable"), svc.virtual_enable)
@@ -261,6 +278,14 @@ class ServiceStateController:
         # Clear it on every service start, even if an older runtime-state file
         # still contains the legacy field.
         svc._ignore_min_offtime_once = False
+
+    def _restore_learned_charge_power_state(
+        self,
+        svc: Any,
+        state: dict[str, object],
+        current_time: float,
+    ) -> None:
+        """Restore the persisted learned charging-power runtime state."""
         learned_charge_power_watts = state.get(
             "learned_charge_power_watts",
             getattr(svc, "learned_charge_power_watts", None),
@@ -311,6 +336,14 @@ class ServiceStateController:
             ),
             current_time,
         )
+
+    def _restore_phase_switch_runtime_state(
+        self,
+        svc: Any,
+        state: dict[str, object],
+        current_time: float,
+    ) -> None:
+        """Restore phase-selection and staged phase-switch runtime state."""
         supported_phase_selections = self._normalize_runtime_supported_phase_selections(
             state.get(
                 "supported_phase_selections",
@@ -364,10 +397,33 @@ class ServiceStateController:
             svc._phase_switch_requested_at = None
             svc._phase_switch_stable_until = None
             svc._phase_switch_resume_relay = False
+
+    def _restore_relay_runtime_state(
+        self,
+        svc: Any,
+        state: dict[str, object],
+        current_time: float,
+    ) -> None:
+        """Restore relay timing markers used by the runtime logic."""
         relay_last_changed_at = state.get("relay_last_changed_at", svc.relay_last_changed_at)
         relay_last_off_at = state.get("relay_last_off_at", svc.relay_last_off_at)
         svc.relay_last_changed_at = self._coerce_optional_runtime_past_time(relay_last_changed_at, current_time)
         svc.relay_last_off_at = self._coerce_optional_runtime_past_time(relay_last_off_at, current_time)
+
+    def load_runtime_state(self) -> None:
+        """Restore volatile runtime state from a RAM-backed file if present."""
+        svc = self.service
+        path = getattr(svc, "runtime_state_path", "").strip()
+        if not path:
+            return
+        state = self._read_runtime_state_payload(path)
+        if state is None:
+            return
+        current_time = self._runtime_load_time(svc)
+        self._restore_basic_runtime_state(svc, state)
+        self._restore_learned_charge_power_state(svc, state, current_time)
+        self._restore_phase_switch_runtime_state(svc, state, current_time)
+        self._restore_relay_runtime_state(svc, state, current_time)
         svc._runtime_state_serialized = self._serialized_runtime_state()
         logging.info("Restored runtime state from %s: %s", path, self.state_summary())
 

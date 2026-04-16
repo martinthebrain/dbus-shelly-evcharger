@@ -23,12 +23,13 @@ class _AutoInputHelperSnapshotMixin:
 
     def _ensure_poll_state(self: Any) -> None:
         """Initialize runtime state for tests or partially constructed instances."""
+        self._ensure_source_poll_intervals()
+        self._ensure_poll_defaults()
+
+    def _ensure_source_poll_intervals(self: Any) -> None:
+        """Populate per-source poll intervals and derive the shared interval when missing."""
         base_poll_interval = max(0.2, getattr(self, "poll_interval_seconds", 1.0))
-        for attr_name in (
-            "auto_pv_poll_interval_seconds",
-            "auto_grid_poll_interval_seconds",
-            "auto_battery_poll_interval_seconds",
-        ):
+        for attr_name in self._source_poll_interval_attrs():
             if not hasattr(self, attr_name):
                 setattr(self, attr_name, base_poll_interval)
         if not hasattr(self, "poll_interval_seconds"):
@@ -37,6 +38,18 @@ class _AutoInputHelperSnapshotMixin:
                 self.auto_grid_poll_interval_seconds,
                 self.auto_battery_poll_interval_seconds,
             )
+
+    @staticmethod
+    def _source_poll_interval_attrs() -> tuple[str, str, str]:
+        """Return attribute names for per-source polling intervals."""
+        return (
+            "auto_pv_poll_interval_seconds",
+            "auto_grid_poll_interval_seconds",
+            "auto_battery_poll_interval_seconds",
+        )
+
+    def _ensure_poll_defaults(self: Any) -> None:
+        """Populate remaining runtime attributes needed by the helper process."""
         default_values = {
             "_last_snapshot_state": self._empty_snapshot,
             "_next_source_poll_at": self._default_source_poll_schedule,
@@ -49,10 +62,14 @@ class _AutoInputHelperSnapshotMixin:
             "_stop_requested": False,
         }
         for attr_name, default in default_values.items():
-            if hasattr(self, attr_name):
-                continue
-            value = default() if callable(default) else default
-            setattr(self, attr_name, value)
+            self._ensure_default_attr(attr_name, default)
+
+    def _ensure_default_attr(self: Any, attr_name: str, default: object) -> None:
+        """Populate one runtime attribute when it has not been initialized yet."""
+        if hasattr(self, attr_name):
+            return
+        value = default() if callable(default) else default
+        setattr(self, attr_name, value)
 
     def _collect_snapshot(self: Any, now: float | None = None) -> dict[str, object]:
         """Collect only the due Auto inputs and keep the last snapshot state for the others."""
@@ -89,22 +106,26 @@ class _AutoInputHelperSnapshotMixin:
         self._ensure_poll_state()
         current = time.time() if now is None else float(now)
         snapshot = dict(self._last_snapshot_state)
-        if source_name == "pv":
-            snapshot["pv_power"] = value
-            snapshot["pv_captured_at"] = None if value is None else current
-        elif source_name == "battery":
-            snapshot["battery_soc"] = value
-            snapshot["battery_captured_at"] = None if value is None else current
-        elif source_name == "grid":
-            snapshot["grid_power"] = value
-            snapshot["grid_captured_at"] = None if value is None else current
-        else:
+        snapshot_keys = self._source_snapshot_keys(source_name)
+        if snapshot_keys is None:
             return
+        value_key, captured_key = snapshot_keys
+        snapshot[value_key] = value
+        snapshot[captured_key] = None if value is None else current
         snapshot["captured_at"] = current
         snapshot["heartbeat_at"] = current
         snapshot["snapshot_version"] = self.SNAPSHOT_SCHEMA_VERSION
         self._last_snapshot_state = snapshot
         self._write_snapshot(snapshot)
+
+    @staticmethod
+    def _source_snapshot_keys(source_name: str) -> tuple[str, str] | None:
+        """Return snapshot value/captured-at keys for one logical source."""
+        return {
+            "pv": ("pv_power", "pv_captured_at"),
+            "battery": ("battery_soc", "battery_captured_at"),
+            "grid": ("grid_power", "grid_captured_at"),
+        }.get(source_name)
 
     def _heartbeat_snapshot(self: Any) -> bool:
         """Keep the RAM snapshot fresh without re-reading DBus values."""

@@ -46,6 +46,15 @@ class TemplateSwitchSettings:
     max_direct_switch_power_w: float | None
 
 
+@dataclass(frozen=True)
+class _TemplateSwitchUrls:
+    """Resolved HTTP endpoints used by the template-switch backend."""
+
+    state_url: str
+    command_url: str
+    phase_url: str | None
+
+
 def _normalize_switching_mode(value: object, default: SwitchingMode = "direct") -> SwitchingMode:
     """Return one normalized switching mode."""
     mode = str(value).strip().lower() if value is not None else ""
@@ -54,6 +63,92 @@ def _normalize_switching_mode(value: object, default: SwitchingMode = "direct") 
     if mode == "direct":
         return "direct"
     return default
+
+
+def _template_switch_timeout_seconds(adapter: object, service: object) -> float:
+    """Return the normalized timeout used by the template-switch backend."""
+    timeout_seconds = finite_float_or_none(
+        getattr(adapter, "get")("RequestTimeoutSeconds", getattr(service, "shelly_request_timeout_seconds", 2.0))
+    )
+    if timeout_seconds is None or timeout_seconds <= 0.0:
+        return 2.0
+    return float(timeout_seconds)
+
+
+def _template_switch_urls(
+    base_url: str,
+    state_request: object,
+    command_request: object,
+    phase_request: object,
+) -> _TemplateSwitchUrls:
+    """Return resolved HTTP endpoints for state, command, and optional phase control."""
+    return _TemplateSwitchUrls(
+        state_url=resolved_url(base_url, getattr(state_request, "get")("Url", "")),
+        command_url=resolved_url(base_url, getattr(command_request, "get")("Url", "")),
+        phase_url=resolved_url(base_url, getattr(phase_request, "get")("Url", "")) or None,
+    )
+
+
+def _template_switch_enabled_path(state_response: object) -> str:
+    """Return the required enabled-state response path."""
+    return str(getattr(state_response, "get")("EnabledPath", "enabled")).strip()
+
+
+def _template_switch_phase_path(state_response: object) -> str | None:
+    """Return the optional phase-selection response path."""
+    return str(getattr(state_response, "get")("PhaseSelectionPath", "")).strip() or None
+
+
+def _template_switch_json_template(section: object, key: str = "JsonTemplate") -> str | None:
+    """Return one optional JSON template from the given config section."""
+    return str(getattr(section, "get")(key, "")).strip() or None
+
+
+def _template_switch_phase_json_template(phase_request: object, phase_url: str | None) -> str | None:
+    """Return the optional phase-selection JSON template when phase control is enabled."""
+    if not phase_url:
+        return None
+    return str(getattr(phase_request, "get")("JsonTemplate", '{"phase_selection": "$phase_selection"}')).strip()
+
+
+def _validate_template_switch_settings(
+    urls: _TemplateSwitchUrls,
+    state_enabled_path: str,
+    supported_phase_selections: tuple[PhaseSelection, ...],
+) -> None:
+    """Raise when required switch request URLs or response paths are missing."""
+    error = _template_switch_validation_error(
+        urls,
+        state_enabled_path,
+        supported_phase_selections,
+    )
+    if error is not None:
+        raise ValueError(error)
+
+
+def _template_switch_validation_error(
+    urls: _TemplateSwitchUrls,
+    state_enabled_path: str,
+    supported_phase_selections: tuple[PhaseSelection, ...],
+) -> str | None:
+    """Return one validation error message for invalid switch config, if any."""
+    if not urls.state_url:
+        return "Template switch backend requires [StateRequest] Url"
+    if not urls.command_url:
+        return "Template switch backend requires [CommandRequest] Url"
+    if not state_enabled_path:
+        return "Template switch backend requires [StateResponse] EnabledPath"
+    if _multi_phase_switch_missing_phase_url(urls, supported_phase_selections):
+        return "Template switch backend with multi-phase support requires [PhaseRequest] Url"
+    return None
+
+
+def _multi_phase_switch_missing_phase_url(
+    urls: _TemplateSwitchUrls,
+    supported_phase_selections: tuple[PhaseSelection, ...],
+) -> bool:
+    """Return whether a multi-phase switch config forgot its phase endpoint."""
+    return len(supported_phase_selections) > 1 and not urls.phase_url
 
 
 def load_template_switch_settings(service: object, config_path: str) -> TemplateSwitchSettings:
@@ -67,9 +162,6 @@ def load_template_switch_settings(service: object, config_path: str) -> Template
     phase_request = config_section(parser, "PhaseRequest")
 
     base_url = str(adapter.get("BaseUrl", "")).strip()
-    timeout_seconds = finite_float_or_none(
-        adapter.get("RequestTimeoutSeconds", getattr(service, "shelly_request_timeout_seconds", 2.0))
-    )
     supported_phase_selections = normalize_phase_selection_tuple(
         capabilities.get("SupportedPhaseSelections", "P1"),
         ("P1",),
@@ -80,41 +172,26 @@ def load_template_switch_settings(service: object, config_path: str) -> Template
         if switching_mode == "contactor"
         else finite_float_or_none(capabilities.get("MaxDirectSwitchPowerWatts", None))
     )
-    state_url = resolved_url(base_url, state_request.get("Url", ""))
-    command_url = resolved_url(base_url, command_request.get("Url", ""))
-    phase_url = resolved_url(base_url, phase_request.get("Url", ""))
-    state_enabled_path = str(state_response.get("EnabledPath", "enabled")).strip()
-    state_phase_selection_path = str(state_response.get("PhaseSelectionPath", "")).strip() or None
-    command_json_template = str(command_request.get("JsonTemplate", "")).strip() or None
-    phase_json_template = (
-        str(phase_request.get("JsonTemplate", '{"phase_selection": "$phase_selection"}')).strip()
-        if phase_url
-        else None
-    )
+    urls = _template_switch_urls(base_url, state_request, command_request, phase_request)
+    state_enabled_path = _template_switch_enabled_path(state_response)
+    state_phase_selection_path = _template_switch_phase_path(state_response)
+    command_json_template = _template_switch_json_template(command_request)
+    phase_json_template = _template_switch_phase_json_template(phase_request, urls.phase_url)
 
-    if not state_url:
-        raise ValueError("Template switch backend requires [StateRequest] Url")
-    if not command_url:
-        raise ValueError("Template switch backend requires [CommandRequest] Url")
-    if not state_enabled_path:
-        raise ValueError("Template switch backend requires [StateResponse] EnabledPath")
-    if len(supported_phase_selections) > 1 and not phase_url:
-        raise ValueError(
-            "Template switch backend with multi-phase support requires [PhaseRequest] Url"
-        )
+    _validate_template_switch_settings(urls, state_enabled_path, supported_phase_selections)
 
     return TemplateSwitchSettings(
         base_url=base_url,
-        timeout_seconds=2.0 if timeout_seconds is None or timeout_seconds <= 0.0 else float(timeout_seconds),
+        timeout_seconds=_template_switch_timeout_seconds(adapter, service),
         state_method=normalize_http_method(state_request.get("Method", "GET"), "GET"),
-        state_url=state_url,
+        state_url=urls.state_url,
         state_enabled_path=state_enabled_path,
         state_phase_selection_path=state_phase_selection_path,
         command_method=normalize_http_method(command_request.get("Method", "POST"), "POST"),
-        command_url=command_url,
+        command_url=urls.command_url,
         command_json_template=command_json_template,
         phase_method=normalize_http_method(phase_request.get("Method", "POST"), "POST"),
-        phase_url=phase_url or None,
+        phase_url=urls.phase_url,
         phase_json_template=phase_json_template,
         switching_mode=switching_mode,
         supported_phase_selections=supported_phase_selections,

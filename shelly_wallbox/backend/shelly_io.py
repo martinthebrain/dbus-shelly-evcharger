@@ -338,27 +338,38 @@ class ShellyIoController:
         power_w = finite_float_or_none(pm_status.get("apower"))
         return None if power_w is None else abs(float(power_w))
 
-    def _warn_if_direct_switching_under_load(self, relay_on: bool) -> None:
-        """Warn when a direct Shelly relay is asked to break more load than configured."""
+    def _direct_switch_warning_context(self, relay_on: bool) -> tuple[float, float] | None:
+        """Return power-limit context when a direct relay-off request deserves a warning."""
         if bool(relay_on):
-            return
+            return None
         limit_w = self._max_direct_switch_power_w()
         if limit_w is None:
-            return
+            return None
         power_w = self._current_confirmed_switch_load_power_w()
         if power_w is None or power_w <= limit_w:
+            return None
+        return power_w, limit_w
+
+    def _direct_switch_warning_interval(self) -> float:
+        """Return throttling interval for direct-switch under-load warnings."""
+        return max(
+            1.0,
+            float(getattr(self.service, "auto_shelly_soft_fail_seconds", 30.0) or 30.0),
+        )
+
+    def _warn_if_direct_switching_under_load(self, relay_on: bool) -> None:
+        """Warn when a direct Shelly relay is asked to break more load than configured."""
+        warning_context = self._direct_switch_warning_context(relay_on)
+        if warning_context is None:
             return
+        power_w, limit_w = warning_context
         svc = self.service
         warning = getattr(svc, "_warning_throttled", None)
         if not callable(warning):
             return
-        interval = max(
-            1.0,
-            float(getattr(svc, "auto_shelly_soft_fail_seconds", 30.0) or 30.0),
-        )
         warning(
             "direct-switch-under-load",
-            interval,
+            self._direct_switch_warning_interval(),
             "Direct Shelly relay OFF requested at %.1fW above configured direct switch limit %.1fW; consider switching_mode=contactor",
             power_w,
             limit_w,
@@ -393,43 +404,77 @@ class ShellyIoController:
     def _sync_charger_runtime_state(self, state: ChargerState, now: float | None = None) -> None:
         """Mirror one normalized charger readback into the service runtime state."""
         svc = self.service
-        current_mode = getattr(svc, "virtual_mode", 0)
         state_at = svc._time_now() if now is None else float(now)
-        svc._last_charger_state_enabled = None if state.enabled is None else bool(state.enabled)
-        svc._last_charger_state_current_amps = (
-            None if state.current_amps is None else float(state.current_amps)
-        )
-        svc._last_charger_state_phase_selection = (
-            None if state.phase_selection is None else state.phase_selection
-        )
-        svc._last_charger_state_actual_current_amps = (
-            None if state.actual_current_amps is None else float(state.actual_current_amps)
-        )
-        svc._last_charger_state_power_w = None if state.power_w is None else float(state.power_w)
-        svc._last_charger_state_energy_kwh = (
-            None if state.energy_kwh is None else float(state.energy_kwh)
-        )
+        auto_mode_active = self._auto_mode_active(getattr(svc, "virtual_mode", 0))
+        self._store_runtime_charger_snapshot(state, state_at)
+        self._sync_virtual_enabled_state(state, auto_mode_active)
+        self._sync_virtual_current_target(state, state_at)
+        self._sync_runtime_phase_selection_from_charger(state)
+
+    def _store_runtime_charger_snapshot(self, state: ChargerState, state_at: float) -> None:
+        """Persist charger readback fields on the service runtime object."""
+        svc = self.service
+        enabled = getattr(state, "enabled", None)
+        current_amps = getattr(state, "current_amps", None)
+        phase_selection = getattr(state, "phase_selection", None)
+        actual_current_amps = getattr(state, "actual_current_amps", None)
+        power_w = getattr(state, "power_w", None)
+        energy_kwh = getattr(state, "energy_kwh", None)
         status_text = getattr(state, "status_text", None)
         fault_text = getattr(state, "fault_text", None)
-        svc._last_charger_state_status = None if status_text is None else str(status_text)
-        svc._last_charger_state_fault = None if fault_text is None else str(fault_text)
+        svc._last_charger_state_enabled = self._optional_bool(enabled)
+        svc._last_charger_state_current_amps = self._optional_float(current_amps)
+        svc._last_charger_state_phase_selection = phase_selection
+        svc._last_charger_state_actual_current_amps = self._optional_float(actual_current_amps)
+        svc._last_charger_state_power_w = self._optional_float(power_w)
+        svc._last_charger_state_energy_kwh = self._optional_float(energy_kwh)
+        svc._last_charger_state_status = self._cached_optional_text(status_text)
+        svc._last_charger_state_fault = self._cached_optional_text(fault_text)
         svc._last_charger_state_at = state_at
-        mode_uses_auto_logic = getattr(svc, "_mode_uses_auto_logic", None)
-        auto_mode_active = bool(mode_uses_auto_logic(current_mode)) if callable(mode_uses_auto_logic) else False
-        if state.enabled is not None:
-            svc.virtual_enable = int(bool(state.enabled))
-            if not auto_mode_active:
-                svc.virtual_startstop = int(bool(state.enabled))
-        if state.current_amps is not None:
-            svc.virtual_set_current = float(state.current_amps)
-            svc._charger_target_current_amps = float(state.current_amps)
-            svc._charger_target_current_applied_at = state_at
-        if state.phase_selection is not None and self._phase_selection_switch_backend() is None:
-            self._remember_phase_selection_state(
-                supported=self._charger_supported_phase_selections(),
-                requested=getattr(svc, "requested_phase_selection", state.phase_selection),
-                active=state.phase_selection,
-            )
+
+    @staticmethod
+    def _optional_bool(value: object) -> bool | None:
+        """Return one optional bool from runtime readback values."""
+        return None if value is None else bool(value)
+
+    @staticmethod
+    def _optional_float(value: object) -> float | None:
+        """Return one optional float from runtime readback values."""
+        return finite_float_or_none(value)
+
+    def _auto_mode_active(self, current_mode: object) -> bool:
+        """Return whether the current runtime mode uses auto logic."""
+        mode_uses_auto_logic = getattr(self.service, "_mode_uses_auto_logic", None)
+        return bool(mode_uses_auto_logic(current_mode)) if callable(mode_uses_auto_logic) else False
+
+    def _sync_virtual_enabled_state(self, state: ChargerState, auto_mode_active: bool) -> None:
+        """Mirror charger enabled readback onto virtual enable/start-stop state."""
+        if state.enabled is None:
+            return
+        svc = self.service
+        svc.virtual_enable = int(bool(state.enabled))
+        if not auto_mode_active:
+            svc.virtual_startstop = int(bool(state.enabled))
+
+    def _sync_virtual_current_target(self, state: ChargerState, state_at: float) -> None:
+        """Mirror charger target current readback into virtual current state."""
+        if state.current_amps is None:
+            return
+        svc = self.service
+        svc.virtual_set_current = float(state.current_amps)
+        svc._charger_target_current_amps = float(state.current_amps)
+        svc._charger_target_current_applied_at = state_at
+
+    def _sync_runtime_phase_selection_from_charger(self, state: ChargerState) -> None:
+        """Mirror charger-native phase selection into runtime state when switch cannot do it."""
+        if state.phase_selection is None or self._phase_selection_switch_backend() is not None:
+            return
+        svc = self.service
+        self._remember_phase_selection_state(
+            supported=self._charger_supported_phase_selections(),
+            requested=getattr(svc, "requested_phase_selection", state.phase_selection),
+            active=state.phase_selection,
+        )
 
     def _read_charger_state_best_effort(self, now: float | None = None) -> ChargerState | None:
         """Read native charger state without letting charger issues break meter/switch polling."""
@@ -522,20 +567,26 @@ class ShellyIoController:
         resolved_relay = reading.relay_on if relay_on is None else relay_on
         if resolved_relay is not None:
             pm_status["output"] = bool(resolved_relay)
-        pm_status["_phase_selection"] = str(reading.phase_selection)
+        pm_status.update(cast(ShellyPmStatus, ShellyIoController._pm_status_phase_fields(reading)))
+        return pm_status
+
+    @staticmethod
+    def _pm_status_phase_fields(reading: MeterReading) -> dict[str, object]:
+        """Return optional phase-vector fields for one normalized meter reading."""
+        fields: dict[str, object] = {"_phase_selection": str(reading.phase_selection)}
         if reading.phase_powers_w is not None:
-            pm_status["_phase_powers_w"] = (
+            fields["_phase_powers_w"] = (
                 float(reading.phase_powers_w[0]),
                 float(reading.phase_powers_w[1]),
                 float(reading.phase_powers_w[2]),
             )
         if reading.phase_currents_a is not None:
-            pm_status["_phase_currents_a"] = (
+            fields["_phase_currents_a"] = (
                 float(reading.phase_currents_a[0]),
                 float(reading.phase_currents_a[1]),
                 float(reading.phase_currents_a[2]),
             )
-        return pm_status
+        return fields
 
     def _relay_state_from_split_switch(self, fallback: bool | None) -> bool | None:
         """Return the current split-switch state, falling back to meter-provided relay state."""
@@ -555,48 +606,72 @@ class ShellyIoController:
         max_age_seconds: float | None = None,
     ) -> ChargerState | None:
         """Return cached charger state when one is present and optionally fresh enough."""
-        svc = self.service
-        captured_at = finite_float_or_none(getattr(svc, "_last_charger_state_at", None))
+        captured_at = self._cached_charger_state_timestamp(
+            now=now,
+            max_age_seconds=max_age_seconds,
+        )
         if captured_at is None:
             return None
-        if max_age_seconds is not None:
-            current = svc._time_now() if now is None else float(now)
-            if (current - captured_at) > max(0.0, float(max_age_seconds)):
-                return None
-        enabled = getattr(svc, "_last_charger_state_enabled", None)
-        current_amps = finite_float_or_none(getattr(svc, "_last_charger_state_current_amps", None))
-        phase_selection_raw = getattr(svc, "_last_charger_state_phase_selection", None)
-        actual_current_amps = finite_float_or_none(
-            getattr(svc, "_last_charger_state_actual_current_amps", None)
-        )
-        power_w = finite_float_or_none(getattr(svc, "_last_charger_state_power_w", None))
-        energy_kwh = finite_float_or_none(getattr(svc, "_last_charger_state_energy_kwh", None))
-        status_text = getattr(svc, "_last_charger_state_status", None)
-        fault_text = getattr(svc, "_last_charger_state_fault", None)
-        if (
-            enabled is None
-            and current_amps is None
-            and phase_selection_raw is None
-            and actual_current_amps is None
-            and power_w is None
-            and energy_kwh is None
-            and status_text is None
-            and fault_text is None
-        ):
+        state = self._cached_charger_state_snapshot()
+        if not self._charger_state_has_cached_data(state):
             return None
+        return state
+
+    def _cached_charger_state_timestamp(
+        self,
+        *,
+        now: float | None = None,
+        max_age_seconds: float | None = None,
+    ) -> float | None:
+        """Return the cached charger-state timestamp when one is present and fresh enough."""
+        captured_at = finite_float_or_none(getattr(self.service, "_last_charger_state_at", None))
+        if captured_at is None:
+            return None
+        if max_age_seconds is None:
+            return captured_at
+        current = self.service._time_now() if now is None else float(now)
+        if (current - captured_at) > max(0.0, float(max_age_seconds)):
+            return None
+        return captured_at
+
+    def _cached_charger_state_snapshot(self) -> ChargerState:
+        """Return charger-state data reconstructed from runtime cache fields."""
+        svc = self.service
+        enabled = getattr(svc, "_last_charger_state_enabled", None)
+        phase_selection_raw = getattr(svc, "_last_charger_state_phase_selection", None)
         return ChargerState(
             enabled=None if enabled is None else bool(enabled),
-            current_amps=current_amps,
+            current_amps=finite_float_or_none(getattr(svc, "_last_charger_state_current_amps", None)),
             phase_selection=(
-                None
-                if phase_selection_raw is None
-                else normalize_phase_selection(phase_selection_raw, "P1")
+                None if phase_selection_raw is None else normalize_phase_selection(phase_selection_raw, "P1")
             ),
-            actual_current_amps=actual_current_amps,
-            power_w=power_w,
-            energy_kwh=energy_kwh,
-            status_text=None if status_text is None else str(status_text),
-            fault_text=None if fault_text is None else str(fault_text),
+            actual_current_amps=finite_float_or_none(getattr(svc, "_last_charger_state_actual_current_amps", None)),
+            power_w=finite_float_or_none(getattr(svc, "_last_charger_state_power_w", None)),
+            energy_kwh=finite_float_or_none(getattr(svc, "_last_charger_state_energy_kwh", None)),
+            status_text=self._cached_optional_text(getattr(svc, "_last_charger_state_status", None)),
+            fault_text=self._cached_optional_text(getattr(svc, "_last_charger_state_fault", None)),
+        )
+
+    @staticmethod
+    def _cached_optional_text(value: object) -> str | None:
+        """Return one cached runtime text field normalized to optional string."""
+        return None if value is None else str(value)
+
+    @staticmethod
+    def _charger_state_has_cached_data(state: ChargerState) -> bool:
+        """Return whether reconstructed charger state carries any cached information."""
+        return any(
+            value is not None
+            for value in (
+                state.enabled,
+                state.current_amps,
+                state.phase_selection,
+                state.actual_current_amps,
+                state.power_w,
+                state.energy_kwh,
+                state.status_text,
+                state.fault_text,
+            )
         )
 
     def _pm_status_from_charger_state(
@@ -608,40 +683,158 @@ class ShellyIoController:
     ) -> ShellyPmStatus:
         """Project charger-native readback onto the legacy Shelly PM payload shape."""
         svc = self.service
-        phase_selection = normalize_phase_selection(
+        phase_selection = self._resolved_pm_phase_selection(state, active_phase_selection)
+        current_a = self._resolved_charger_current(state)
+        power_w = 0.0 if state.power_w is None else float(state.power_w)
+        energy_kwh = 0.0 if state.energy_kwh is None else float(state.energy_kwh)
+        voltage_v = finite_float_or_none(getattr(svc, "_last_voltage", None))
+        pm_status = self._charger_pm_status_base(power_w, energy_kwh, phase_selection)
+        self._apply_optional_pm_output(pm_status, relay_on)
+        self._apply_optional_pm_current(pm_status, current_a)
+        self._apply_optional_pm_voltage(pm_status, voltage_v)
+        return pm_status
+
+    @staticmethod
+    def _charger_pm_status_base(
+        power_w: float,
+        energy_kwh: float,
+        phase_selection: PhaseSelection,
+    ) -> ShellyPmStatus:
+        """Return the base PM payload shared by charger-native projection."""
+        return {
+            "apower": power_w,
+            "aenergy": {"total": energy_kwh * 1000.0},
+            "_phase_selection": phase_selection,
+        }
+
+    @staticmethod
+    def _apply_optional_pm_output(pm_status: ShellyPmStatus, value: bool | None) -> None:
+        """Apply optional relay output field when one is available."""
+        if value is not None:
+            pm_status["output"] = bool(value)
+
+    @staticmethod
+    def _apply_optional_pm_current(pm_status: ShellyPmStatus, value: float | None) -> None:
+        """Apply optional current field when one is available."""
+        if value is not None:
+            pm_status["current"] = float(value)
+
+    @staticmethod
+    def _apply_optional_pm_voltage(pm_status: ShellyPmStatus, value: float | None) -> None:
+        """Apply optional voltage field when one is available."""
+        if value is not None:
+            pm_status["voltage"] = float(value)
+
+    def _resolved_pm_phase_selection(
+        self,
+        state: ChargerState,
+        active_phase_selection: object | None,
+    ) -> PhaseSelection:
+        """Return the effective phase selection for charger-native PM projection."""
+        svc = self.service
+        raw_selection = (
             active_phase_selection
             if active_phase_selection is not None
             else (
                 state.phase_selection
                 if state.phase_selection is not None
                 else getattr(svc, "active_phase_selection", "P1")
-            ),
-            "P1",
-        )
-        current_a = (
-            float(state.actual_current_amps)
-            if state.actual_current_amps is not None
-            else (
-                float(state.current_amps)
-                if state.current_amps is not None
-                else None
             )
         )
-        power_w = 0.0 if state.power_w is None else float(state.power_w)
-        energy_kwh = 0.0 if state.energy_kwh is None else float(state.energy_kwh)
-        voltage_v = finite_float_or_none(getattr(svc, "_last_voltage", None))
-        pm_status: ShellyPmStatus = {
-            "apower": power_w,
-            "aenergy": {"total": energy_kwh * 1000.0},
-            "_phase_selection": phase_selection,
-        }
-        if relay_on is not None:
-            pm_status["output"] = bool(relay_on)
-        if current_a is not None:
-            pm_status["current"] = current_a
-        if voltage_v is not None:
-            pm_status["voltage"] = float(voltage_v)
-        return pm_status
+        return normalize_phase_selection(raw_selection, "P1")
+
+    @staticmethod
+    def _resolved_charger_current(state: ChargerState) -> float | None:
+        """Return the best current value available from charger-native readback."""
+        if state.actual_current_amps is not None:
+            return float(state.actual_current_amps)
+        if state.current_amps is not None:
+            return float(state.current_amps)
+        return None
+
+    def _safe_split_switch_state(self) -> object | None:
+        """Return switch state best-effort without letting switch read failures bubble up."""
+        try:
+            return self._split_switch_state()
+        except Exception:  # pylint: disable=broad-except
+            return None
+
+    def _runtime_cached_charger_state_for_split(self, now: float | None) -> ChargerState | None:
+        """Return fresh enough cached charger state for split meterless fallback."""
+        max_age_seconds = float(getattr(self.service, "auto_shelly_soft_fail_seconds", 0.0) or 0.0)
+        return self._runtime_cached_charger_state(
+            now=now,
+            max_age_seconds=max_age_seconds,
+        )
+
+    def _resolved_switch_overrides(
+        self,
+        switch_state: object | None,
+        relay_on: bool | None,
+        phase_selection: object | None,
+    ) -> tuple[bool | None, object | None]:
+        """Return relay and phase values after best-effort switch-state overrides."""
+        if switch_state is None:
+            return relay_on, phase_selection
+        enabled = getattr(switch_state, "enabled", relay_on)
+        overridden_relay = relay_on if enabled is None else bool(enabled)
+        overridden_phase = getattr(switch_state, "phase_selection", phase_selection)
+        return overridden_relay, overridden_phase
+
+    def _read_split_pm_status_without_meter(
+        self,
+        switch_state: object | None,
+        supported_phase_selections: tuple[str, ...],
+        charger_state: ChargerState | None,
+        now: float | None,
+    ) -> JsonObject:
+        """Return split-mode PM payload synthesized from charger readback without meter backend."""
+        svc = self.service
+        recent_charger_state = charger_state or self._runtime_cached_charger_state_for_split(now)
+        if recent_charger_state is None:
+            raise RuntimeError("Split mode without meter backend requires fresh charger readback")
+        relay_on, active_phase_selection = self._resolved_switch_overrides(
+            switch_state,
+            recent_charger_state.enabled,
+            recent_charger_state.phase_selection,
+        )
+        self._remember_phase_selection_state(
+            supported=supported_phase_selections,
+            requested=getattr(
+                svc,
+                "requested_phase_selection",
+                active_phase_selection if active_phase_selection is not None else "P1",
+            ),
+            active=active_phase_selection,
+        )
+        return cast(
+            JsonObject,
+            self._pm_status_from_charger_state(
+                recent_charger_state,
+                relay_on=relay_on,
+                active_phase_selection=active_phase_selection,
+            ),
+        )
+
+    def _read_split_pm_status_with_meter(
+        self,
+        backend: object,
+        switch_state: object | None,
+        supported_phase_selections: tuple[str, ...],
+    ) -> JsonObject:
+        """Return split-mode PM payload using the configured meter backend."""
+        reading = cast(Any, backend).read_meter()
+        relay_on, active_phase_selection = self._resolved_switch_overrides(
+            switch_state,
+            reading.relay_on,
+            reading.phase_selection,
+        )
+        self._remember_phase_selection_state(
+            supported=supported_phase_selections,
+            requested=getattr(self.service, "requested_phase_selection", reading.phase_selection),
+            active=active_phase_selection,
+        )
+        return cast(JsonObject, self._pm_status_from_meter_reading(reading, relay_on=relay_on))
 
     def _read_split_pm_status(
         self,
@@ -650,63 +843,21 @@ class ShellyIoController:
         now: float | None = None,
     ) -> JsonObject:
         """Read one legacy-compatible PM payload through the configured split backends."""
-        svc = self.service
         backend = self._split_meter_backend()
         supported_phase_selections = self._split_switch_supported_phase_selections()
-        switch_state: object | None = None
-        try:
-            switch_state = self._split_switch_state()
-        except Exception:  # pylint: disable=broad-except
-            switch_state = None
+        switch_state = self._safe_split_switch_state()
         if backend is None:
-            recent_charger_state = charger_state or self._runtime_cached_charger_state(
-                now=now,
-                max_age_seconds=float(getattr(svc, "auto_shelly_soft_fail_seconds", 0.0) or 0.0),
+            return self._read_split_pm_status_without_meter(
+                switch_state,
+                supported_phase_selections,
+                charger_state,
+                now,
             )
-            if recent_charger_state is None:
-                raise RuntimeError(
-                    "Split mode without meter backend requires fresh charger readback"
-                )
-            relay_on = recent_charger_state.enabled
-            active_phase_selection: object | None = recent_charger_state.phase_selection
-            if switch_state is not None:
-                enabled = getattr(switch_state, "enabled", relay_on)
-                relay_on = relay_on if enabled is None else bool(enabled)
-                active_phase_selection = getattr(
-                    switch_state,
-                    "phase_selection",
-                    active_phase_selection,
-                )
-            self._remember_phase_selection_state(
-                supported=supported_phase_selections,
-                requested=getattr(
-                    svc,
-                    "requested_phase_selection",
-                    active_phase_selection if active_phase_selection is not None else "P1",
-                ),
-                active=active_phase_selection,
-            )
-            return cast(
-                JsonObject,
-                self._pm_status_from_charger_state(
-                    recent_charger_state,
-                    relay_on=relay_on,
-                    active_phase_selection=active_phase_selection,
-                ),
-            )
-        reading = cast(Any, backend).read_meter()
-        relay_on = reading.relay_on
-        meter_phase_selection: object = reading.phase_selection
-        if switch_state is not None:
-            enabled = getattr(switch_state, "enabled", relay_on)
-            relay_on = relay_on if enabled is None else bool(enabled)
-            meter_phase_selection = getattr(switch_state, "phase_selection", meter_phase_selection)
-        self._remember_phase_selection_state(
-            supported=supported_phase_selections,
-            requested=getattr(self.service, "requested_phase_selection", reading.phase_selection),
-            active=meter_phase_selection,
+        return self._read_split_pm_status_with_meter(
+            backend,
+            switch_state,
+            supported_phase_selections,
         )
-        return cast(JsonObject, self._pm_status_from_meter_reading(reading, relay_on=relay_on))
 
     @staticmethod
     def _json_object(value: object) -> JsonObject:

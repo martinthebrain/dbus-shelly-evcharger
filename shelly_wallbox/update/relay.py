@@ -59,27 +59,35 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
             candidates.append(float(soft_fail_seconds))
         return max(1.0, min(candidates))
 
+    @staticmethod
+    def _charger_readback_now(svc: Any, now: float | None = None) -> float:
+        """Return the timestamp used to judge charger readback freshness."""
+        if now is not None:
+            return float(now)
+        if callable(getattr(svc, "_time_now", None)):
+            return float(svc._time_now())
+        return time.time()
+
     @classmethod
-    def _fresh_charger_enabled_readback(cls, svc: Any, now: float | None = None) -> bool | None:
-        """Return fresh native charger enabled-state readback when available."""
+    def _fresh_charger_state_timestamp(cls, svc: Any, now: float | None = None) -> float | None:
+        """Return the fresh charger-state timestamp when native readback is usable."""
         if getattr(svc, "_charger_backend", None) is None:
             return None
         state_at = finite_float_or_none(getattr(svc, "_last_charger_state_at", None))
         if state_at is None:
             return None
+        current = cls._charger_readback_now(svc, now)
+        if abs(current - state_at) > cls._charger_state_max_age_seconds(svc):
+            return None
+        return float(state_at)
+
+    @classmethod
+    def _fresh_charger_enabled_readback(cls, svc: Any, now: float | None = None) -> bool | None:
+        """Return fresh native charger enabled-state readback when available."""
+        if cls._fresh_charger_state_timestamp(svc, now) is None:
+            return None
         raw_enabled = getattr(svc, "_last_charger_state_enabled", None)
         if raw_enabled is None:
-            return None
-        current = (
-            float(now)
-            if now is not None
-            else (
-                float(svc._time_now())
-                if callable(getattr(svc, "_time_now", None))
-                else time.time()
-            )
-        )
-        if abs(current - state_at) > cls._charger_state_max_age_seconds(svc):
             return None
         return bool(raw_enabled)
 
@@ -91,24 +99,10 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         now: float | None = None,
     ) -> float | None:
         """Return one fresh numeric charger readback attribute when available."""
-        if getattr(svc, "_charger_backend", None) is None:
-            return None
-        state_at = finite_float_or_none(getattr(svc, "_last_charger_state_at", None))
-        if state_at is None:
+        if cls._fresh_charger_state_timestamp(svc, now) is None:
             return None
         value = finite_float_or_none(getattr(svc, attribute_name, None))
         if value is None:
-            return None
-        current = (
-            float(now)
-            if now is not None
-            else (
-                float(svc._time_now())
-                if callable(getattr(svc, "_time_now", None))
-                else time.time()
-            )
-        )
-        if abs(current - state_at) > cls._charger_state_max_age_seconds(svc):
             return None
         return float(value)
 
@@ -142,21 +136,7 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         now: float | None = None,
     ) -> str | None:
         """Return one fresh charger readback text field when available."""
-        if getattr(svc, "_charger_backend", None) is None:
-            return None
-        state_at = finite_float_or_none(getattr(svc, "_last_charger_state_at", None))
-        if state_at is None:
-            return None
-        current = (
-            float(now)
-            if now is not None
-            else (
-                float(svc._time_now())
-                if callable(getattr(svc, "_time_now", None))
-                else time.time()
-            )
-        )
-        if abs(current - state_at) > cls._charger_state_max_age_seconds(svc):
+        if cls._fresh_charger_state_timestamp(svc, now) is None:
             return None
         raw_value = getattr(svc, attribute_name, None)
         if raw_value is None:
@@ -205,15 +185,42 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         tokens = cls._charger_text_tokens(status_text)
         if not tokens:
             return None
-        if tokens & set(cls.CHARGER_STATUS_FINISHED_HINT_TOKENS):
-            return 3, "charger-status-finished"
-        if tokens & set(cls.CHARGER_STATUS_WAITING_HINT_TOKENS):
-            return (4 if auto_mode_active else 6), "charger-status-waiting"
-        if tokens & set(cls.CHARGER_STATUS_CHARGING_HINT_TOKENS):
-            return 2, "charger-status-charging"
-        if tokens & set(cls.CHARGER_STATUS_READY_HINT_TOKENS):
-            return int(getattr(svc, "idle_status", 1)), "charger-status-ready"
+        return cls._charger_status_override_from_tokens(svc, tokens, auto_mode_active)
+
+    @classmethod
+    def _charger_status_override_from_tokens(
+        cls,
+        svc: Any,
+        tokens: set[str],
+        auto_mode_active: bool,
+    ) -> tuple[int, str] | None:
+        """Return the status override implied by already-tokenized charger status text."""
+        for hint_tokens, status_code, status_source in cls._charger_status_token_rules(svc, auto_mode_active):
+            if tokens & hint_tokens:
+                return status_code, status_source
         return None
+
+    @classmethod
+    def _charger_status_token_rules(
+        cls,
+        svc: Any,
+        auto_mode_active: bool,
+    ) -> tuple[tuple[set[str], int, str], ...]:
+        """Return ordered charger-status token rules for native status overrides."""
+        return (
+            (set(cls.CHARGER_STATUS_FINISHED_HINT_TOKENS), 3, "charger-status-finished"),
+            (
+                set(cls.CHARGER_STATUS_WAITING_HINT_TOKENS),
+                4 if auto_mode_active else 6,
+                "charger-status-waiting",
+            ),
+            (set(cls.CHARGER_STATUS_CHARGING_HINT_TOKENS), 2, "charger-status-charging"),
+            (
+                set(cls.CHARGER_STATUS_READY_HINT_TOKENS),
+                int(getattr(svc, "idle_status", 1)),
+                "charger-status-ready",
+            ),
+        )
 
     @classmethod
     def _effective_enabled_state(cls, svc: Any, relay_on: bool, now: float | None = None) -> bool:
@@ -237,19 +244,51 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         if value is None:
             return None
         target = float(value)
-        min_current = finite_float_or_none(getattr(svc, "min_current", None))
-        max_current = finite_float_or_none(getattr(svc, "max_current", None))
-        if min_current is not None:
-            target = max(target, min_current)
-        if max_current is not None and max_current > 0.0:
-            target = min(target, max_current)
+        min_current, max_current = _UpdateCycleRelayMixin._charger_current_limits(svc)
+        target = _UpdateCycleRelayMixin._apply_min_current_limit(target, min_current)
+        target = _UpdateCycleRelayMixin._apply_max_current_limit(target, max_current)
         return target if target > 0.0 else None
 
+    @staticmethod
+    def _charger_current_limits(svc: Any) -> tuple[float | None, float | None]:
+        """Return configured min/max current limits for charger current writes."""
+        min_current = finite_float_or_none(getattr(svc, "min_current", None))
+        max_current = finite_float_or_none(getattr(svc, "max_current", None))
+        return min_current, max_current
+
+    @staticmethod
+    def _apply_min_current_limit(target: float, min_current: float | None) -> float:
+        """Clamp a current target against the configured minimum when present."""
+        return max(target, min_current) if min_current is not None else float(target)
+
+    @staticmethod
+    def _apply_max_current_limit(target: float, max_current: float | None) -> float:
+        """Clamp a current target against the configured maximum when present."""
+        if max_current is None or max_current <= 0.0:
+            return float(target)
+        return min(target, max_current)
+
     @classmethod
-    def _derived_learned_current_target(cls, svc: Any, now: float) -> float | None:
-        """Return one current target derived from a stable learned charging power."""
-        if normalize_learning_state(getattr(svc, "learned_charge_power_state", "unknown")) != "stable":
+    def _stable_learned_current_inputs(
+        cls,
+        svc: Any,
+    ) -> tuple[float, float, str, float, float | None] | None:
+        """Return one validated stable learned-power snapshot for current derivation."""
+        if not cls._stable_learned_current_state(svc):
             return None
+        learned_inputs = cls._raw_stable_learned_current_inputs(svc)
+        return cls._validated_stable_learned_current_inputs(learned_inputs)
+
+    @staticmethod
+    def _stable_learned_current_state(svc: Any) -> bool:
+        """Return whether learned-power state currently permits current-target derivation."""
+        return normalize_learning_state(getattr(svc, "learned_charge_power_state", "unknown")) == "stable"
+
+    @staticmethod
+    def _raw_stable_learned_current_inputs(
+        svc: Any,
+    ) -> tuple[float | None, float | None, str | None, float | None, float | None]:
+        """Return raw learned-power inputs before validation for current derivation."""
         learned_power = finite_float_or_none(getattr(svc, "learned_charge_power_watts", None))
         learned_voltage = finite_float_or_none(getattr(svc, "learned_charge_power_voltage", None))
         learned_phase = normalize_learning_phase(
@@ -259,26 +298,76 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         max_age_seconds = finite_float_or_none(
             getattr(svc, "auto_learn_charge_power_max_age_seconds", 21600.0)
         )
-        if (
-            learned_power is None
-            or learned_power <= 0.0
-            or learned_voltage is None
-            or learned_voltage <= 0.0
-            or learned_phase is None
-            or updated_at is None
-        ):
-            return None
-        if max_age_seconds is not None and max_age_seconds > 0.0 and (float(now) - updated_at) > max_age_seconds:
-            return None
+        return learned_power, learned_voltage, learned_phase, updated_at, max_age_seconds
 
-        phase_voltage = float(learned_voltage)
-        if learned_phase == "3P" and str(getattr(svc, "voltage_mode", "phase")).strip().lower() != "phase":
-            phase_voltage = phase_voltage / math.sqrt(3.0) if phase_voltage > 0.0 else 0.0
+    @staticmethod
+    def _validated_stable_learned_current_inputs(
+        learned_inputs: tuple[float | None, float | None, str | None, float | None, float | None],
+    ) -> tuple[float, float, str, float, float | None] | None:
+        """Return validated learned-power inputs for current derivation."""
+        learned_power, learned_voltage, learned_phase, updated_at, max_age_seconds = learned_inputs
+        resolved_power = _UpdateCycleRelayMixin._positive_learned_scalar(learned_power)
+        resolved_voltage = _UpdateCycleRelayMixin._positive_learned_scalar(learned_voltage)
+        if resolved_power is None or resolved_voltage is None:
+            return None
+        phase_and_timestamp = _UpdateCycleRelayMixin._learned_phase_and_timestamp(learned_phase, updated_at)
+        if phase_and_timestamp is None:
+            return None
+        resolved_phase, resolved_updated_at = phase_and_timestamp
+        return resolved_power, resolved_voltage, resolved_phase, resolved_updated_at, max_age_seconds
+
+    @staticmethod
+    def _positive_learned_scalar(value: float | None) -> float | None:
+        """Return one learned scalar only when it is present and strictly positive."""
+        if value is None or value <= 0.0:
+            return None
+        return float(value)
+
+    @staticmethod
+    def _learned_phase_and_timestamp(
+        learned_phase: str | None,
+        updated_at: float | None,
+    ) -> tuple[str, float] | None:
+        """Return learned phase and timestamp only when both are present."""
+        if learned_phase is None or updated_at is None:
+            return None
+        return str(learned_phase), float(updated_at)
+
+    @staticmethod
+    def _learned_current_target_stale(now: float, updated_at: float, max_age_seconds: float | None) -> bool:
+        """Return whether one learned-power snapshot is too old for current derivation."""
+        return bool(max_age_seconds is not None and max_age_seconds > 0.0 and (float(now) - updated_at) > max_age_seconds)
+
+    @staticmethod
+    def _learned_phase_voltage(svc: Any, learned_phase: str, learned_voltage: float) -> float:
+        """Return the effective per-phase voltage used for one learned current target."""
+        if learned_phase != "3P" or str(getattr(svc, "voltage_mode", "phase")).strip().lower() == "phase":
+            return float(learned_voltage)
+        return float(learned_voltage) / math.sqrt(3.0) if learned_voltage > 0.0 else 0.0
+
+    @staticmethod
+    def _rounded_learned_current_target(
+        learned_power: float,
+        phase_voltage: float,
+        phase_count: float,
+    ) -> float | None:
+        """Return one rounded current target derived from a learned power signature."""
+        if phase_voltage <= 0.0 or phase_count <= 0.0:
+            return None
+        return finite_float_or_none(round(float(learned_power) / (phase_voltage * phase_count)))
+
+    @classmethod
+    def _derived_learned_current_target(cls, svc: Any, now: float) -> float | None:
+        """Return one current target derived from a stable learned charging power."""
+        learned_inputs = cls._stable_learned_current_inputs(svc)
+        if learned_inputs is None:
+            return None
+        learned_power, learned_voltage, learned_phase, updated_at, max_age_seconds = learned_inputs
+        if cls._learned_current_target_stale(now, updated_at, max_age_seconds):
+            return None
+        phase_voltage = cls._learned_phase_voltage(svc, learned_phase, learned_voltage)
         phase_count = 3.0 if learned_phase == "3P" else 1.0
-        if phase_voltage <= 0.0:
-            return None
-
-        rounded_current = finite_float_or_none(round(float(learned_power) / (phase_voltage * phase_count)))
+        rounded_current = cls._rounded_learned_current_target(learned_power, phase_voltage, phase_count)
         return cls._clamped_charger_current_target(svc, rounded_current)
 
     @classmethod
@@ -312,9 +401,8 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         backend = cls._charger_current_backend(svc)
         if backend is None:
             return None
-        if not auto_mode_active or not bool(desired_relay):
-            svc._charger_target_current_amps = None
-            svc._charger_target_current_applied_at = None
+        if cls._charger_current_reset_needed(svc, desired_relay, auto_mode_active):
+            cls._reset_charger_current_target(svc)
             return None
 
         target_amps = cls._charger_current_target_amps(svc, desired_relay, now, auto_mode_active)
@@ -322,22 +410,58 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
             return None
 
         last_target = finite_float_or_none(getattr(svc, "_charger_target_current_amps", None))
-        if last_target is not None and abs(last_target - target_amps) < 0.01:
-            return float(last_target)
+        if cls._charger_target_unchanged(last_target, target_amps):
+            return cast(float, last_target)
+        return cls._apply_new_charger_current_target(svc, backend, target_amps, now, last_target)
 
+    @classmethod
+    def _apply_new_charger_current_target(
+        cls,
+        svc: Any,
+        backend: Any,
+        target_amps: float,
+        now: float,
+        last_target: float | None,
+    ) -> float | None:
+        """Apply one new charger-current target and remember the result when successful."""
         try:
-            cast(Any, backend).set_current(float(target_amps))
+            backend.set_current(float(target_amps))
         except Exception as error:  # pylint: disable=broad-except
-            svc._mark_failure("charger")
-            svc._warning_throttled(
-                "charger-current-failed",
-                svc.auto_shelly_soft_fail_seconds,
-                "Charger current request failed: %s",
-                error,
-                exc_info=error,
-            )
+            cls._handle_charger_current_target_failure(svc, error)
             return last_target
+        return cls._remember_charger_current_target(svc, target_amps, now)
 
+    @staticmethod
+    def _charger_current_reset_needed(svc: Any, desired_relay: bool, auto_mode_active: bool) -> bool:
+        """Return whether charger-current state should be cleared instead of applied."""
+        return not auto_mode_active or not bool(desired_relay)
+
+    @staticmethod
+    def _reset_charger_current_target(svc: Any) -> None:
+        """Clear the remembered native charger-current target."""
+        svc._charger_target_current_amps = None
+        svc._charger_target_current_applied_at = None
+
+    @staticmethod
+    def _charger_target_unchanged(last_target: float | None, target_amps: float) -> bool:
+        """Return whether a charger-current target is effectively unchanged."""
+        return last_target is not None and abs(last_target - target_amps) < 0.01
+
+    @staticmethod
+    def _handle_charger_current_target_failure(svc: Any, error: Exception) -> None:
+        """Record one failed native charger-current write."""
+        svc._mark_failure("charger")
+        svc._warning_throttled(
+            "charger-current-failed",
+            svc.auto_shelly_soft_fail_seconds,
+            "Charger current request failed: %s",
+            error,
+            exc_info=error,
+        )
+
+    @staticmethod
+    def _remember_charger_current_target(svc: Any, target_amps: float, now: float) -> float:
+        """Persist one successfully applied charger-current target."""
         svc._charger_target_current_amps = float(target_amps)
         svc._charger_target_current_applied_at = float(now)
         svc._mark_recovery("charger", "Charger current writes recovered")
@@ -357,21 +481,56 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         """Return one numeric three-phase tuple from PM metadata."""
         if not isinstance(raw_value, (tuple, list)) or len(raw_value) != 3:
             return None
-        values: list[float] = []
-        for item in raw_value:
-            if not isinstance(item, (int, float)) or isinstance(item, bool):
-                return None
-            values.append(float(item))
-        return values[0], values[1], values[2]
+        values: tuple[float | None, float | None, float | None] = (
+            _UpdateCycleRelayMixin._phase_tuple_item(raw_value[0]),
+            _UpdateCycleRelayMixin._phase_tuple_item(raw_value[1]),
+            _UpdateCycleRelayMixin._phase_tuple_item(raw_value[2]),
+        )
+        return _UpdateCycleRelayMixin._resolved_phase_tuple(values)
+
+    @staticmethod
+    def _phase_tuple_item(raw_value: Any) -> float | None:
+        """Return one numeric phase-tuple item when it is a valid scalar."""
+        if not isinstance(raw_value, (int, float)) or isinstance(raw_value, bool):
+            return None
+        return float(raw_value)
+
+    @staticmethod
+    def _resolved_phase_tuple(
+        values: tuple[float | None, float | None, float | None],
+    ) -> tuple[float, float, float] | None:
+        """Return one concrete phase tuple when all three values are present."""
+        if None in values:
+            return None
+        first, second, third = values
+        return cast(float, first), cast(float, second), cast(float, third)
 
     @staticmethod
     def _phase_voltage(voltage: float, selection: Any, voltage_mode: Any) -> float:
         """Return the per-line voltage implied by one backend phase selection."""
-        normalized_selection = str(selection).strip().upper() if selection is not None else ""
-        normalized_voltage_mode = str(voltage_mode).strip().lower() if voltage_mode is not None else "phase"
-        if normalized_selection == "P1_P2_P3" and normalized_voltage_mode != "phase":
-            return float(voltage) / math.sqrt(3.0) if float(voltage) > 0.0 else 0.0
-        return float(voltage)
+        normalized_selection = _UpdateCycleRelayMixin._normalized_phase_selection(selection)
+        normalized_voltage_mode = _UpdateCycleRelayMixin._normalized_voltage_mode(voltage_mode)
+        if not _UpdateCycleRelayMixin._selection_uses_line_to_line_voltage(
+            normalized_selection,
+            normalized_voltage_mode,
+        ):
+            return float(voltage)
+        return float(voltage) / math.sqrt(3.0) if float(voltage) > 0.0 else 0.0
+
+    @staticmethod
+    def _normalized_phase_selection(selection: Any) -> str:
+        """Return one normalized phase-selection token."""
+        return str(selection).strip().upper() if selection is not None else ""
+
+    @staticmethod
+    def _normalized_voltage_mode(voltage_mode: Any) -> str:
+        """Return one normalized voltage-mode token."""
+        return str(voltage_mode).strip().lower() if voltage_mode is not None else "phase"
+
+    @staticmethod
+    def _selection_uses_line_to_line_voltage(selection: str, voltage_mode: str) -> bool:
+        """Return whether one phase selection implies line-to-line voltage handling."""
+        return selection == "P1_P2_P3" and voltage_mode != "phase"
 
     def _phase_data_for_pm_status(
         self,
@@ -382,33 +541,64 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
     ) -> dict[str, dict[str, float]]:
         """Return per-line display values, preferring backend-provided phase metadata."""
         svc = self.service
-        if isinstance(pm_status, dict):
-            phase_powers = self._phase_tuple(pm_status.get("_phase_powers_w"))
-            if phase_powers is not None:
-                phase_currents = self._phase_tuple(pm_status.get("_phase_currents_a"))
-                phase_voltage = self._phase_voltage(voltage, pm_status.get("_phase_selection"), getattr(svc, "voltage_mode", "phase"))
-                phase_data: dict[str, dict[str, float]] = {}
-                for phase_name, phase_power, phase_current in zip(
-                    ("L1", "L2", "L3"),
-                    phase_powers,
-                    phase_currents or (None, None, None),
-                ):
-                    resolved_current = (
-                        float(phase_current)
-                        if phase_current is not None
-                        else (float(phase_power) / phase_voltage if phase_voltage else 0.0)
-                    )
-                    phase_data[phase_name] = {
-                        "power": float(phase_power),
-                        "voltage": phase_voltage,
-                        "current": resolved_current,
-                    }
-                return phase_data
+        phase_data = self._phase_data_from_backend_metadata(pm_status, voltage, getattr(svc, "voltage_mode", "phase"))
+        if phase_data is not None:
+            return phase_data
         phase_values = cast(
             dict[str, dict[str, float]],
             self._phase_values(power, voltage, svc.phase, svc.voltage_mode),
         )
         return phase_values
+
+    def _phase_data_from_backend_metadata(
+        self,
+        pm_status: dict[str, Any] | None,
+        voltage: float,
+        voltage_mode: Any,
+    ) -> dict[str, dict[str, float]] | None:
+        """Return per-phase measurements from backend metadata when available."""
+        if not isinstance(pm_status, dict):
+            return None
+        phase_powers = self._phase_tuple(pm_status.get("_phase_powers_w"))
+        if phase_powers is None:
+            return None
+        phase_currents = self._phase_tuple(pm_status.get("_phase_currents_a"))
+        phase_voltage = self._phase_voltage(voltage, pm_status.get("_phase_selection"), voltage_mode)
+        return self._phase_data_from_phase_tuples(phase_powers, phase_currents, phase_voltage)
+
+    @staticmethod
+    def _phase_measurement(
+        phase_power: float,
+        phase_current: float | None,
+        phase_voltage: float,
+    ) -> dict[str, float]:
+        """Return one per-phase measurement mapping."""
+        resolved_current = (
+            float(phase_current)
+            if phase_current is not None
+            else (float(phase_power) / phase_voltage if phase_voltage else 0.0)
+        )
+        return {
+            "power": float(phase_power),
+            "voltage": phase_voltage,
+            "current": resolved_current,
+        }
+
+    def _phase_data_from_phase_tuples(
+        self,
+        phase_powers: tuple[float, float, float],
+        phase_currents: tuple[float, float, float] | None,
+        phase_voltage: float,
+    ) -> dict[str, dict[str, float]]:
+        """Return one complete per-phase mapping from backend tuples."""
+        phase_data: dict[str, dict[str, float]] = {}
+        for phase_name, phase_power, phase_current in zip(
+            ("L1", "L2", "L3"),
+            phase_powers,
+            phase_currents or (None, None, None),
+        ):
+            phase_data[phase_name] = self._phase_measurement(phase_power, phase_current, phase_voltage)
+        return phase_data
 
     @staticmethod
     def log_auto_relay_change(svc: Any, desired_relay: bool) -> None:
@@ -459,38 +649,73 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
             return None
 
         expected_relay = bool(expected_state)
-        if pm_confirmed and bool(relay_on) == expected_relay:
-            if getattr(svc, "_relay_sync_failure_reported", False):
-                svc._mark_recovery("shelly", "Shelly relay confirmation recovered")
-            self._clear_relay_sync_tracking(svc)
+        if self._relay_sync_confirmed_match(svc, relay_on, pm_confirmed, expected_relay):
             return None
 
         deadline_at = getattr(svc, "_relay_sync_deadline_at", None)
-        if deadline_at is None or float(now) < float(deadline_at):
-            if pm_confirmed and bool(relay_on) != expected_relay:
-                return "command-mismatch"
-            return None
-
-        if not getattr(svc, "_relay_sync_failure_reported", False):
-            svc._relay_sync_failure_reported = True
-            timeout_seconds = max(
-                0.0,
-                float(deadline_at) - float(getattr(svc, "_relay_sync_requested_at", deadline_at)),
-            )
-            svc._mark_failure("shelly")
-            svc._warning_throttled(
-                "relay-sync-failed",
-                max(1.0, timeout_seconds),
-                "Shelly relay state did not confirm to %s within %.1fs (actual=%s confirmed=%s)",
-                expected_relay,
-                timeout_seconds,
-                bool(relay_on),
-                int(bool(pm_confirmed)),
-            )
-        # A timed-out confirmation must not block a fresh retry of the same
-        # relay target on the next decision cycle.
+        if self._relay_sync_before_deadline(deadline_at, now):
+            return self._relay_sync_pre_timeout_result(relay_on, pm_confirmed, expected_relay)
+        self._record_relay_sync_timeout(svc, relay_on, pm_confirmed, expected_relay, deadline_at)
         self._clear_relay_sync_tracking(svc)
         return "relay-sync-failed"
+
+    def _relay_sync_confirmed_match(
+        self,
+        svc: Any,
+        relay_on: bool,
+        pm_confirmed: bool,
+        expected_relay: bool,
+    ) -> bool:
+        """Return whether relay confirmation already matched the pending expectation."""
+        if not pm_confirmed or bool(relay_on) != expected_relay:
+            return False
+        if getattr(svc, "_relay_sync_failure_reported", False):
+            svc._mark_recovery("shelly", "Shelly relay confirmation recovered")
+        self._clear_relay_sync_tracking(svc)
+        return True
+
+    @staticmethod
+    def _relay_sync_before_deadline(deadline_at: Any, now: float) -> bool:
+        """Return whether relay confirmation is still inside its deadline window."""
+        return deadline_at is None or float(now) < float(deadline_at)
+
+    @staticmethod
+    def _relay_sync_pre_timeout_result(
+        relay_on: bool,
+        pm_confirmed: bool,
+        expected_relay: bool,
+    ) -> str | None:
+        """Return the health result before relay confirmation timed out."""
+        if pm_confirmed and bool(relay_on) != expected_relay:
+            return "command-mismatch"
+        return None
+
+    def _record_relay_sync_timeout(
+        self,
+        svc: Any,
+        relay_on: bool,
+        pm_confirmed: bool,
+        expected_relay: bool,
+        deadline_at: Any,
+    ) -> None:
+        """Record one timed-out relay confirmation, once per in-flight request."""
+        if getattr(svc, "_relay_sync_failure_reported", False):
+            return
+        svc._relay_sync_failure_reported = True
+        timeout_seconds = max(
+            0.0,
+            float(deadline_at) - float(getattr(svc, "_relay_sync_requested_at", deadline_at)),
+        )
+        svc._mark_failure("shelly")
+        svc._warning_throttled(
+            "relay-sync-failed",
+            max(1.0, timeout_seconds),
+            "Shelly relay state did not confirm to %s within %.1fs (actual=%s confirmed=%s)",
+            expected_relay,
+            timeout_seconds,
+            bool(relay_on),
+            int(bool(pm_confirmed)),
+        )
 
     @staticmethod
     def _phase_switch_pause_seconds(svc: Any) -> float:
@@ -612,49 +837,111 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         svc = self.service
         pending_selection = self._pending_phase_switch_selection(svc)
         switch_state = str(getattr(svc, "_phase_switch_state", "") or "")
-        if pending_selection is None or switch_state not in {
-            self.PHASE_SWITCH_WAITING_STATE,
-            self.PHASE_SWITCH_STABILIZING_STATE,
-        }:
+        if not self._phase_switch_state_active(pending_selection, switch_state):
             self._clear_phase_switch_state(svc)
             return relay_on, power, current, pm_confirmed, None
+        assert pending_selection is not None
 
-        pending_relay_state, _requested_at = svc._peek_pending_relay_command()
         if switch_state == self.PHASE_SWITCH_WAITING_STATE:
-            if bool(relay_on) or pending_relay_state is not None or not pm_confirmed:
-                return relay_on, power, current, pm_confirmed, False
-            requested_at = getattr(svc, "_phase_switch_requested_at", None)
-            pause_elapsed = (
-                requested_at is None
-                or (float(now) - float(requested_at)) >= self._phase_switch_pause_seconds(svc)
+            return self._orchestrate_waiting_phase_switch(
+                svc,
+                pending_selection,
+                relay_on,
+                power,
+                current,
+                pm_confirmed,
+                now,
+                auto_mode_active,
             )
-            if not pause_elapsed:
-                return relay_on, power, current, pm_confirmed, False
-            try:
-                applied_selection = svc._apply_phase_selection(pending_selection)
-            except Exception as error:  # pylint: disable=broad-except
-                relay_on, power, current, pm_confirmed = self._abort_pending_phase_switch(
-                    svc,
-                    relay_on,
-                    power,
-                    current,
-                    pm_confirmed,
-                    now,
-                    auto_mode_active,
-                    error,
-                )
-                return relay_on, power, current, pm_confirmed, None
-            svc.requested_phase_selection = applied_selection
-            svc.active_phase_selection = applied_selection
-            svc._phase_switch_state = self.PHASE_SWITCH_STABILIZING_STATE
-            svc._phase_switch_stable_until = float(now) + self._phase_switch_stabilization_seconds(svc)
-            svc._save_runtime_state()
-            return False, 0.0, 0.0, False, False
+        return self._orchestrate_stabilizing_phase_switch(
+            svc,
+            relay_on,
+            power,
+            current,
+            pm_confirmed,
+            now,
+            auto_mode_active,
+        )
 
+    def _phase_switch_state_active(self, pending_selection: PhaseSelection | None, switch_state: str) -> bool:
+        """Return whether the current service state still represents one staged phase switch."""
+        return pending_selection is not None and switch_state in {
+            self.PHASE_SWITCH_WAITING_STATE,
+            self.PHASE_SWITCH_STABILIZING_STATE,
+        }
+
+    def _phase_switch_waiting_ready(
+        self,
+        svc: Any,
+        relay_on: bool,
+        pm_confirmed: bool,
+        now: float,
+    ) -> bool:
+        """Return whether a staged phase switch may advance from waiting to apply."""
+        pending_relay_state, _requested_at = svc._peek_pending_relay_command()
+        if bool(relay_on) or pending_relay_state is not None or not pm_confirmed:
+            return False
+        requested_at = getattr(svc, "_phase_switch_requested_at", None)
+        return requested_at is None or (float(now) - float(requested_at)) >= self._phase_switch_pause_seconds(svc)
+
+    def _apply_pending_phase_selection(
+        self,
+        svc: Any,
+        pending_selection: PhaseSelection,
+        now: float,
+    ) -> tuple[bool, float, float, bool, bool | None]:
+        """Apply one staged phase selection and enter stabilization."""
+        applied_selection = svc._apply_phase_selection(pending_selection)
+        svc.requested_phase_selection = applied_selection
+        svc.active_phase_selection = applied_selection
+        svc._phase_switch_state = self.PHASE_SWITCH_STABILIZING_STATE
+        svc._phase_switch_stable_until = float(now) + self._phase_switch_stabilization_seconds(svc)
+        svc._save_runtime_state()
+        return False, 0.0, 0.0, False, False
+
+    def _orchestrate_waiting_phase_switch(
+        self,
+        svc: Any,
+        pending_selection: PhaseSelection,
+        relay_on: bool,
+        power: float,
+        current: float,
+        pm_confirmed: bool,
+        now: float,
+        auto_mode_active: bool,
+    ) -> tuple[bool, float, float, bool, bool | None]:
+        """Advance one phase switch while waiting for confirmed relay-off pause."""
+        if not self._phase_switch_waiting_ready(svc, relay_on, pm_confirmed, now):
+            return relay_on, power, current, pm_confirmed, False
+        try:
+            return self._apply_pending_phase_selection(svc, pending_selection, now)
+        except Exception as error:  # pylint: disable=broad-except
+            relay_on, power, current, pm_confirmed = self._abort_pending_phase_switch(
+                svc,
+                relay_on,
+                power,
+                current,
+                pm_confirmed,
+                now,
+                auto_mode_active,
+                error,
+            )
+            return relay_on, power, current, pm_confirmed, None
+
+    def _orchestrate_stabilizing_phase_switch(
+        self,
+        svc: Any,
+        relay_on: bool,
+        power: float,
+        current: float,
+        pm_confirmed: bool,
+        now: float,
+        auto_mode_active: bool,
+    ) -> tuple[bool, float, float, bool, bool | None]:
+        """Advance one phase switch while the new phase selection stabilizes."""
         stable_until = getattr(svc, "_phase_switch_stable_until", None)
         if stable_until is not None and float(now) < float(stable_until):
             return False, 0.0, 0.0, False, False
-
         relay_on, power, current, pm_confirmed = self._resume_after_phase_switch_pause(
             svc,
             relay_on,
@@ -679,10 +966,7 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         """Queue relay changes and update optimistic local Shelly state."""
         svc = self.service
         pm_confirmed = self._pm_status_confirmed(pm_status)
-        if desired_relay == relay_on:
-            return relay_on, power, current, pm_confirmed
-
-        if getattr(svc, "_relay_sync_expected_state", None) == bool(desired_relay):
+        if self._relay_decision_noop(svc, desired_relay, relay_on):
             return relay_on, power, current, pm_confirmed
 
         if auto_mode_active and svc.auto_audit_log:
@@ -691,17 +975,7 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         try:
             self._apply_enabled_target(svc, desired_relay, now)
         except Exception as error:  # pylint: disable=broad-except
-            source_key = self._enable_control_source_key(svc)
-            source_label = self._enable_control_label(svc)
-            svc._mark_failure(source_key)
-            svc._warning_throttled(
-                f"{source_key}-switch-failed",
-                svc.auto_shelly_soft_fail_seconds,
-                "%s switch request failed: %s",
-                source_label,
-                error,
-                exc_info=error,
-            )
+            self._handle_relay_decision_failure(svc, error)
             return relay_on, power, current, pm_confirmed
 
         relay_on = desired_relay
@@ -709,6 +983,28 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         current = 0.0
         self._publish_local_pm_status_best_effort(relay_on, now)
         return relay_on, power, current, False
+
+    @classmethod
+    def _relay_decision_noop(cls, svc: Any, desired_relay: bool, relay_on: bool) -> bool:
+        """Return whether the requested relay decision is already satisfied or pending."""
+        if desired_relay == relay_on:
+            return True
+        return getattr(svc, "_relay_sync_expected_state", None) == bool(desired_relay)
+
+    @classmethod
+    def _handle_relay_decision_failure(cls, svc: Any, error: Exception) -> None:
+        """Record one failed relay/enable backend request during Auto update."""
+        source_key = cls._enable_control_source_key(svc)
+        source_label = cls._enable_control_label(svc)
+        svc._mark_failure(source_key)
+        svc._warning_throttled(
+            f"{source_key}-switch-failed",
+            svc.auto_shelly_soft_fail_seconds,
+            "%s switch request failed: %s",
+            source_label,
+            error,
+            exc_info=error,
+        )
 
     @classmethod
     def derive_status_code(
@@ -720,24 +1016,53 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         now: float | None = None,
     ) -> int:
         """Translate relay/power state into the Venus EV charger status code."""
-        if cls.charger_health_override(svc, now) == "charger-fault":
-            svc._last_status_source = "charger-fault"
-            svc._last_charger_fault_active = 1
-            return 0
-
-        svc._last_charger_fault_active = 0
+        fault_status = cls._charger_fault_status_override(svc, now)
+        if fault_status is not None:
+            return fault_status
         status_override = cls._charger_status_override(svc, auto_mode_active, now)
         if status_override is not None:
             status_code, status_source = status_override
             svc._last_status_source = status_source
             return int(status_code)
+        return cls._fallback_status_code(svc, relay_on, power, auto_mode_active, now)
+
+    @classmethod
+    def _charger_fault_status_override(cls, svc: Any, now: float | None = None) -> int | None:
+        """Return one status code when charger-native readback reports a hard fault."""
+        if cls.charger_health_override(svc, now) != "charger-fault":
+            svc._last_charger_fault_active = 0
+            return None
+        svc._last_status_source = "charger-fault"
+        svc._last_charger_fault_active = 1
+        return 0
+
+    @classmethod
+    def _fallback_status_code(
+        cls,
+        svc: Any,
+        relay_on: bool,
+        power: float,
+        auto_mode_active: bool,
+        now: float | None = None,
+    ) -> int:
+        """Return the fallback Venus status when no charger-native override applies."""
         enabled_state = cls._effective_enabled_state(svc, relay_on, now)
-        if enabled_state and power >= svc.charging_threshold_watts:
+        if enabled_state:
+            return cls._enabled_fallback_status_code(svc, power)
+        return cls._disabled_fallback_status_code(svc, auto_mode_active)
+
+    @staticmethod
+    def _enabled_fallback_status_code(svc: Any, power: float) -> int:
+        """Return fallback Venus status for an enabled charger without native overrides."""
+        if power >= svc.charging_threshold_watts:
             svc._last_status_source = "charging"
             return 2
-        if enabled_state:
-            svc._last_status_source = "enabled-idle"
-            return int(svc.idle_status)
+        svc._last_status_source = "enabled-idle"
+        return int(svc.idle_status)
+
+    @staticmethod
+    def _disabled_fallback_status_code(svc: Any, auto_mode_active: bool) -> int:
+        """Return fallback Venus status for a disabled charger without native overrides."""
         svc._last_status_source = "auto-waiting" if auto_mode_active else "manual-off"
         return 4 if auto_mode_active else 6
 

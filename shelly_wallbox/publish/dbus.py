@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Helpers for throttled DBus publishing in the Shelly wallbox service."""
 
+from dataclasses import dataclass
 import logging
 import math
 import time
@@ -18,6 +19,16 @@ from shelly_wallbox.core.contracts import (
 PublishStateEntry: TypeAlias = dict[str, Any]
 PhaseMeasurement: TypeAlias = dict[str, float]
 PhaseData: TypeAlias = dict[str, PhaseMeasurement]
+PublishServiceValueSnapshot: TypeAlias = tuple[bool, Any]
+
+
+@dataclass(frozen=True)
+class _LearnedDisplayCurrentInputs:
+    """Stable learned charging-power inputs used for SetCurrent display derivation."""
+
+    power_w: float
+    phase_voltage_v: float
+    phase_count: float
 
 
 class DbusPublishController:
@@ -67,19 +78,24 @@ class DbusPublishController:
     ) -> tuple[bool, PublishStateEntry | None]:
         """Return whether one path should be written plus its current publish-state entry."""
         entry = cast(PublishStateEntry | None, self.service._dbus_publish_state.get(path))
-        last_value = None if entry is None else entry.get("value")
-        last_updated_at = None if entry is None else entry.get("updated_at")
-        should_write = force or entry is None
+        if force or entry is None:
+            return True, entry
+        last_value, last_updated_at = self._publish_state_fields(entry)
+        if interval_seconds is None:
+            return value != last_value, entry
+        return self._publish_interval_elapsed(last_updated_at, current, interval_seconds), entry
 
-        if not should_write:
-            if interval_seconds is None:
-                should_write = value != last_value
-            else:
-                if last_updated_at is None:
-                    should_write = True
-                else:
-                    should_write = (current - float(last_updated_at)) >= float(interval_seconds)
-        return should_write, entry
+    @staticmethod
+    def _publish_state_fields(entry: PublishStateEntry) -> tuple[Any, Any]:
+        """Return the stored publish-state value and timestamp."""
+        return entry.get("value"), entry.get("updated_at")
+
+    @staticmethod
+    def _publish_interval_elapsed(last_updated_at: Any, current: float, interval_seconds: float) -> bool:
+        """Return whether the publish interval is due for one path."""
+        if last_updated_at is None:
+            return True
+        return (current - float(last_updated_at)) >= float(interval_seconds)
 
     def _publish_group_failure(self, group_name: str, failed_paths: Sequence[str], current: float) -> None:
         """Record one DBus publish-group failure without raising into the caller."""
@@ -112,51 +128,57 @@ class DbusPublishController:
             else:
                 self.service._dbus_publish_state[path] = dict(entry)
 
-    def _publish_values_transactional(
+    def _service_value_snapshot(self, path: str) -> PublishServiceValueSnapshot:
+        """Return whether one DBus path existed before publishing plus its previous value."""
+        try:
+            return True, self.service._dbusservice[path]
+        except Exception:  # pylint: disable=broad-except
+            return False, None
+
+    def _stage_publish_values(
         self,
-        group_name: str,
         values: Mapping[str, Any],
-        now: float | None,
-        interval_seconds: float | None = None,
-        force: bool = False,
-    ) -> bool:
-        """Publish one DBus path group with shared best-effort rollback and failure reporting."""
-        self.ensure_state()
-        current = time.time() if now is None else float(now)
+        current: float,
+        interval_seconds: float | None,
+        force: bool,
+    ) -> tuple[list[tuple[str, Any]], dict[str, PublishStateEntry | None], dict[str, PublishServiceValueSnapshot]]:
+        """Collect the DBus values that should be written in one transactional batch."""
         staged_values: list[tuple[str, Any]] = []
         staged_entries: dict[str, PublishStateEntry | None] = {}
-        original_service_values: dict[str, tuple[bool, Any]] = {}
-
+        original_service_values: dict[str, PublishServiceValueSnapshot] = {}
         for path, value in values.items():
             should_write, entry = self._publish_decision(path, value, current, interval_seconds, force)
             if not should_write:
                 continue
             staged_values.append((path, value))
             staged_entries[path] = None if entry is None else dict(entry)
-            try:
-                original_service_values[path] = (True, self.service._dbusservice[path])
-            except Exception:  # pylint: disable=broad-except
-                original_service_values[path] = (False, None)
+            original_service_values[path] = self._service_value_snapshot(path)
+        return staged_values, staged_entries, original_service_values
 
-        if not staged_values:
-            return False
-
+    def _apply_staged_publish_values(
+        self,
+        staged_values: Sequence[tuple[str, Any]],
+        current: float,
+    ) -> tuple[bool, list[str], str | None]:
+        """Apply one staged publish batch and report any failed path."""
         changed = False
-        failed_paths: list[str] = []
         published_paths: list[str] = []
         for path, value in staged_values:
             try:
                 self.service._dbusservice[path] = value
             except Exception:  # pylint: disable=broad-except
-                failed_paths.append(path)
-                break
+                return changed, published_paths, path
             self.service._dbus_publish_state[path] = {"value": value, "updated_at": current}
             published_paths.append(path)
             changed = True
+        return changed, published_paths, None
 
-        if not failed_paths:
-            return changed
-
+    def _restore_service_values(
+        self,
+        published_paths: Sequence[str],
+        original_service_values: Mapping[str, PublishServiceValueSnapshot],
+    ) -> None:
+        """Best-effort restore of DBus path values after a failed transactional publish."""
         for path in published_paths:
             had_original, original_value = original_service_values.get(path, (False, None))
             if not had_original:
@@ -169,8 +191,35 @@ class DbusPublishController:
                 self.service._dbusservice[path] = original_value
             except Exception:  # pylint: disable=broad-except
                 pass
+
+    def _publish_values_transactional(
+        self,
+        group_name: str,
+        values: Mapping[str, Any],
+        now: float | None,
+        interval_seconds: float | None = None,
+        force: bool = False,
+    ) -> bool:
+        """Publish one DBus path group with shared best-effort rollback and failure reporting."""
+        self.ensure_state()
+        current = time.time() if now is None else float(now)
+        staged_values, staged_entries, original_service_values = self._stage_publish_values(
+            values,
+            current,
+            interval_seconds,
+            force,
+        )
+
+        if not staged_values:
+            return False
+
+        changed, published_paths, failed_path = self._apply_staged_publish_values(staged_values, current)
+        if failed_path is None:
+            return changed
+
+        self._restore_service_values(published_paths, original_service_values)
         self._restore_group_publish_state(staged_entries)
-        self._publish_group_failure(group_name, failed_paths, current)
+        self._publish_group_failure(group_name, [failed_path], current)
         return False
 
     def _publish_values(
@@ -337,42 +386,95 @@ class DbusPublishController:
         current = time.time() if now is None else float(now)
         return (current - updated_at) > max_age_seconds
 
-    def _derived_learned_set_current(self, now: float | None) -> float | None:
-        """Return one rounded display current derived from the stable learned charging power."""
+    def _learned_display_current_allowed(self, now: float | None) -> bool:
+        """Return whether learned charging power may currently drive the GUI current display."""
         if not self._display_uses_learned_set_current():
-            return None
+            return False
         if normalize_learning_state(getattr(self.service, "learned_charge_power_state", "unknown")) != "stable":
-            return None
-        if self._learned_charge_power_expired_for_display(now):
-            return None
+            return False
+        return not self._learned_charge_power_expired_for_display(now)
 
-        learned_power = finite_float_or_none(getattr(self.service, "learned_charge_power_watts", None))
-        voltage = finite_float_or_none(getattr(self.service, "learned_charge_power_voltage", None))
-        phase = normalize_learning_phase(
+    @staticmethod
+    def _validated_learned_display_scalars(
+        learned_power: float | None,
+        voltage: float | None,
+    ) -> tuple[float, float] | None:
+        """Return validated positive learned-power scalars for display-current derivation."""
+        if learned_power is None or learned_power <= 0 or voltage is None or voltage <= 0:
+            return None
+        return float(learned_power), float(voltage)
+
+    def _learned_display_phase(self) -> str | None:
+        """Return the normalized learned/display phase signature."""
+        return normalize_learning_phase(
             getattr(self.service, "learned_charge_power_phase", getattr(self.service, "phase", "L1"))
         )
-        if learned_power is None or learned_power <= 0 or voltage is None or voltage <= 0 or phase is None:
-            return None
 
-        phase_voltage = voltage
+    def _raw_learned_display_values(self) -> tuple[float, float, str] | None:
+        """Return raw learned display values before phase-voltage normalization."""
+        scalars = self._validated_learned_display_scalars(
+            finite_float_or_none(getattr(self.service, "learned_charge_power_watts", None)),
+            finite_float_or_none(getattr(self.service, "learned_charge_power_voltage", None)),
+        )
+        phase = self._learned_display_phase()
+        if scalars is None or phase is None:
+            return None
+        learned_power, voltage = scalars
+        return learned_power, voltage, phase
+
+    def _stable_learned_display_inputs(self, now: float | None) -> _LearnedDisplayCurrentInputs | None:
+        """Return the validated inputs used to derive SetCurrent from learned charging power."""
+        if not self._learned_display_current_allowed(now):
+            return None
+        raw_values = self._raw_learned_display_values()
+        if raw_values is None:
+            return None
+        learned_power, voltage, phase = raw_values
+        phase_voltage = self._phase_voltage_for_display_current(voltage, phase)
+        if phase_voltage is None:
+            return None
+        return _LearnedDisplayCurrentInputs(
+            power_w=learned_power,
+            phase_voltage_v=phase_voltage,
+            phase_count=3.0 if phase == "3P" else 1.0,
+        )
+
+    def _phase_voltage_for_display_current(self, voltage: float, phase: str) -> float | None:
+        """Return the per-phase voltage used for learned-current display derivation."""
+        phase_voltage = float(voltage)
         if phase == "3P" and str(getattr(self.service, "voltage_mode", "phase")).strip().lower() != "phase":
             phase_voltage = phase_voltage / math.sqrt(3.0)
-        phase_count = 3.0 if phase == "3P" else 1.0
-        if phase_voltage <= 0:
-            return None
+        return None if phase_voltage <= 0 else phase_voltage
 
-        display_current = learned_power / (phase_voltage * phase_count)
-        rounded_current = finite_float_or_none(round(display_current))
+    @staticmethod
+    def _rounded_display_current(current_amps: float) -> float | None:
+        """Return one positive rounded display current or None when unusable."""
+        rounded_current = finite_float_or_none(round(current_amps))
         if rounded_current is None or rounded_current <= 0:
             return None
+        return float(rounded_current)
 
+    def _clamped_display_current(self, current_amps: float) -> float:
+        """Clamp one display current to the configured min/max current range."""
+        normalized_current = float(current_amps)
         min_current = finite_float_or_none(getattr(self.service, "min_current", None))
         max_current = finite_float_or_none(getattr(self.service, "max_current", None))
         if min_current is not None:
-            rounded_current = max(rounded_current, min_current)
+            normalized_current = max(normalized_current, min_current)
         if max_current is not None and max_current > 0:
-            rounded_current = min(rounded_current, max_current)
-        return float(rounded_current)
+            normalized_current = min(normalized_current, max_current)
+        return float(normalized_current)
+
+    def _derived_learned_set_current(self, now: float | None) -> float | None:
+        """Return one rounded display current derived from the stable learned charging power."""
+        inputs = self._stable_learned_display_inputs(now)
+        if inputs is None:
+            return None
+        display_current = inputs.power_w / (inputs.phase_voltage_v * inputs.phase_count)
+        rounded_current = self._rounded_display_current(display_current)
+        if rounded_current is None:
+            return None
+        return self._clamped_display_current(rounded_current)
 
     def _display_set_current(self, now: float | None) -> float:
         """Return the GUI-facing SetCurrent value with learned-current display fallback."""

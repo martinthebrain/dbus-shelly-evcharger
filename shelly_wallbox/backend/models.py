@@ -28,20 +28,23 @@ def normalize_phase_selection_tuple(
     default: tuple[PhaseSelection, ...] = ("P1",),
 ) -> tuple[PhaseSelection, ...]:
     """Return one normalized supported-phase tuple from arbitrary runtime data."""
-    if isinstance(values, (tuple, list)):
-        normalized = cast(
-            tuple[PhaseSelection, ...],
-            tuple(normalize_phase_selection(value, "P1") for value in values),
-        )
-        return normalized or default
-    text = str(values).strip() if values is not None else ""
-    if not text:
-        return default
-    normalized = cast(
-        tuple[PhaseSelection, ...],
-        tuple(normalize_phase_selection(part, "P1") for part in text.split(",")),
-    )
+    normalized = _normalized_phase_selection_values(values)
     return normalized or default
+
+
+def _normalized_phase_selection_values(values: object) -> tuple[PhaseSelection, ...]:
+    """Return normalized phase selections from iterable or comma-separated runtime data."""
+    if isinstance(values, (tuple, list)):
+        return cast(tuple[PhaseSelection, ...], tuple(normalize_phase_selection(value, "P1") for value in values))
+    text = _phase_selection_text(values)
+    if not text:
+        return ()
+    return cast(tuple[PhaseSelection, ...], tuple(normalize_phase_selection(part, "P1") for part in text.split(",")))
+
+
+def _phase_selection_text(values: object) -> str:
+    """Return a trimmed phase-selection text payload."""
+    return str(values).strip() if values is not None else ""
 
 
 @dataclass(frozen=True)

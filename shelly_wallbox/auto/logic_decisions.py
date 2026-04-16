@@ -73,11 +73,20 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
     ) -> str | None:
         """Return the concrete stop reason while Auto is already running."""
         svc = self.service
-        _, stop_surplus_watts, _ = self._surplus_thresholds_for_soc(battery_soc)
         if getattr(svc, "auto_night_lock_stop", False) and not daytime_window_open and minimum_runtime_elapsed:
             return "night-lock"
         if not minimum_runtime_elapsed:
             return None
+        return self._policy_relay_on_stop_reason(avg_surplus_power, avg_grid_power, battery_soc)
+
+    def _policy_relay_on_stop_reason(
+        self,
+        avg_surplus_power: float,
+        avg_grid_power: float,
+        battery_soc: float,
+    ) -> str | None:
+        """Return the relay-on stop reason derived from policy thresholds."""
+        _, stop_surplus_watts, _ = self._surplus_thresholds_for_soc(battery_soc)
         policy = self._auto_policy()
         if battery_soc < policy.min_soc:
             return "auto-stop-soc"
@@ -129,21 +138,49 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
         cached_inputs: bool,
     ) -> None:
         """Set the most useful waiting reason while Auto is idle."""
+        self.set_health(
+            self._waiting_health_reason(
+                minimum_offtime_elapsed,
+                daytime_window_open,
+                avg_surplus_power,
+                avg_grid_power,
+                battery_soc,
+            ),
+            cached_inputs,
+            relay_intent=False,
+        )
+
+    def _waiting_health_reason(
+        self,
+        minimum_offtime_elapsed: bool,
+        daytime_window_open: bool,
+        avg_surplus_power: float,
+        avg_grid_power: float,
+        battery_soc: float,
+    ) -> str:
+        """Return the most useful waiting reason while Auto is idle."""
+        if not minimum_offtime_elapsed:
+            return "waiting-offtime"
+        if not daytime_window_open:
+            return "waiting-daytime"
+        return self._threshold_waiting_health_reason(avg_surplus_power, avg_grid_power, battery_soc)
+
+    def _threshold_waiting_health_reason(
+        self,
+        avg_surplus_power: float,
+        avg_grid_power: float,
+        battery_soc: float,
+    ) -> str:
+        """Return the waiting reason derived from start thresholds and SOC."""
         svc = self.service
         start_surplus_watts, _, _ = self._surplus_thresholds_for_soc(battery_soc)
-        if not minimum_offtime_elapsed:
-            reason = "waiting-offtime"
-        elif not daytime_window_open:
-            reason = "waiting-daytime"
-        elif avg_surplus_power < start_surplus_watts:
-            reason = "waiting-surplus"
-        elif avg_grid_power > svc.auto_start_max_grid_import_watts:
-            reason = "waiting-grid"
-        elif battery_soc < svc.auto_resume_soc:
-            reason = "waiting-soc"
-        else:
-            reason = "waiting"
-        self.set_health(reason, cached_inputs, relay_intent=False)
+        if avg_surplus_power < start_surplus_watts:
+            return "waiting-surplus"
+        if avg_grid_power > svc.auto_start_max_grid_import_watts:
+            return "waiting-grid"
+        if battery_soc < svc.auto_resume_soc:
+            return "waiting-soc"
+        return "waiting"
 
     def _handle_relay_off(
         self,
@@ -195,34 +232,127 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
     ) -> tuple[RelayDecisionState, float | None]:
         """Handle all early exits before rolling-average metrics are considered."""
         svc = self.service
+        early_decision = self._pre_average_gate_chain_result(
+            svc,
+            relay_on,
+            grid_power,
+            now,
+            cached_inputs,
+        )
+        if early_decision is not None:
+            return early_decision
+        battery_soc, early_decision = self._pre_average_battery_soc_result(
+            battery_soc,
+            relay_on,
+            now,
+            cached_inputs,
+        )
+        if early_decision is not None:
+            return early_decision
+        return self._pre_average_missing_input_result(
+            relay_on,
+            pv_power,
+            battery_soc,
+            grid_power,
+            now,
+            cached_inputs,
+        )
+
+    def _pre_average_gate_result(
+        self,
+        decision: RelayDecisionState,
+    ) -> tuple[RelayDecisionState, float | None] | None:
+        """Return one terminal pre-average result when a gate already resolved the relay state."""
+        if self._resolved_auto_decision(decision) is None:
+            return None
+        return decision, None
+
+    def _pre_average_gate_chain_result(
+        self,
+        svc: Any,
+        relay_on: bool,
+        grid_power: float | None,
+        now: float,
+        cached_inputs: bool,
+    ) -> tuple[RelayDecisionState, float | None] | None:
+        """Return the first terminal result from the pre-average mode/input gate chain."""
+        for decision_factory in (
+            lambda: self._pre_average_mode_decision(svc, relay_on, cached_inputs),
+            lambda: self._pre_average_input_gate_decision(relay_on, grid_power, now, cached_inputs),
+        ):
+            early_decision = self._pre_average_gate_result(decision_factory())
+            if early_decision is not None:
+                return early_decision
+        return None
+
+    def _pre_average_battery_soc_result(
+        self,
+        battery_soc: float | int | None,
+        relay_on: bool,
+        now: float,
+        cached_inputs: bool,
+    ) -> tuple[float | None, tuple[RelayDecisionState, float | None] | None]:
+        """Return the normalized battery SOC plus any terminal result caused by SOC availability."""
+        resolved_battery_soc, battery_soc_decision = self._resolved_battery_soc_decision(
+            battery_soc,
+            relay_on,
+            now,
+            cached_inputs,
+        )
+        return resolved_battery_soc, self._pre_average_gate_result(battery_soc_decision)
+
+    def _pre_average_missing_input_result(
+        self,
+        relay_on: bool,
+        pv_power: float | None,
+        battery_soc: float | None,
+        grid_power: float | None,
+        now: float,
+        cached_inputs: bool,
+    ) -> tuple[RelayDecisionState, float | None]:
+        """Return the final pre-average result once gate-chain and SOC checks already passed."""
+        if pv_power is not None and grid_power is not None:
+            return NO_RELAY_DECISION, battery_soc
+        assert battery_soc is not None
+        return RelayDecisionState.resolved(
+            self._handle_missing_inputs(relay_on, battery_soc, grid_power, now, cached_inputs)
+        ), None
+
+    def _pre_average_mode_decision(
+        self,
+        svc: Any,
+        relay_on: bool,
+        cached_inputs: bool,
+    ) -> RelayDecisionState:
+        """Return any early decision caused purely by mode/enable/cutover state."""
         if not self._mode_uses_auto_logic(svc.virtual_mode):
-            return RelayDecisionState.resolved(self._handle_non_auto_mode(relay_on)), None
-
+            return RelayDecisionState.resolved(self._handle_non_auto_mode(relay_on))
         if not bool(getattr(svc, "virtual_enable", 1)):
-            return RelayDecisionState.resolved(self._handle_disabled_mode(cached_inputs)), None
+            return RelayDecisionState.resolved(self._handle_disabled_mode(cached_inputs))
+        return self._decision_state(self._handle_cutover_pending(relay_on, cached_inputs))
 
-        decision = self._handle_cutover_pending(relay_on, cached_inputs)
-        if decision is not self._NO_DECISION:
-            return self._decision_state(decision), None
-
+    def _pre_average_input_gate_decision(
+        self,
+        relay_on: bool,
+        grid_power: float | None,
+        now: float,
+        cached_inputs: bool,
+    ) -> RelayDecisionState:
+        """Return any early decision caused by missing/stale grid input or recovery gates."""
         if not self._grid_recently_read(grid_power, now):
-            return RelayDecisionState.resolved(self._handle_grid_missing(relay_on, now, cached_inputs)), None
+            return RelayDecisionState.resolved(self._handle_grid_missing(relay_on, now, cached_inputs))
+        return self._decision_state(self._handle_grid_recovery_start_gate(relay_on, now, cached_inputs))
 
-        battery_soc, decision = self._resolve_battery_soc(battery_soc, relay_on, now, cached_inputs)
-        if decision is not self._NO_DECISION:
-            return self._decision_state(decision), None
-
-        decision = self._handle_grid_recovery_start_gate(relay_on, now, cached_inputs)
-        if decision is not self._NO_DECISION:
-            return self._decision_state(decision), None
-
-        if pv_power is None or grid_power is None:
-            assert battery_soc is not None
-            return RelayDecisionState.resolved(
-                self._handle_missing_inputs(relay_on, battery_soc, grid_power, now, cached_inputs)
-            ), None
-
-        return NO_RELAY_DECISION, battery_soc
+    def _resolved_battery_soc_decision(
+        self,
+        battery_soc: float | int | None,
+        relay_on: bool,
+        now: float,
+        cached_inputs: bool,
+    ) -> tuple[float | None, RelayDecisionState]:
+        """Return the normalized battery SOC plus any decision caused by SOC availability."""
+        resolved_battery_soc, decision = self._resolve_battery_soc(battery_soc, relay_on, now, cached_inputs)
+        return resolved_battery_soc, self._decision_state(decision)
 
     def _post_average_decision(
         self,
@@ -325,7 +455,7 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
         svc = self.service
         cached_inputs = bool(getattr(svc, "_auto_cached_inputs_used", False))
         now = self._learning_policy_now()
-        decision, battery_soc = self._pre_average_decision(
+        pre_average_decision, battery_soc = self._pre_average_decision(
             relay_on,
             pv_power,
             battery_soc,
@@ -333,14 +463,31 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
             now,
             cached_inputs,
         )
-        resolved = self._resolved_auto_decision(decision)
+        return self._auto_decision_after_pre_average(
+            relay_on,
+            pv_power,
+            battery_soc,
+            grid_power,
+            now,
+            cached_inputs,
+            pre_average_decision,
+        )
+
+    def _auto_decision_after_pre_average(
+        self,
+        relay_on: bool,
+        pv_power: float | None,
+        battery_soc: float | None,
+        grid_power: float | None,
+        now: float,
+        cached_inputs: bool,
+        pre_average_decision: RelayDecisionState,
+    ) -> bool:
+        """Complete Auto evaluation once all pre-average gates have already run."""
+        resolved = self._resolved_auto_decision(pre_average_decision)
         if resolved is not None:
             return resolved
-
-        assert pv_power is not None
-        assert grid_power is not None
-        assert battery_soc is not None
-
+        pv_power, battery_soc, grid_power = self._required_average_inputs(pv_power, battery_soc, grid_power)
         averages = self._averaged_auto_metrics(
             now,
             pv_power,
@@ -349,6 +496,35 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
             relay_on,
             cached_inputs,
         )
+        return self._decision_from_available_averages(
+            relay_on,
+            battery_soc,
+            now,
+            cached_inputs,
+            averages,
+        )
+
+    @staticmethod
+    def _required_average_inputs(
+        pv_power: float | None,
+        battery_soc: float | None,
+        grid_power: float | None,
+    ) -> tuple[float, float, float]:
+        """Return the validated inputs required once Auto moves past the pre-average gates."""
+        assert pv_power is not None
+        assert battery_soc is not None
+        assert grid_power is not None
+        return pv_power, battery_soc, grid_power
+
+    def _decision_from_available_averages(
+        self,
+        relay_on: bool,
+        battery_soc: float,
+        now: float,
+        cached_inputs: bool,
+        averages: tuple[float, float] | None,
+    ) -> bool:
+        """Return the final relay decision once average metrics may or may not be available."""
         if averages is None:
             return relay_on
         avg_surplus_power, avg_grid_power = averages

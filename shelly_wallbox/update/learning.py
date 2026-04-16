@@ -19,20 +19,41 @@ class _UpdateCycleLearningMixin(_UpdateCycleLearningSupportMixin):
         learned_power = self._stored_positive_learned_charge_power()
         if learned_power is None:
             return self._clear_learning_tracking()
-
         current_state = self._stored_learning_state()
         stored_phase_signature = self._stored_learning_phase_signature()
         current_phase_signature = self._current_learning_phase_signature()
         phase_reset = self._phase_change_reset(stored_phase_signature, current_phase_signature)
         if phase_reset is not None:
             return phase_reset
+        return self._refresh_learning_tracking_without_phase_reset(
+            now,
+            learned_power,
+            current_state,
+            stored_phase_signature,
+            current_phase_signature,
+        )
+
+    def _refresh_learning_tracking_without_phase_reset(
+        self,
+        now: float,
+        learned_power: float,
+        current_state: str,
+        stored_phase_signature: str | None,
+        current_phase_signature: str,
+    ) -> bool:
+        """Refresh learning state once the stored/current phase signatures already agree."""
         if self._is_learned_charge_power_stale(now):
             return self._apply_stale_learning(learned_power, stored_phase_signature)
         if self._should_restore_stable_learning(current_state):
             return self._restore_stable_learning(learned_power, stored_phase_signature, current_phase_signature)
         if current_state == "stale":
             return False
-        return self._preserve_learning_tracking(learned_power, current_state, stored_phase_signature, current_phase_signature)
+        return self._preserve_learning_tracking(
+            learned_power,
+            current_state,
+            stored_phase_signature,
+            current_phase_signature,
+        )
 
     def reconcile_learned_charge_power_signature(
         self,

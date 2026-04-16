@@ -10,6 +10,25 @@ from shelly_wallbox.core.split_mixins import ComposableControllerMixin as _Compo
 
 
 class _UpdateCycleLearningSupportMixin(_ComposableControllerMixin):
+    def _signature_checked_session_started_at(self) -> float | None:
+        """Return the stored session marker for the last signature check."""
+        checked_session_started_at = getattr(
+            self.service,
+            "learned_charge_power_signature_checked_session_started_at",
+            None,
+        )
+        return None if checked_session_started_at is None else float(checked_session_started_at)
+
+    def _signature_session_delay_elapsed(self, current_session_started_at: float, now: float) -> bool:
+        """Return whether the current session is old enough for signature checks."""
+        minimum_seconds = float(getattr(self.service, "auto_learn_charge_power_start_delay_seconds", 30.0))
+        return (float(now) - current_session_started_at) >= minimum_seconds
+
+    def _signature_session_already_checked(self, current_session_started_at: float) -> bool:
+        """Return whether the current charging session already ran one signature check."""
+        checked_session_started_at = self._signature_checked_session_started_at()
+        return checked_session_started_at is not None and checked_session_started_at == current_session_started_at
+
     def _stable_learned_power(self) -> float | None:
         """Return the current learned power only when the stored state is stable."""
         learned_power = getattr(self.service, "learned_charge_power_watts", None)
@@ -112,15 +131,9 @@ class _UpdateCycleLearningSupportMixin(_ComposableControllerMixin):
         if not relay_on or charging_started_at is None:
             return None
         current_session_started_at = float(charging_started_at)
-        minimum_seconds = float(getattr(self.service, "auto_learn_charge_power_start_delay_seconds", 30.0))
-        if (float(now) - current_session_started_at) < minimum_seconds:
+        if not self._signature_session_delay_elapsed(current_session_started_at, now):
             return None
-        checked_session_started_at = getattr(
-            self.service,
-            "learned_charge_power_signature_checked_session_started_at",
-            None,
-        )
-        if checked_session_started_at is not None and float(checked_session_started_at) == current_session_started_at:
+        if self._signature_session_already_checked(current_session_started_at):
             return None
         return current_session_started_at
 
@@ -157,31 +170,101 @@ class _UpdateCycleLearningSupportMixin(_ComposableControllerMixin):
         """Persist the outcome of one session signature reconciliation pass."""
         signature_snapshot = self._signature_preserving_snapshot()
         if not mismatch_reasons:
-            return self._apply_stable_learning(
+            return self._stable_signature_reconcile_result(
                 learned_power,
-                updated_at=getattr(self.service, "learned_charge_power_updated_at", None),
-                phase_signature=signature_snapshot["phase_signature"] or current_phase_signature,
-                voltage_signature=signature_snapshot["voltage_signature"],
-                signature_mismatch_sessions=0,
-                checked_session_started_at=current_session_started_at,
+                current_phase_signature,
+                current_session_started_at,
+                signature_snapshot,
             )
+        return self._mismatching_signature_reconcile_result(
+            learned_power,
+            power,
+            current_phase_signature,
+            current_voltage_signature,
+            current_session_started_at,
+            mismatch_reasons,
+            signature_snapshot,
+        )
 
-        mismatch_sessions = int(signature_snapshot["signature_mismatch_sessions"]) + 1
-        reason_label = ", ".join(mismatch_reasons)
+    def _stable_signature_reconcile_result(
+        self,
+        learned_power: float,
+        current_phase_signature: str | None,
+        current_session_started_at: float,
+        signature_snapshot: dict[str, Any],
+    ) -> bool:
+        """Persist one successful per-session signature check."""
+        return self._apply_stable_learning(
+            learned_power,
+            updated_at=getattr(self.service, "learned_charge_power_updated_at", None),
+            phase_signature=signature_snapshot["phase_signature"] or current_phase_signature,
+            voltage_signature=signature_snapshot["voltage_signature"],
+            signature_mismatch_sessions=0,
+            checked_session_started_at=current_session_started_at,
+        )
+
+    @staticmethod
+    def _signature_mismatch_count(signature_snapshot: dict[str, Any]) -> int:
+        """Return the incremented mismatch-session count for one signature snapshot."""
+        return int(signature_snapshot["signature_mismatch_sessions"]) + 1
+
+    @staticmethod
+    def _signature_reason_label(mismatch_reasons: list[str]) -> str:
+        """Return one human-readable mismatch reason list."""
+        return ", ".join(mismatch_reasons)
+
+    @staticmethod
+    def _rounded_signature_value(value: float | None) -> float | None:
+        """Return one rounded signature value when available."""
+        return None if value is None else round(float(value), 1)
+
+    def _log_terminal_signature_mismatch(
+        self,
+        mismatch_sessions: int,
+        reason_label: str,
+        learned_power: float,
+        power: float,
+        current_phase_signature: str | None,
+        current_voltage_signature: float | None,
+        signature_snapshot: dict[str, Any],
+    ) -> None:
+        """Log the final warning before one learned signature is discarded."""
+        logging.warning(
+            "Discarding learned charge power after %s mismatching sessions (%s): learned=%sW measured=%sW phase=%s/%s voltage=%s/%sV",
+            mismatch_sessions,
+            reason_label,
+            round(learned_power, 1),
+            round(float(power), 1),
+            signature_snapshot["phase_signature"],
+            current_phase_signature,
+            self._rounded_signature_value(signature_snapshot["voltage_signature"]),
+            self._rounded_signature_value(current_voltage_signature),
+        )
+
+    def _mismatching_signature_reconcile_result(
+        self,
+        learned_power: float,
+        power: float,
+        current_phase_signature: str | None,
+        current_voltage_signature: float | None,
+        current_session_started_at: float,
+        mismatch_reasons: list[str],
+        signature_snapshot: dict[str, Any],
+    ) -> bool:
+        """Persist one mismatching per-session signature check."""
+        mismatch_sessions = self._signature_mismatch_count(signature_snapshot)
+        reason_label = self._signature_reason_label(mismatch_reasons)
         if mismatch_sessions >= self.LEARNED_POWER_SIGNATURE_MISMATCH_SESSIONS:
-            logging.warning(
-                "Discarding learned charge power after %s mismatching sessions (%s): learned=%sW measured=%sW phase=%s/%s voltage=%s/%sV",
+            self._log_terminal_signature_mismatch(
                 mismatch_sessions,
                 reason_label,
-                round(learned_power, 1),
-                round(float(power), 1),
-                signature_snapshot["phase_signature"],
+                learned_power,
+                power,
                 current_phase_signature,
-                None if signature_snapshot["voltage_signature"] is None else round(float(signature_snapshot["voltage_signature"]), 1),
-                None if current_voltage_signature is None else round(float(current_voltage_signature), 1),
+                current_voltage_signature,
+                signature_snapshot,
             )
             return self._clear_learning_tracking()
-
         logging.info(
             "Observed learned charge-power signature mismatch session %s/%s (%s)",
             mismatch_sessions,
@@ -230,18 +313,40 @@ class _UpdateCycleLearningSupportMixin(_ComposableControllerMixin):
         current_state: str,
     ) -> tuple[float | None, bool | None]:
         """Return an eligible session start or the immediate learning decision."""
-        if not enabled or not pm_confirmed:
+        if self._learning_measurement_ignored(enabled, pm_confirmed):
             return None, False
-        if not relay_on or int(status) != 2:
-            if current_state != "learning":
-                return None, False
-            return None, self._clear_learning_tracking()
+        if not self._learning_measurement_active(relay_on, status):
+            return None, self._inactive_learning_session_decision(current_state)
         learning_window_status, charging_started_at = self._learning_window_status(now)
         if learning_window_status == "ready":
             return charging_started_at, None
+        return None, self._windowed_learning_session_decision(learning_window_status, current_state)
+
+    @staticmethod
+    def _learning_measurement_ignored(enabled: bool, pm_confirmed: bool) -> bool:
+        """Return whether learning should ignore the current measurement immediately."""
+        return not enabled or not pm_confirmed
+
+    @staticmethod
+    def _learning_measurement_active(relay_on: bool, status: int) -> bool:
+        """Return whether the current measurement represents active charging."""
+        return bool(relay_on) and int(status) == 2
+
+    def _inactive_learning_session_decision(self, current_state: str) -> bool:
+        """Return the learning result when charging is not actively running."""
+        if current_state != "learning":
+            return False
+        return self._clear_learning_tracking()
+
+    def _windowed_learning_session_decision(
+        self,
+        learning_window_status: str,
+        current_state: str,
+    ) -> bool:
+        """Return the learning result after inspecting the current learning window state."""
         if learning_window_status == "expired" and current_state == "learning":
-            return None, self._clear_learning_tracking()
-        return None, False
+            return self._clear_learning_tracking()
+        return False
 
     def _should_restart_learning(
         self,

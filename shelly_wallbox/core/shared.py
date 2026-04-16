@@ -12,6 +12,7 @@ AUTO_INPUT_SNAPSHOT_SCHEMA_VERSION = 1
 NumericScalar: TypeAlias = float | int
 DbusNumeric: TypeAlias = NumericScalar | Sequence[object] | object
 ServicePredicate: TypeAlias = Callable[[str], bool]
+_UNCOERCED = object()
 
 
 def _iter_numeric_container_items(value: Any) -> list[object] | None:
@@ -41,6 +42,30 @@ def _coerce_scalar_numeric(value: Any) -> NumericScalar | None:
     return None
 
 
+def _coerce_numeric_items(items: Iterable[object]) -> list[NumericScalar] | None:
+    """Return coerced numeric items or None when any sequence entry is unusable."""
+    numeric_items: list[NumericScalar] = []
+    for item in items:
+        numeric_item = _coerce_scalar_numeric(item)
+        if numeric_item is None:
+            return None
+        numeric_items.append(numeric_item)
+    return numeric_items
+
+
+def _coerce_numeric_container_value(value: Any) -> Any:
+    """Convert list-like DBus values when they contain exactly one usable number."""
+    items = _iter_numeric_container_items(value)
+    if items is None:
+        return _UNCOERCED
+    numeric_items = _coerce_numeric_items(items)
+    if numeric_items is None:
+        return value
+    if len(numeric_items) == 1:
+        return numeric_items[0]
+    return value
+
+
 def coerce_dbus_numeric(value: Any) -> Any:
     """Convert a raw DBus value to float or int where possible."""
     if isinstance(value, bool):
@@ -48,18 +73,21 @@ def coerce_dbus_numeric(value: Any) -> Any:
     scalar = _coerce_scalar_numeric(value)
     if scalar is not None:
         return scalar
-    items = _iter_numeric_container_items(value)
-    if items is None:
-        return value
-    numeric_items: list[NumericScalar] = []
+    container_value = _coerce_numeric_container_value(value)
+    return value if container_value is _UNCOERCED else container_value
+
+
+def _sum_numeric_items(items: Iterable[object]) -> float | None:
+    """Return the recursive sum of usable numeric items."""
+    total = 0.0
+    seen_numeric = False
     for item in items:
-        numeric_item = _coerce_scalar_numeric(item)
+        numeric_item = sum_dbus_numeric(item)
         if numeric_item is None:
-            return value
-        numeric_items.append(numeric_item)
-    if len(numeric_items) == 1:
-        return numeric_items[0]
-    return value
+            continue
+        total += float(numeric_item)
+        seen_numeric = True
+    return total if seen_numeric else None
 
 
 def sum_dbus_numeric(value: Any) -> float | None:
@@ -70,15 +98,7 @@ def sum_dbus_numeric(value: Any) -> float | None:
     items = _iter_numeric_container_items(value)
     if items is None:
         return None
-    total = 0.0
-    seen_numeric = False
-    for item in items:
-        numeric_item = sum_dbus_numeric(item)
-        if numeric_item is None:
-            continue
-        total += float(numeric_item)
-        seen_numeric = True
-    return total if seen_numeric else None
+    return _sum_numeric_items(items)
 
 
 def configured_grid_paths(*paths: str | None) -> list[str]:

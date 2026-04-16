@@ -13,7 +13,7 @@ REPO_DIR=$(realpath "$SCRIPT_DIR/../..")
 SERVICE_NAME="dbus-shelly-wallbox"
 SERVICE_DIR="$SCRIPT_DIR/service_shelly_wallbox"
 CONFIG_PATH="$SCRIPT_DIR/config.shelly_wallbox.ini"
-GENERIC_SHELLY_HELPER="$REPO_DIR/disable_generic_shelly_once.py"
+GENERIC_SHELLY_HELPER="$REPO_DIR/shelly_wallbox/ops/disable_generic_shelly_once.py"
 
 # Ensure the runit service directory structure exists even on fresh copies.
 mkdir -p "$SERVICE_DIR/log"

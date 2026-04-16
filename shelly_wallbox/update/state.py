@@ -34,16 +34,21 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
         """Return fresh native charger enabled-state readback when available."""
         if getattr(svc, "_charger_backend", None) is None:
             return None
-        state_at = finite_float_or_none(getattr(svc, "_last_charger_state_at", None))
-        if state_at is None:
-            return None
         raw_enabled = getattr(svc, "_last_charger_state_enabled", None)
         if raw_enabled is None:
             return None
-        current = float(now) if now is not None else time.time()
-        if abs(current - state_at) > cls._charger_state_max_age_seconds(svc):
+        if cls._stale_charger_enabled_readback(svc, now):
             return None
         return bool(raw_enabled)
+
+    @classmethod
+    def _stale_charger_enabled_readback(cls, svc: Any, now: float | None = None) -> bool:
+        """Return whether cached charger enabled readback is too old to trust."""
+        state_at = finite_float_or_none(getattr(svc, "_last_charger_state_at", None))
+        if state_at is None:
+            return True
+        current = float(now) if now is not None else time.time()
+        return abs(current - state_at) > cls._charger_state_max_age_seconds(svc)
 
     @classmethod
     def _effective_session_enabled_state(
@@ -93,16 +98,32 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
     def apply_startup_manual_target(self, pm_status: dict[str, Any], now: float) -> dict[str, Any]:
         """Synchronize the configured manual on/off state once after startup."""
         svc = self.service
-        if not hasattr(svc, "_startup_manual_target"):
-            svc._startup_manual_target = None
-        if svc._startup_manual_target is None or svc._mode_uses_auto_logic(svc.virtual_mode):
+        target_on = self._startup_manual_target(svc)
+        if target_on is None or svc._mode_uses_auto_logic(svc.virtual_mode):
             return pm_status
-
-        target_on = bool(svc._startup_manual_target)
         relay_on = bool(pm_status.get("output", False))
         if relay_on == target_on:
             svc._startup_manual_target = None
             return pm_status
+
+        return self._apply_startup_manual_target(pm_status, now, target_on)
+
+    @staticmethod
+    def _startup_manual_target(svc: Any) -> bool | None:
+        """Return the pending startup manual target, initializing the field when needed."""
+        if not hasattr(svc, "_startup_manual_target"):
+            svc._startup_manual_target = None
+        value = getattr(svc, "_startup_manual_target", None)
+        return None if value is None else bool(value)
+
+    def _apply_startup_manual_target(
+        self,
+        pm_status: dict[str, Any],
+        now: float,
+        target_on: bool,
+    ) -> dict[str, Any]:
+        """Apply the pending startup manual target or keep live PM status on failure."""
+        svc = self.service
 
         try:
             # Startup manual state is best-effort. If Shelly access is currently
@@ -123,7 +144,6 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
                 exc_info=error,
             )
             return pm_status
-
         svc._startup_manual_target = None
         return self._publish_startup_local_pm_status(pm_status, target_on, now)
 
@@ -147,20 +167,37 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
     ) -> tuple[int, float]:
         """Compute current session timing and energy values."""
         effective_enabled = cls._effective_session_enabled_state(svc, relay_on, now)
-        session_active = status == 2 or (effective_enabled and svc.charging_started_at is not None)
-        if session_active:
-            if svc.charging_started_at is None:
-                svc.charging_started_at = now
-                svc.energy_at_start = current_total_energy
-            charging_time = int(now - svc.charging_started_at)
-            session_energy = round(max(0.0, current_total_energy - svc.energy_at_start), 3)
-            return charging_time, session_energy
+        if cls._session_active(status, effective_enabled, svc.charging_started_at):
+            return cls._active_session_state(svc, current_total_energy, now)
         if not effective_enabled:
-            svc.charging_started_at = None
+            return cls._reset_session_state(svc, current_total_energy)
+        return 0, cls._session_energy(current_total_energy, svc.energy_at_start)
+
+    @staticmethod
+    def _session_active(status: int, effective_enabled: bool, charging_started_at: object) -> bool:
+        """Return whether the current status should keep the session active."""
+        return status == 2 or (effective_enabled and charging_started_at is not None)
+
+    @classmethod
+    def _active_session_state(cls, svc: Any, current_total_energy: float, now: float) -> tuple[int, float]:
+        """Return timing and energy values for an active charging session."""
+        if svc.charging_started_at is None:
+            svc.charging_started_at = now
             svc.energy_at_start = current_total_energy
-            return 0, 0.0
-        session_energy = round(max(0.0, current_total_energy - svc.energy_at_start), 3)
-        return 0, session_energy
+        charging_time = int(now - svc.charging_started_at)
+        return charging_time, cls._session_energy(current_total_energy, svc.energy_at_start)
+
+    @classmethod
+    def _reset_session_state(cls, svc: Any, current_total_energy: float) -> tuple[int, float]:
+        """Reset session timing and energy when charging is no longer enabled."""
+        svc.charging_started_at = None
+        svc.energy_at_start = current_total_energy
+        return 0, 0.0
+
+    @staticmethod
+    def _session_energy(current_total_energy: float, energy_at_start: float) -> float:
+        """Return normalized session energy delta."""
+        return round(max(0.0, current_total_energy - energy_at_start), 3)
 
     @classmethod
     def startstop_display_for_state(cls, svc: Any, relay_on: bool, now: float) -> int:

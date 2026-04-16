@@ -9,7 +9,7 @@ actions into wallbox-specific state changes and Shelly relay commands.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from shelly_wallbox.core.contracts import write_failure_is_reversible
 from shelly_wallbox.controllers.write_snapshot import (
@@ -31,6 +31,7 @@ class DbusWriteController:
     SNAPSHOT_DEQUE_ATTRS = SNAPSHOT_DEQUE_ATTRS
     SNAPSHOT_VALUE_ATTRS = SNAPSHOT_VALUE_ATTRS
     SNAPSHOT_MAPPING_ATTRS = SNAPSHOT_MAPPING_ATTRS
+    CURRENT_SETTING_PATHS = ("/SetCurrent", "/MaxCurrent", "/MinCurrent")
 
     def __init__(self, port: Any) -> None:
         self.port = port
@@ -210,6 +211,10 @@ class DbusWriteController:
 
     def _apply_manual_startstop_request(self, svc: Any, wanted_on: bool, current_time: float) -> None:
         """Apply direct relay control in Manual mode."""
+        self._apply_manual_enable_like_request(svc, wanted_on, current_time)
+
+    def _apply_manual_enable_like_request(self, svc: Any, wanted_on: bool, current_time: float) -> None:
+        """Apply one Manual direct-control request via charger or relay control."""
         if svc.charger_enable_available():
             svc.charger_set_enabled(wanted_on)
             self._mark_external_side_effect_started()
@@ -225,18 +230,7 @@ class DbusWriteController:
 
     def _apply_manual_enable_request(self, svc: Any, wanted_on: bool, current_time: float) -> None:
         """Apply direct enable/disable control in Manual mode."""
-        if svc.charger_enable_available():
-            svc.charger_set_enabled(wanted_on)
-            self._mark_external_side_effect_started()
-            svc.virtual_enable = 1 if wanted_on else 0
-            svc.virtual_startstop = 1 if wanted_on else 0
-            svc.manual_override_until = current_time + svc.auto_manual_override_seconds
-            return
-        self._queue_relay_command(svc, wanted_on, current_time)
-        svc.virtual_enable = 1 if wanted_on else 0
-        svc.virtual_startstop = 1 if wanted_on else 0
-        svc.manual_override_until = current_time + svc.auto_manual_override_seconds
-        self._publish_local_pm_status_best_effort(svc, wanted_on, current_time)
+        self._apply_manual_enable_like_request(svc, wanted_on, current_time)
 
     def _handle_mode_write(self, requested_mode: int) -> None:
         port = self.port
@@ -370,24 +364,35 @@ class DbusWriteController:
             port.state_summary(),
         )
 
+    def _handle_mode_value_write(self, value: Any) -> None:
+        """Normalize and dispatch one /Mode write value."""
+        self._handle_mode_write(int(value))
+
+    def _handle_startstop_value_write(self, value: Any) -> None:
+        """Normalize and dispatch one /StartStop write value."""
+        self._handle_startstop_write(bool(int(value)))
+
+    def _handle_enable_value_write(self, value: Any) -> None:
+        """Normalize and dispatch one /Enable write value."""
+        self._handle_enable_write(bool(int(value)))
+
+    def _direct_write_handlers(self) -> dict[str, Callable[[Any], None]]:
+        """Return dedicated write handlers for scalar DBus paths."""
+        return {
+            "/Mode": self._handle_mode_value_write,
+            "/AutoStart": self._handle_autostart_write,
+            "/StartStop": self._handle_startstop_value_write,
+            "/Enable": self._handle_enable_value_write,
+            "/PhaseSelection": self._handle_phase_selection_write,
+        }
+
     def _execute_write(self, path: str, value: Any) -> None:
         """Dispatch one writable DBus path to its dedicated handler."""
-        if path == "/Mode":
-            self._handle_mode_write(int(value))
+        handler = self._direct_write_handlers().get(path)
+        if handler is not None:
+            handler(value)
             return
-        if path == "/AutoStart":
-            self._handle_autostart_write(value)
-            return
-        if path == "/StartStop":
-            self._handle_startstop_write(bool(int(value)))
-            return
-        if path == "/Enable":
-            self._handle_enable_write(bool(int(value)))
-            return
-        if path == "/PhaseSelection":
-            self._handle_phase_selection_write(value)
-            return
-        if path in ("/SetCurrent", "/MaxCurrent", "/MinCurrent"):
+        if path in self.CURRENT_SETTING_PATHS:
             self._handle_current_setting_write(path, value)
 
     def handle_write(self, path: str, value: Any) -> bool:

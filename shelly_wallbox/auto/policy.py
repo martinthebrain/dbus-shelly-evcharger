@@ -105,6 +105,22 @@ class AutoLearnChargePowerPolicy:
     window_seconds: float = 180.0
     max_age_seconds: float = 21600.0
 
+    @staticmethod
+    def _clamp_non_negative(value: float, label: str) -> float:
+        """Clamp one learning setting to a non-negative value."""
+        if value >= 0:
+            return float(value)
+        logging.warning("%s %s invalid, clamping to 0", label, value)
+        return 0.0
+
+    @staticmethod
+    def _clamp_fraction(value: float, label: str, default: float) -> float:
+        """Clamp one fractional learning setting to the safe (0, 1] range."""
+        if 0 < value <= 1:
+            return float(value)
+        logging.warning("%s %s outside (0,1], clamping to %s", label, value, default)
+        return float(default)
+
     def clamp(self) -> None:
         """Clamp invalid learning settings to safe, conservative defaults."""
         if self.reference_power_watts <= 0:
@@ -113,36 +129,20 @@ class AutoLearnChargePowerPolicy:
                 self.reference_power_watts,
             )
             self.reference_power_watts = 1900.0
-        if self.min_watts < 0:
-            logging.warning(
-                "AutoLearnChargePowerMinWatts %s invalid, clamping to 0",
-                self.min_watts,
-            )
-            self.min_watts = 0.0
-        if not 0 < self.alpha <= 1:
-            logging.warning(
-                "AutoLearnChargePowerAlpha %s outside (0,1], clamping to 0.2",
-                self.alpha,
-            )
-            self.alpha = 0.2
-        if self.start_delay_seconds < 0:
-            logging.warning(
-                "AutoLearnChargePowerStartDelaySeconds %s invalid, clamping to 0",
-                self.start_delay_seconds,
-            )
-            self.start_delay_seconds = 0.0
-        if self.window_seconds < 0:
-            logging.warning(
-                "AutoLearnChargePowerWindowSeconds %s invalid, clamping to 0",
-                self.window_seconds,
-            )
-            self.window_seconds = 0.0
-        if self.max_age_seconds < 0:
-            logging.warning(
-                "AutoLearnChargePowerMaxAgeSeconds %s invalid, clamping to 0",
-                self.max_age_seconds,
-            )
-            self.max_age_seconds = 0.0
+        self.min_watts = self._clamp_non_negative(self.min_watts, "AutoLearnChargePowerMinWatts")
+        self.alpha = self._clamp_fraction(self.alpha, "AutoLearnChargePowerAlpha", 0.2)
+        self.start_delay_seconds = self._clamp_non_negative(
+            self.start_delay_seconds,
+            "AutoLearnChargePowerStartDelaySeconds",
+        )
+        self.window_seconds = self._clamp_non_negative(
+            self.window_seconds,
+            "AutoLearnChargePowerWindowSeconds",
+        )
+        self.max_age_seconds = self._clamp_non_negative(
+            self.max_age_seconds,
+            "AutoLearnChargePowerMaxAgeSeconds",
+        )
         self._warn_semantic_relationships()
 
     def _warn_semantic_relationships(self) -> None:
@@ -415,16 +415,18 @@ class AutoPolicy:
     ) -> tuple[AutoThresholdProfile, bool, str]:
         """Return the active threshold profile with SOC hysteresis."""
         soc_value = float(battery_soc)
-        active = was_high_soc_active
-        if active is None:
-            active = soc_value > self.high_soc_threshold
-        elif active and soc_value < self.high_soc_release_threshold:
-            active = False
-        elif not active and soc_value > self.high_soc_threshold:
-            active = True
+        active = self._resolved_high_soc_active(soc_value, was_high_soc_active)
         if active:
             return self.high_soc_profile, True, "high-soc"
         return self.normal_profile, False, "normal"
+
+    def _resolved_high_soc_active(self, soc_value: float, was_high_soc_active: bool | None) -> bool:
+        """Return whether the high-SOC profile should be active after hysteresis."""
+        if was_high_soc_active is None:
+            return soc_value > self.high_soc_threshold
+        if was_high_soc_active:
+            return soc_value >= self.high_soc_release_threshold
+        return soc_value > self.high_soc_threshold
 
 
 def validate_auto_policy(policy: AutoPolicy, svc: Any | None = None) -> AutoPolicy:

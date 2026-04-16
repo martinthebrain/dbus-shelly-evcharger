@@ -59,14 +59,25 @@ class _AutoInputHelperSubscriptionMixin:
 
     def _desired_pv_subscription_specs(self: Any) -> list[tuple[str, str, str]]:
         """Return the current AC/DC PV paths that should be monitored."""
-        try:
-            pv_services = [self.auto_pv_service] if self.auto_pv_service else self._resolve_auto_pv_services()
-        except Exception:  # pylint: disable=broad-except
-            pv_services = []
+        pv_services = self._resolved_pv_subscription_services()
         desired = [("pv", service_name, self.auto_pv_path) for service_name in pv_services]
-        if self.auto_use_dc_pv and self.auto_dc_pv_service and self.auto_dc_pv_path:
-            desired.append(("pv", self.auto_dc_pv_service, self.auto_dc_pv_path))
+        dc_spec = self._dc_pv_subscription_spec()
+        if dc_spec is not None:
+            desired.append(dc_spec)
         return desired
+
+    def _resolved_pv_subscription_services(self: Any) -> list[str]:
+        """Return AC PV services that should currently be monitored."""
+        try:
+            return [self.auto_pv_service] if self.auto_pv_service else self._resolve_auto_pv_services()
+        except Exception:  # pylint: disable=broad-except
+            return []
+
+    def _dc_pv_subscription_spec(self: Any) -> tuple[str, str, str] | None:
+        """Return the optional DC PV subscription tuple when configured."""
+        if self.auto_use_dc_pv and self.auto_dc_pv_service and self.auto_dc_pv_path:
+            return ("pv", self.auto_dc_pv_service, self.auto_dc_pv_path)
+        return None
 
     def _desired_battery_subscription_specs(self: Any) -> list[tuple[str, str, str]]:
         """Return the battery SOC path that should be monitored."""
@@ -138,16 +149,31 @@ class _AutoInputHelperSubscriptionMixin:
 
     def _on_name_owner_changed(self: Any, name: str, _old_owner: str, _new_owner: str) -> None:
         """Rebuild subscriptions when relevant DBus services appear or disappear."""
-        relevant = (
+        if self._is_relevant_name_owner_change(name):
+            self._schedule_refresh_subscriptions()
+
+    def _is_relevant_name_owner_change(self: Any, name: str) -> bool:
+        """Return whether a DBus owner-change affects monitored Auto-input services."""
+        return bool(
             name == self.auto_grid_service
             or name == self.auto_dc_pv_service
-            or (self.auto_pv_service and name == self.auto_pv_service)
+            or self._matches_explicit_service_name(name)
+            or self._matches_discovery_prefix(name)
+        )
+
+    def _matches_explicit_service_name(self: Any, name: str) -> bool:
+        """Return whether one owner change matches explicit AC PV or battery services."""
+        return bool(
+            (self.auto_pv_service and name == self.auto_pv_service)
             or (self.auto_battery_service and name == self.auto_battery_service)
-            or name.startswith(self.auto_pv_service_prefix)
+        )
+
+    def _matches_discovery_prefix(self: Any, name: str) -> bool:
+        """Return whether one owner change matches auto-discovered PV/battery prefixes."""
+        return bool(
+            name.startswith(self.auto_pv_service_prefix)
             or name.startswith(self.auto_battery_service_prefix)
         )
-        if relevant:
-            self._schedule_refresh_subscriptions()
 
     def _refresh_subscriptions_timer(self: Any) -> bool:
         """Slow periodic refresh in case a DBus topology change signal was missed."""

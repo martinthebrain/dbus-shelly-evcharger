@@ -67,6 +67,37 @@ def render_json_payload(template_text: str | None, context: dict[str, str]) -> o
     return cast(object, json.loads(rendered))
 
 
+def _request_kwargs(url: str, timeout_seconds: float, payload: object | None) -> dict[str, object]:
+    """Return requests kwargs for one template backend HTTP call."""
+    kwargs: dict[str, object] = {
+        "url": str(url),
+        "timeout": float(timeout_seconds),
+    }
+    if payload is not None:
+        kwargs["json"] = payload
+    return kwargs
+
+
+def _request_method_callable(session: Any, method: str) -> Any:
+    """Return the bound requests-session method for one normalized HTTP verb."""
+    normalized_method = str(method).strip().upper()
+    if normalized_method == "GET":
+        return session.get
+    if normalized_method == "POST":
+        return session.post
+    if normalized_method == "PUT":
+        return session.put
+    if normalized_method == "PATCH":
+        return session.patch
+    raise ValueError(f"Unsupported template backend HTTP method '{method}'")
+
+
+def _response_payload_dict(response: Any) -> dict[str, object]:
+    """Return a dict payload from one HTTP response, or an empty dict otherwise."""
+    response_payload = response.json()
+    return cast(dict[str, object], response_payload) if isinstance(response_payload, dict) else {}
+
+
 class TemplateHttpBackendBase:
     """Small shared HTTP client helper for template backends."""
 
@@ -86,27 +117,9 @@ class TemplateHttpBackendBase:
     ) -> dict[str, object]:
         """Perform one backend HTTP request and return a dict payload when available."""
         template_context = context or {}
-        kwargs: dict[str, object] = {
-            "url": str(Template(url).safe_substitute(template_context)),
-            "timeout": self.timeout_seconds,
-        }
+        rendered_url = str(Template(url).safe_substitute(template_context))
         payload = render_json_payload(json_template, template_context)
-        if payload is not None:
-            kwargs["json"] = payload
-
-        session = self._session
-        normalized_method = str(method).strip().upper()
-        if normalized_method == "GET":
-            response = session.get(**kwargs)
-        elif normalized_method == "POST":
-            response = session.post(**kwargs)
-        elif normalized_method == "PUT":
-            response = session.put(**kwargs)
-        elif normalized_method == "PATCH":
-            response = session.patch(**kwargs)
-        else:  # pragma: no cover - guarded by config normalization
-            raise ValueError(f"Unsupported template backend HTTP method '{method}'")
-
+        kwargs = _request_kwargs(rendered_url, self.timeout_seconds, payload)
+        response = _request_method_callable(self._session, method)(**kwargs)
         response.raise_for_status()
-        response_payload = response.json()
-        return cast(dict[str, object], response_payload) if isinstance(response_payload, dict) else {}
+        return _response_payload_dict(response)

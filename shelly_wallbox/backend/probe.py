@@ -54,10 +54,20 @@ def _json_ready(value: Any) -> Any:
     if is_dataclass(value):
         return asdict(cast(Any, value))
     if isinstance(value, dict):
-        return {str(key): _json_ready(item) for key, item in value.items()}
+        return _json_ready_mapping(value)
     if isinstance(value, (list, tuple)):
-        return [_json_ready(item) for item in value]
+        return _json_ready_sequence(value)
     return value
+
+
+def _json_ready_mapping(value: dict[Any, Any]) -> dict[str, Any]:
+    """Convert JSON object payloads recursively to stable string-keyed dicts."""
+    return {str(key): _json_ready(item) for key, item in value.items()}
+
+
+def _json_ready_sequence(value: list[Any] | tuple[Any, ...]) -> list[Any]:
+    """Convert JSON arrays recursively to plain Python lists."""
+    return [_json_ready(item) for item in value]
 
 
 def validate_backend_config(path: str) -> dict[str, object]:

@@ -85,18 +85,12 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
         if not self._source_retry_ready("battery", now):
             return None
         try:
-            service_name = svc._resolve_auto_battery_service()
-            try:
-                value = svc._get_dbus_value(service_name, svc.auto_battery_soc_path)
-            except Exception:
-                svc._invalidate_auto_battery_service()
-                service_name = svc._resolve_auto_battery_service()
-                value = svc._get_dbus_value(service_name, svc.auto_battery_soc_path)
-            value = self._coerce_dbus_value(value)
-            if not isinstance(value, (int, float)):
+            value = self._read_battery_soc_value()
+            numeric_value = self._battery_soc_numeric(value)
+            if numeric_value is None:
                 raise TypeError(f"Battery SOC is not numeric: {type(value).__name__}")
             self._mark_source_recovery("battery", "Battery SOC readings recovered")
-            return float(value)
+            return numeric_value
         except Exception as error:  # pylint: disable=broad-except
             return cast(float | None, self._handle_source_failure(
                 "battery",
@@ -108,6 +102,24 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
                 svc.auto_battery_soc_path,
                 error,
             ))
+
+    def _read_battery_soc_value(self) -> object:
+        """Read one raw battery SOC value, retrying once after invalidating cached service discovery."""
+        svc = self.service
+        service_name = svc._resolve_auto_battery_service()
+        try:
+            return svc._get_dbus_value(service_name, svc.auto_battery_soc_path)
+        except Exception:
+            svc._invalidate_auto_battery_service()
+            service_name = svc._resolve_auto_battery_service()
+            return svc._get_dbus_value(service_name, svc.auto_battery_soc_path)
+
+    def _battery_soc_numeric(self, value: object) -> float | None:
+        """Return one numeric battery SOC value after DBus coercion."""
+        coerced_value = self._coerce_dbus_value(value)
+        if not isinstance(coerced_value, (int, float)):
+            return None
+        return float(coerced_value)
 
     def get_grid_power(self) -> float | None:
         """Read and sum grid power from per-phase paths."""

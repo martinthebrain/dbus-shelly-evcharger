@@ -230,26 +230,45 @@ class AutoInputHelper(
         write_text_atomically(self.snapshot_path, serialized)
         self._last_payload = serialized
 
-    def run(self) -> None:
-        """Main helper loop using DBus subscriptions plus a small RAM heartbeat."""
+    @staticmethod
+    def _require_dbus_glib_mainloop() -> Any:
+        """Return the DBus GLib mainloop module or fail with a clear helper error."""
         if dbus_glib_mainloop is None:
             raise RuntimeError("dbus.mainloop.glib is required for the auto input helper")
-        dbus_glib_mainloop.DBusGMainLoop(set_as_default=True)
-        for signum in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None), getattr(signal, "SIGHUP", None)):
-            if signum is None:
-                continue
+        return dbus_glib_mainloop
+
+    @staticmethod
+    def _signal_values() -> tuple[int, ...]:
+        """Return supported process signals for clean helper shutdown."""
+        return tuple(
+            signum
+            for signum in (
+                getattr(signal, "SIGTERM", None),
+                getattr(signal, "SIGINT", None),
+                getattr(signal, "SIGHUP", None),
+            )
+            if signum is not None
+        )
+
+    def _install_signal_handlers(self) -> None:
+        """Install signal handlers for graceful helper shutdown."""
+        for signum in self._signal_values():
             try:
                 signal.signal(signum, self._handle_signal)
             except Exception:  # pylint: disable=broad-except
                 pass
 
+    def _log_helper_start(self) -> None:
+        """Log one startup banner for the helper process."""
         logging.info(
             "Start auto input helper pid=%s parent=%s snapshot=%s",
             os.getpid(),
             self.parent_pid,
             self.snapshot_path,
         )
-        self._main_loop = GLib.MainLoop()
+
+    def _register_name_owner_subscription(self) -> None:
+        """Subscribe to DBus name-owner changes for dynamic service tracking."""
         self._get_system_bus().add_signal_receiver(
             self._on_name_owner_changed,
             signal_name="NameOwnerChanged",
@@ -257,11 +276,28 @@ class AutoInputHelper(
             bus_name="org.freedesktop.DBus",
             path="/org/freedesktop/DBus",
         )
-        self._refresh_subscriptions()
+
+    def _install_main_loop_timers(self) -> None:
+        """Install the periodic timers used by the helper main loop."""
         GLib.timeout_add(max(500, int(self.poll_interval_seconds * 1000)), self._heartbeat_snapshot)
         GLib.timeout_add(max(5000, int(self.validation_poll_seconds * 1000)), self._validation_poll)
         GLib.timeout_add(max(1000, int(self.subscription_refresh_seconds * 1000)), self._refresh_subscriptions_timer)
         GLib.timeout_add(1000, self._parent_watchdog)
+
+    def _build_main_loop(self) -> Any:
+        """Create and remember the GLib main loop used by the helper."""
+        self._main_loop = GLib.MainLoop()
+        return self._main_loop
+
+    def run(self) -> None:
+        """Main helper loop using DBus subscriptions plus a small RAM heartbeat."""
+        self._require_dbus_glib_mainloop().DBusGMainLoop(set_as_default=True)
+        self._install_signal_handlers()
+        self._log_helper_start()
+        self._build_main_loop()
+        self._register_name_owner_subscription()
+        self._refresh_subscriptions()
+        self._install_main_loop_timers()
         assert self._main_loop is not None
         self._main_loop.run()
         logging.info("Auto input helper stopping pid=%s", os.getpid())

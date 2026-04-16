@@ -92,26 +92,12 @@ class _DbusInputPvMixin(_ComposableControllerMixin):
     def list_dbus_services(self) -> list[str]:
         """List DBus services with exponential backoff for unstable buses."""
         svc = self.service
-        if not hasattr(svc, "_dbus_list_backoff_until"):
-            svc._dbus_list_backoff_until = 0.0
-        if not hasattr(svc, "_dbus_list_failures"):
-            svc._dbus_list_failures = 0
-        if not hasattr(svc, "auto_dbus_backoff_base_seconds"):
-            svc.auto_dbus_backoff_base_seconds = 5.0
-        if not hasattr(svc, "auto_dbus_backoff_max_seconds"):
-            svc.auto_dbus_backoff_max_seconds = 60.0
-        if not hasattr(svc, "dbus_method_timeout_seconds"):
-            svc.dbus_method_timeout_seconds = 1.0
-
+        self._ensure_dbus_list_state()
         now = time.time()
         if now < svc._dbus_list_backoff_until:
             raise RuntimeError("DBus list backoff active")
-        bus = svc._get_system_bus()
-        dbus_obj = bus.get_object("org.freedesktop.DBus", "/org/freedesktop/DBus")
-        dbus_module = cast(Any, dbus)
-        dbus_if = dbus_module.Interface(dbus_obj, "org.freedesktop.DBus")
         try:
-            names = [str(name) for name in dbus_if.ListNames(timeout=svc.dbus_method_timeout_seconds)]
+            names = self._list_dbus_names()
             svc._dbus_list_failures = 0
             svc._dbus_list_backoff_until = 0.0
             self._mark_dbus_success(svc)
@@ -120,12 +106,41 @@ class _DbusInputPvMixin(_ComposableControllerMixin):
             svc._reset_system_bus()
             svc._dbus_list_failures += 1
             svc._mark_failure("dbus")
-            delay = min(
-                svc.auto_dbus_backoff_max_seconds,
-                svc.auto_dbus_backoff_base_seconds * (2 ** (svc._dbus_list_failures - 1)),
-            )
+            delay = self._dbus_list_backoff_delay()
             svc._dbus_list_backoff_until = now + delay
             raise
+
+    def _ensure_dbus_list_state(self) -> None:
+        """Populate DBus-list retry/backoff defaults used by list_dbus_services()."""
+        svc = self.service
+        self._ensure_service_attr(svc, "_dbus_list_backoff_until", 0.0)
+        self._ensure_service_attr(svc, "_dbus_list_failures", 0)
+        self._ensure_service_attr(svc, "auto_dbus_backoff_base_seconds", 5.0)
+        self._ensure_service_attr(svc, "auto_dbus_backoff_max_seconds", 60.0)
+        self._ensure_service_attr(svc, "dbus_method_timeout_seconds", 1.0)
+
+    @staticmethod
+    def _ensure_service_attr(svc: Any, attr_name: str, default: object) -> None:
+        """Populate one service attribute when it is missing."""
+        if not hasattr(svc, attr_name):
+            setattr(svc, attr_name, default)
+
+    def _list_dbus_names(self) -> list[str]:
+        """Return the raw DBus name list through the freedesktop DBus interface."""
+        svc = self.service
+        bus = svc._get_system_bus()
+        dbus_obj = bus.get_object("org.freedesktop.DBus", "/org/freedesktop/DBus")
+        dbus_module = cast(Any, dbus)
+        dbus_if = dbus_module.Interface(dbus_obj, "org.freedesktop.DBus")
+        return [str(name) for name in dbus_if.ListNames(timeout=svc.dbus_method_timeout_seconds)]
+
+    def _dbus_list_backoff_delay(self) -> float:
+        """Return the current exponential-backoff delay for DBus name listing."""
+        svc = self.service
+        return float(min(
+            svc.auto_dbus_backoff_max_seconds,
+            svc.auto_dbus_backoff_base_seconds * (2 ** (svc._dbus_list_failures - 1)),
+        ))
 
     def invalidate_auto_pv_services(self) -> None:
         """Clear cached PV service discovery so the next read performs a fresh scan."""
@@ -306,18 +321,8 @@ class _DbusInputPvMixin(_ComposableControllerMixin):
         if not self._source_retry_ready("pv", now):
             return None
         service_names, no_auto_ac_services_found = self._resolve_pv_service_names()
-        total, seen_value, saw_ac_service_failure = self._read_pv_service_values(service_names)
-
-        if self._should_rescan_pv_services(svc, service_names, seen_value, saw_ac_service_failure):
-            rescanned_total, rescanned_seen_value = self._read_rescanned_pv_services()
-            total += rescanned_total
-            seen_value = seen_value or rescanned_seen_value
-
-        dc_value, dc_read_failed = self._read_dc_pv_value()
-        numeric_dc_value = self._numeric_sum(dc_value)
-        if numeric_dc_value is not None:
-            total += numeric_dc_value
-            seen_value = True
+        total, seen_value = self._ac_pv_total_with_optional_rescan(service_names)
+        total, dc_value, dc_read_failed, seen_value = self._dc_pv_total(total, seen_value)
 
         if seen_value:
             svc._last_pv_missing_warning = None
@@ -330,3 +335,20 @@ class _DbusInputPvMixin(_ComposableControllerMixin):
             dc_read_failed,
             now,
         )
+
+    def _ac_pv_total_with_optional_rescan(self, service_names: list[str]) -> tuple[float, bool]:
+        """Return AC PV total, retrying once with a refreshed service scan when useful."""
+        svc = self.service
+        total, seen_value, saw_ac_service_failure = self._read_pv_service_values(service_names)
+        if not self._should_rescan_pv_services(svc, service_names, seen_value, saw_ac_service_failure):
+            return total, seen_value
+        rescanned_total, rescanned_seen_value = self._read_rescanned_pv_services()
+        return total + rescanned_total, bool(seen_value or rescanned_seen_value)
+
+    def _dc_pv_total(self, total: float, seen_value: bool) -> tuple[float, Any, bool, bool]:
+        """Return updated totals plus raw DC payload and failure flags."""
+        dc_value, dc_read_failed = self._read_dc_pv_value()
+        numeric_dc_value = self._numeric_sum(dc_value)
+        if numeric_dc_value is None:
+            return total, dc_value, dc_read_failed, seen_value
+        return total + numeric_dc_value, dc_value, dc_read_failed, True

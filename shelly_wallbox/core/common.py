@@ -133,6 +133,28 @@ def _auto_state_code(state: Any) -> int:
     return AUTO_STATE_CODES.get(_normalize_auto_state(state), 99)
 
 
+def _base_auto_reason(reason: Any) -> str:
+    """Return one normalized health reason without cached-input suffix."""
+    return str(reason).replace("-cached", "") if reason is not None else "init"
+
+
+def _normalized_learning_hint(learned_charge_power_state: Any) -> str:
+    """Return the normalized learned-power hint used for broad Auto states."""
+    return str(learned_charge_power_state).strip().lower() if learned_charge_power_state is not None else "unknown"
+
+
+def _relay_on_auto_state(learned_state: str) -> str:
+    """Return the broad Auto state when charging hardware is already on."""
+    return "learning" if learned_state == "learning" else "charging"
+
+
+def _reason_resolved_auto_state(state_from_reason: str, relay_on: bool, learned_state: str) -> str:
+    """Return the final broad Auto state once one health reason already mapped to a broad state."""
+    if state_from_reason == "charging":
+        return "learning" if relay_on and learned_state == "learning" else "charging"
+    return state_from_reason
+
+
 def _derive_auto_state(
     reason: Any,
     *,
@@ -140,30 +162,31 @@ def _derive_auto_state(
     learned_charge_power_state: Any = None,
 ) -> str:
     """Collapse detailed health reasons into one explicit broad Auto state."""
-    base_reason = str(reason).replace("-cached", "") if reason is not None else "init"
-    learned_state = str(learned_charge_power_state).strip().lower() if learned_charge_power_state is not None else "unknown"
+    base_reason = _base_auto_reason(reason)
+    learned_state = _normalized_learning_hint(learned_charge_power_state)
     state_from_reason = _reason_auto_state(base_reason)
     if state_from_reason is not None:
-        if state_from_reason == "charging" and relay_on and learned_state == "learning":
-            return "learning"
-        return state_from_reason
+        return _reason_resolved_auto_state(state_from_reason, relay_on, learned_state)
     if relay_on:
-        return "learning" if learned_state == "learning" else "charging"
+        return _relay_on_auto_state(learned_state)
     return "idle"
+
+
+AUTO_REASON_STATE_GROUPS: tuple[tuple[set[str], str], ...] = (
+    (RECOVERY_AUTO_REASONS, "recovery"),
+    (BLOCKED_AUTO_REASONS, "blocked"),
+    (CHARGING_AUTO_REASONS, "charging"),
+    (WAITING_AUTO_REASONS, "waiting"),
+)
 
 
 def _reason_auto_state(base_reason: str) -> str | None:
     """Return the broad Auto state implied directly by one health reason."""
-    if base_reason in RECOVERY_AUTO_REASONS:
-        return "recovery"
-    if base_reason in BLOCKED_AUTO_REASONS:
-        return "blocked"
-    if base_reason in CHARGING_AUTO_REASONS:
-        return "charging"
-    if base_reason in WAITING_AUTO_REASONS:
-        return "waiting"
     if base_reason == "init":
         return "idle"
+    for reasons, state in AUTO_REASON_STATE_GROUPS:
+        if base_reason in reasons:
+            return state
     return None
 
 
@@ -175,45 +198,90 @@ def _age_seconds(timestamp: float | int | None, now: float | int | None = None) 
     return max(0, int(current - float(timestamp)))
 
 
+def _positive_service_float(svc: Any, attr_name: str) -> float | None:
+    """Return one positive float attribute from a service-like object."""
+    raw_value = getattr(svc, attr_name, None)
+    if raw_value is None:
+        return None
+    try:
+        numeric_value = float(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return numeric_value if numeric_value > 0.0 else None
+
+
 def _confirmed_relay_state_max_age_seconds(svc: Any) -> float:
     """Return how old a confirmed relay sample may be for broad state hints."""
     fallback_candidates = [5.0]
-    worker_poll_seconds = getattr(svc, "_worker_poll_interval_seconds", None)
+    worker_poll_seconds = _positive_service_float(svc, "_worker_poll_interval_seconds")
     if worker_poll_seconds is not None:
-        try:
-            worker_poll_seconds = float(worker_poll_seconds)
-        except (TypeError, ValueError):
-            worker_poll_seconds = None
-        if worker_poll_seconds is not None and worker_poll_seconds > 0:
-            fallback_candidates.append(worker_poll_seconds * 2.0)
-    relay_sync_timeout_seconds = getattr(svc, "relay_sync_timeout_seconds", None)
+        fallback_candidates.append(worker_poll_seconds * 2.0)
+    relay_sync_timeout_seconds = _positive_service_float(svc, "relay_sync_timeout_seconds")
     if relay_sync_timeout_seconds is not None:
-        try:
-            relay_sync_timeout_seconds = float(relay_sync_timeout_seconds)
-        except (TypeError, ValueError):
-            relay_sync_timeout_seconds = None
-        if relay_sync_timeout_seconds is not None and relay_sync_timeout_seconds > 0:
-            fallback_candidates.append(relay_sync_timeout_seconds)
+        fallback_candidates.append(relay_sync_timeout_seconds)
     return max(1.0, min(fallback_candidates))
 
 
-def _fresh_confirmed_relay_output(svc: Any, now: float | int | None = None) -> bool | None:
-    """Return a fresh confirmed relay output, or ``None`` when the state is unknown."""
-    current = time.time() if now is None else float(now)
-    max_age_seconds = _confirmed_relay_state_max_age_seconds(svc)
+def _confirmed_relay_sample(svc: Any) -> tuple[dict[str, Any] | None, Any]:
+    """Return the freshest confirmed relay sample candidate from runtime state."""
     pm_status = getattr(svc, "_last_confirmed_pm_status", None)
     captured_at = getattr(svc, "_last_confirmed_pm_status_at", None)
     if pm_status is None and bool(getattr(svc, "_last_pm_status_confirmed", False)):
         pm_status = getattr(svc, "_last_pm_status", None)
         captured_at = getattr(svc, "_last_pm_status_at", None)
-    if not (isinstance(pm_status, dict) and "output" in pm_status and captured_at is not None):
-        return None
+    if not isinstance(pm_status, dict):
+        return None, None
+    return cast(dict[str, Any], pm_status), captured_at
+
+
+def _confirmed_relay_sample_valid(
+    pm_status: dict[str, Any] | None,
+    captured_at: Any,
+) -> bool:
+    """Return whether one confirmed relay sample contains the fields needed for freshness checks."""
+    return isinstance(pm_status, dict) and "output" in pm_status and captured_at is not None
+
+
+def _confirmed_relay_sample_fresh(
+    captured_at: float,
+    current: float,
+    max_age_seconds: float,
+) -> bool:
+    """Return whether one confirmed relay sample lies inside the accepted age window."""
     age_seconds = current - float(captured_at)
-    if age_seconds < -1.0:
+    return -1.0 <= age_seconds <= max_age_seconds
+
+
+def _confirmed_relay_output_value(pm_status: dict[str, Any]) -> bool:
+    """Return the normalized relay output flag from one confirmed PM snapshot."""
+    return bool(pm_status.get("output"))
+
+
+def _fresh_confirmed_relay_sample(
+    svc: Any,
+    current: float,
+) -> tuple[dict[str, Any], float] | None:
+    """Return one fresh confirmed relay sample when the state is currently trustworthy."""
+    max_age_seconds = _confirmed_relay_state_max_age_seconds(svc)
+    pm_status, captured_at = _confirmed_relay_sample(svc)
+    if not _confirmed_relay_sample_valid(pm_status, captured_at):
         return None
-    if age_seconds > max_age_seconds:
+    assert pm_status is not None
+    assert captured_at is not None
+    resolved_captured_at = float(captured_at)
+    if not _confirmed_relay_sample_fresh(resolved_captured_at, current, max_age_seconds):
         return None
-    return bool(cast(dict[str, Any], pm_status).get("output"))
+    return pm_status, resolved_captured_at
+
+
+def _fresh_confirmed_relay_output(svc: Any, now: float | int | None = None) -> bool | None:
+    """Return a fresh confirmed relay output, or ``None`` when the state is unknown."""
+    current = time.time() if now is None else float(now)
+    sample = _fresh_confirmed_relay_sample(svc, current)
+    if sample is None:
+        return None
+    pm_status, _captured_at = sample
+    return _confirmed_relay_output_value(pm_status)
 
 
 def read_version(file_name: str) -> str:
@@ -299,15 +367,16 @@ def parse_hhmm(value: Any, fallback: TimeWindow) -> TimeWindow:
     return fallback
 
 
+def _month_in_range(month: int, start_month: int, end_month: int) -> bool:
+    """Return whether one month lies inside one possibly wrapping month range."""
+    if start_month <= end_month:
+        return start_month <= month <= end_month
+    return month >= start_month or month <= end_month
+
+
 def month_in_ranges(month: int, ranges: Iterable[MonthRange]) -> bool:
     """Check whether a month is contained in one or more (start, end) ranges."""
-    for start_month, end_month in ranges:
-        if start_month <= end_month:
-            if start_month <= month <= end_month:
-                return True
-        elif month >= start_month or month <= end_month:
-            return True
-    return False
+    return any(_month_in_range(month, start_month, end_month) for start_month, end_month in ranges)
 
 
 def month_window(

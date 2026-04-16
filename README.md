@@ -331,7 +331,7 @@ flat anchors:
 - `shelly_wallbox/update/`: package slice for learned-power, relay, and session update helpers
 - `shelly_wallbox/backend/shelly_io.py`: Shelly/network I/O seam isolated from the main service loop
 - `shelly_wallbox_auto_input_helper.py`: helper-process entry anchor; its internals now live under `shelly_wallbox/inputs/helper/`
-- `disable_generic_shelly_once.py`: standalone one-shot helper for installations that also run a generic `dbus-shelly` service
+- `shelly_wallbox/ops/disable_generic_shelly_once.py`: standalone one-shot helper for installations that also run a generic `dbus-shelly` service
 - `deploy/venus/`: Venus OS deployment material, including config template, service directory, and install/boot helpers
 - `scripts/dev/`: local verification scripts
 - `scripts/ops/`: operational helpers

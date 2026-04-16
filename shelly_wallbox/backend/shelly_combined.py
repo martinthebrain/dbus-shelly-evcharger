@@ -24,32 +24,35 @@ class ShellyCombinedBackend:
         return "P1_P2_P3" if phase_name == "3P" else "P1"
 
     @staticmethod
-    def _phase_powers(power_w: float, phase: object) -> tuple[float, float, float]:
-        """Return per-line powers for the configured display wiring."""
-        phase_name = str(phase).strip().upper() if phase is not None else "L1"
+    def _phase_name(phase: object) -> str:
+        """Return the normalized legacy phase label used for display mapping."""
+        return str(phase).strip().upper() if phase is not None else "L1"
+
+    @classmethod
+    def _distributed_phase_value(cls, total_value: float, phase: object) -> tuple[float, float, float]:
+        """Distribute one total legacy value across the configured display phases."""
+        phase_name = cls._phase_name(phase)
+        value = float(total_value)
         if phase_name == "3P":
-            per_phase = float(power_w) / 3.0
+            per_phase = value / 3.0
             return per_phase, per_phase, per_phase
         if phase_name == "L2":
-            return 0.0, float(power_w), 0.0
+            return 0.0, value, 0.0
         if phase_name == "L3":
-            return 0.0, 0.0, float(power_w)
-        return float(power_w), 0.0, 0.0
+            return 0.0, 0.0, value
+        return value, 0.0, 0.0
 
-    @staticmethod
-    def _phase_currents(current_a: float | None, phase: object) -> tuple[float, float, float] | None:
+    @classmethod
+    def _phase_powers(cls, power_w: float, phase: object) -> tuple[float, float, float]:
+        """Return per-line powers for the configured display wiring."""
+        return cls._distributed_phase_value(power_w, phase)
+
+    @classmethod
+    def _phase_currents(cls, current_a: float | None, phase: object) -> tuple[float, float, float] | None:
         """Return per-line currents for the configured display wiring."""
         if current_a is None:
             return None
-        phase_name = str(phase).strip().upper() if phase is not None else "L1"
-        if phase_name == "3P":
-            per_phase = float(current_a) / 3.0
-            return per_phase, per_phase, per_phase
-        if phase_name == "L2":
-            return 0.0, float(current_a), 0.0
-        if phase_name == "L3":
-            return 0.0, 0.0, float(current_a)
-        return float(current_a), 0.0, 0.0
+        return cls._distributed_phase_value(current_a, phase)
 
     def _pm_status(self) -> ShellyPmStatus:
         """Return the current Shelly PM status from the service wrapper."""

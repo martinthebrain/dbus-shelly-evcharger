@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from .shelly_support import (
     phase_currents_for_selection,
@@ -41,19 +42,127 @@ class TemplateMeterSettings:
     phase_currents_path: str | None
 
 
+@dataclass(frozen=True)
+class _TemplateMeterScalarValues:
+    """Scalar meter values extracted from one template-meter response."""
+
+    power_w: float
+    voltage_v: float | None
+    current_a: float | None
+    energy_kwh: float
+
+
 def _phase_vector(value: object) -> tuple[float, float, float] | None:
     """Return one 3-value phase vector when the response payload is valid."""
     if not isinstance(value, (list, tuple)) or len(value) != 3:
         return None
-    numbers = tuple(finite_float_or_none(item) for item in value)
-    if any(number is None for number in numbers):
+    numbers = (
+        _phase_vector_item(value[0]),
+        _phase_vector_item(value[1]),
+        _phase_vector_item(value[2]),
+    )
+    return _resolved_phase_vector(numbers)
+
+
+def _phase_vector_item(value: object) -> float | None:
+    """Return one finite numeric phase-vector item."""
+    return finite_float_or_none(value)
+
+
+def _resolved_phase_vector(
+    numbers: tuple[float | None, float | None, float | None],
+) -> tuple[float, float, float] | None:
+    """Return one concrete phase vector when all three numeric items are present."""
+    if None in numbers:
         return None
-    return float(numbers[0] or 0.0), float(numbers[1] or 0.0), float(numbers[2] or 0.0)
+    first, second, third = numbers
+    return float(first or 0.0), float(second or 0.0), float(third or 0.0)
 
 
 def _optional_path(section_value: object) -> str | None:
     """Return one normalized optional dotted response path."""
     return str(section_value).strip() or None
+
+
+def _payload_float(payload: object, path: str | None) -> float | None:
+    """Return one optional numeric value from the template response payload."""
+    if path is None:
+        return None
+    return finite_float_or_none(json_path_value(_payload_object(payload), path))
+
+
+def _payload_object(payload: object) -> dict[str, object]:
+    """Return one typed JSON object payload for dotted-path lookups."""
+    return cast(dict[str, object], payload)
+
+
+def _payload_energy_kwh(payload: object, settings: TemplateMeterSettings) -> float:
+    """Return the normalized cumulative energy value in kWh."""
+    energy_kwh = _payload_float(payload, settings.energy_kwh_path)
+    if energy_kwh is not None:
+        return float(energy_kwh)
+    energy_wh = _payload_float(payload, settings.energy_wh_path)
+    if energy_wh is not None:
+        return float(energy_wh) / 1000.0
+    return 0.0
+
+
+def _payload_phase_selection(payload: object, settings: TemplateMeterSettings) -> PhaseSelection:
+    """Return the normalized measured phase selection from payload or config default."""
+    if settings.phase_selection_path is None:
+        return settings.phase_selection
+    return normalize_phase_selection(
+        json_path_value(_payload_object(payload), settings.phase_selection_path),
+        settings.phase_selection,
+    )
+
+
+def _payload_phase_vector(payload: object, path: str | None) -> tuple[float, float, float] | None:
+    """Return one optional explicit three-value phase vector from payload."""
+    if path is None:
+        return None
+    return _phase_vector(json_path_value(_payload_object(payload), path))
+
+
+def _resolved_phase_powers(
+    payload: object,
+    settings: TemplateMeterSettings,
+    power_w: float,
+    phase_selection: PhaseSelection,
+    single_phase_line: object,
+) -> tuple[float, float, float]:
+    """Return explicit or derived phase-power values for the meter reading."""
+    phase_powers_w = _payload_phase_vector(payload, settings.phase_powers_path)
+    if phase_powers_w is not None:
+        return phase_powers_w
+    return phase_powers_for_selection(power_w, phase_selection, single_phase_line)
+
+
+def _resolved_phase_currents(
+    payload: object,
+    settings: TemplateMeterSettings,
+    current_a: float | None,
+    phase_selection: PhaseSelection,
+    single_phase_line: object,
+) -> tuple[float, float, float] | None:
+    """Return explicit or derived phase-current values for the meter reading."""
+    phase_currents_a = _payload_phase_vector(payload, settings.phase_currents_path)
+    if phase_currents_a is not None:
+        return phase_currents_a
+    return phase_currents_for_selection(current_a, phase_selection, single_phase_line)
+
+
+def _meter_scalar_values(payload: object, settings: TemplateMeterSettings) -> _TemplateMeterScalarValues:
+    """Return normalized scalar values from one meter response payload."""
+    power_w = _payload_float(payload, settings.power_path)
+    if power_w is None:
+        raise ValueError(f"Invalid meter power value at '{settings.power_path}'")
+    return _TemplateMeterScalarValues(
+        power_w=float(power_w),
+        voltage_v=_payload_float(payload, settings.voltage_path),
+        current_a=_payload_float(payload, settings.current_path),
+        energy_kwh=_payload_energy_kwh(payload, settings),
+    )
 
 
 def load_template_meter_settings(service: object, config_path: str) -> TemplateMeterSettings:
@@ -115,7 +224,11 @@ class TemplateMeterBackend(TemplateHttpBackendBase):
             return value
         if isinstance(value, (int, float)):
             return bool(value)
-        text = str(value).strip().lower()
+        return TemplateMeterBackend._enabled_state_from_text(str(value).strip().lower())
+
+    @staticmethod
+    def _enabled_state_from_text(text: str) -> bool | None:
+        """Return an optional enabled-state from normalized text tokens."""
         if text in {"1", "true", "on", "yes", "enabled"}:
             return True
         if text in {"0", "false", "off", "no", "disabled"}:
@@ -128,69 +241,35 @@ class TemplateMeterBackend(TemplateHttpBackendBase):
             self.settings.meter_method,
             self.settings.meter_url,
         )
+        scalar_values = _meter_scalar_values(payload, self.settings)
         relay_on = (
             None
             if self.settings.relay_enabled_path is None
             else self._enabled_state(json_path_value(payload, self.settings.relay_enabled_path))
         )
-        power_w = finite_float_or_none(json_path_value(payload, self.settings.power_path))
-        if power_w is None:
-            raise ValueError(f"Invalid meter power value at '{self.settings.power_path}'")
-        voltage_v = (
-            None
-            if self.settings.voltage_path is None
-            else finite_float_or_none(json_path_value(payload, self.settings.voltage_path))
+        phase_selection = _payload_phase_selection(payload, self.settings)
+        single_phase_line = getattr(self.service, "phase", "L1")
+        phase_powers_w = _resolved_phase_powers(
+            payload,
+            self.settings,
+            scalar_values.power_w,
+            phase_selection,
+            single_phase_line,
         )
-        current_a = (
-            None
-            if self.settings.current_path is None
-            else finite_float_or_none(json_path_value(payload, self.settings.current_path))
+        phase_currents_a = _resolved_phase_currents(
+            payload,
+            self.settings,
+            scalar_values.current_a,
+            phase_selection,
+            single_phase_line,
         )
-        energy_kwh = 0.0
-        if self.settings.energy_kwh_path is not None:
-            energy_value = finite_float_or_none(json_path_value(payload, self.settings.energy_kwh_path))
-            energy_kwh = 0.0 if energy_value is None else float(energy_value)
-        elif self.settings.energy_wh_path is not None:
-            energy_wh = finite_float_or_none(json_path_value(payload, self.settings.energy_wh_path))
-            energy_kwh = 0.0 if energy_wh is None else float(energy_wh) / 1000.0
-
-        phase_selection = self.settings.phase_selection
-        if self.settings.phase_selection_path is not None:
-            phase_selection = normalize_phase_selection(
-                json_path_value(payload, self.settings.phase_selection_path),
-                phase_selection,
-            )
-
-        phase_powers_w = (
-            None
-            if self.settings.phase_powers_path is None
-            else _phase_vector(json_path_value(payload, self.settings.phase_powers_path))
-        )
-        phase_currents_a = (
-            None
-            if self.settings.phase_currents_path is None
-            else _phase_vector(json_path_value(payload, self.settings.phase_currents_path))
-        )
-
-        if phase_powers_w is None:
-            phase_powers_w = phase_powers_for_selection(
-                float(power_w),
-                phase_selection,
-                getattr(self.service, "phase", "L1"),
-            )
-        if phase_currents_a is None:
-            phase_currents_a = phase_currents_for_selection(
-                current_a,
-                phase_selection,
-                getattr(self.service, "phase", "L1"),
-            )
 
         return MeterReading(
             relay_on=relay_on,
-            power_w=float(power_w),
-            voltage_v=voltage_v,
-            current_a=current_a,
-            energy_kwh=float(energy_kwh),
+            power_w=scalar_values.power_w,
+            voltage_v=scalar_values.voltage_v,
+            current_a=scalar_values.current_a,
+            energy_kwh=scalar_values.energy_kwh,
             phase_selection=phase_selection,
             phase_powers_w=phase_powers_w,
             phase_currents_a=phase_currents_a,

@@ -55,9 +55,7 @@ class _AutoInputHelperSourceMixin:
                 dbus_module = cast(Any, dbus)
                 interface = dbus_module.Interface(obj, "org.freedesktop.DBus.Introspectable")
                 xml_data = interface.Introspect(timeout=self.dbus_method_timeout_seconds)
-                root = xml_et.fromstring(str(xml_data))
-                child_nodes = [str(name) for node in root.findall("node") if (name := node.attrib.get("name"))]
-                return child_nodes
+                return cast(list[str], self._child_nodes_from_introspection(xml_data))
             except Exception as error:  # pylint: disable=broad-except
                 last_error = error
                 self._reset_system_bus()
@@ -65,6 +63,13 @@ class _AutoInputHelperSourceMixin:
                     logging.debug("DBus introspection retry for %s %s after error: %s", service_name, path, error)
         assert last_error is not None
         raise last_error
+
+    @staticmethod
+    def _child_nodes_from_introspection(xml_data: object) -> list[str]:
+        """Return child node names parsed from one DBus introspection payload."""
+        root = xml_et.fromstring(str(xml_data))
+        child_nodes: list[str] = [str(name) for node in root.findall("node") if (name := node.attrib.get("name"))]
+        return child_nodes
 
     def _list_dbus_services(self: Any) -> list[str]:
         """Return all DBus service names with a small backoff on failure."""
@@ -213,24 +218,41 @@ class _AutoInputHelperSourceMixin:
 
     def _resolve_auto_battery_service(self: Any) -> str:
         """Resolve battery service from config or DBus discovery."""
-        if self.auto_battery_service:
-            try:
-                if self._get_dbus_value(self.auto_battery_service, self.auto_battery_soc_path) is not None:
-                    self._resolved_auto_battery_service = self.auto_battery_service
-                    self._auto_battery_last_scan = time.time()
-                    resolved_override: str = self._resolved_auto_battery_service
-                    return resolved_override
-            except Exception:
-                pass
         now = time.time()
+        configured_service = cast(str | None, self._configured_auto_battery_service(now))
+        if configured_service is not None:
+            return configured_service
+        cached_service = cast(str | None, self._cached_auto_battery_service(now))
+        if cached_service is not None:
+            return cached_service
+        return cast(str, self._discovered_auto_battery_service(now))
+
+    def _configured_auto_battery_service(self: Any, now: float) -> str | None:
+        """Return configured battery override when it currently exposes SOC."""
+        if not self.auto_battery_service:
+            return None
+        try:
+            if self._get_dbus_value(self.auto_battery_service, self.auto_battery_soc_path) is not None:
+                self._resolved_auto_battery_service = self.auto_battery_service
+                self._auto_battery_last_scan = now
+                return str(self._resolved_auto_battery_service)
+        except Exception:
+            return None
+        return None
+
+    def _cached_auto_battery_service(self: Any, now: float) -> str | None:
+        """Return cached battery service while the discovery cache remains valid."""
         if discovery_cache_valid(
             self._resolved_auto_battery_service,
             self._auto_battery_last_scan,
             self.auto_battery_scan_interval_seconds,
             now,
         ):
-            cached_service: str = self._resolved_auto_battery_service
-            return cached_service
+            return str(self._resolved_auto_battery_service)
+        return None
+
+    def _discovered_auto_battery_service(self: Any, now: float) -> str:
+        """Return one auto-discovered battery service exposing SOC."""
         service_name = first_matching_prefixed_service(
             self._list_dbus_services(),
             self.auto_battery_service_prefix,
@@ -250,26 +272,37 @@ class _AutoInputHelperSourceMixin:
         try:
             service_name = self._resolve_auto_battery_service()
             value = self._get_dbus_value(service_name, self.auto_battery_soc_path)
-            value = coerce_dbus_numeric(value)
-            if not isinstance(value, (int, float)):
+            numeric_value = self._battery_soc_numeric(value)
+            if numeric_value is None:
                 return None
-            numeric_value = float(value)
-            if 0.0 <= numeric_value <= 100.0:
-                return numeric_value
-            self._warning_throttled(
-                "auto-helper-battery-soc-invalid",
-                max(5.0, self.auto_battery_scan_interval_seconds or 5.0),
-                "Auto input helper ignored out-of-range battery SOC %s from %s %s",
-                numeric_value,
-                service_name,
-                self.auto_battery_soc_path,
-            )
-            self._delay_source_retry("battery")
-            return None
+            return cast(float | None, self._validated_battery_soc(numeric_value, service_name))
         except Exception:
             self._invalidate_auto_battery_service()
             self._delay_source_retry("battery")
             return None
+
+    @staticmethod
+    def _battery_soc_numeric(value: object) -> float | None:
+        """Return one numeric battery SOC value from raw DBus data."""
+        numeric_value = coerce_dbus_numeric(value)
+        if not isinstance(numeric_value, (int, float)):
+            return None
+        return float(numeric_value)
+
+    def _validated_battery_soc(self: Any, numeric_value: float, service_name: str) -> float | None:
+        """Return battery SOC when in range, otherwise warn and back off briefly."""
+        if 0.0 <= numeric_value <= 100.0:
+            return numeric_value
+        self._warning_throttled(
+            "auto-helper-battery-soc-invalid",
+            max(5.0, self.auto_battery_scan_interval_seconds or 5.0),
+            "Auto input helper ignored out-of-range battery SOC %s from %s %s",
+            numeric_value,
+            service_name,
+            self.auto_battery_soc_path,
+        )
+        self._delay_source_retry("battery")
+        return None
 
     def _get_grid_power(self: Any) -> float | None:
         """Read summed grid power from per-phase DBus paths."""
@@ -282,24 +315,32 @@ class _AutoInputHelperSourceMixin:
         )
         if not configured_paths:
             return None
-        total = 0.0
-        seen_value = False
-        missing_paths = []
-        for path in configured_paths:
-            try:
-                value = self._get_dbus_value(self.auto_grid_service, path)
-            except Exception:
-                value = None
-            if value is not None:
-                numeric_value = sum_dbus_numeric(value)
-                if numeric_value is not None:
-                    total += numeric_value
-                    seen_value = True
-                else:
-                    missing_paths.append(path)
-            else:
-                missing_paths.append(path)
+        total, seen_value, missing_paths = self._grid_total_and_missing_paths(configured_paths)
         if grid_values_complete_enough(seen_value, missing_paths, self.auto_grid_require_all_phases):
-            return total
+            return float(total)
         self._delay_source_retry("grid")
         return None
+
+    def _grid_total_and_missing_paths(self: Any, configured_paths: list[str]) -> tuple[float, bool, list[str]]:
+        """Return summed grid total plus missing-path information."""
+        total = 0.0
+        seen_value = False
+        missing_paths: list[str] = []
+        for path in configured_paths:
+            numeric_value = self._grid_path_numeric_value(path)
+            if numeric_value is None:
+                missing_paths.append(path)
+                continue
+            total += numeric_value
+            seen_value = True
+        return total, seen_value, missing_paths
+
+    def _grid_path_numeric_value(self: Any, path: str) -> float | None:
+        """Return one numeric grid reading for the given per-phase path."""
+        try:
+            value = self._get_dbus_value(self.auto_grid_service, path)
+        except Exception:
+            return None
+        if value is None:
+            return None
+        return sum_dbus_numeric(value)

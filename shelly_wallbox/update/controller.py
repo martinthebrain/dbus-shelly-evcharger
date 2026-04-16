@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any
+from typing import Any, cast
 
 
 from shelly_wallbox.core.contracts import (
@@ -226,35 +226,87 @@ class UpdateCycleController(
     def publish_offline_update(self, now: float) -> bool:
         """Publish a disconnected Shelly state when no recent status is available."""
         svc = self.service
-        voltage = svc._last_voltage if svc._last_voltage else 230.0
-        offline_pm_status = getattr(svc, "_last_confirmed_pm_status", None)
-        offline_pm_status_at = getattr(svc, "_last_confirmed_pm_status_at", None)
-        offline_pm_status_at_value = None
-        if isinstance(offline_pm_status_at, (int, float)) and not isinstance(offline_pm_status_at, bool):
-            offline_pm_status_at_value = float(offline_pm_status_at)
-        if not (
-            self._offline_confirmed_relay_sample_present(offline_pm_status, offline_pm_status_at_value)
-            and offline_pm_status_at_value is not None
-            and self._offline_confirmed_relay_sample_fresh(svc, now, offline_pm_status_at_value)
-        ):
-            offline_pm_status = None
+        voltage = self._offline_voltage(svc)
+        offline_pm_status = self._fresh_offline_pm_status(svc, now)
         relay_on = self._offline_confirmed_relay_state(svc, now)
-        power = 0.0
-        energy_forward = 0.0
-        status = 0
-        svc._last_status_source = "shelly-offline"
-        svc._last_charger_fault_active = 0
+        power, energy_forward, status = self._offline_power_state()
+        self._mark_offline_status_state(svc)
         phase_data = self._phase_data_for_pm_status(offline_pm_status, power, voltage, 0.0)
         svc._set_health("shelly-offline", cached=False)
         total_current = self._total_phase_current(phase_data)
 
-        changed = False
-        changed |= svc._publish_live_measurements(power, voltage, total_current, phase_data, now)
-        changed |= self.update_virtual_state(status, energy_forward, relay_on)
+        changed = self._publish_offline_live_state(
+            svc,
+            power=power,
+            voltage=voltage,
+            total_current=total_current,
+            phase_data=phase_data,
+            now=now,
+            status=status,
+            energy_forward=energy_forward,
+            relay_on=relay_on,
+        )
         if changed:
             svc._bump_update_index(now)
         svc.last_update = svc._time_now()
         return True
+
+    @staticmethod
+    def _offline_voltage(svc: Any) -> float:
+        """Return the fallback voltage used for one offline publish."""
+        return float(svc._last_voltage) if getattr(svc, "_last_voltage", None) else 230.0
+
+    @staticmethod
+    def _offline_confirmed_pm_status_timestamp(raw_timestamp: Any) -> float | None:
+        """Return the numeric timestamp of the last confirmed PM status when valid."""
+        if not isinstance(raw_timestamp, (int, float)) or isinstance(raw_timestamp, bool):
+            return None
+        return float(raw_timestamp)
+
+    @classmethod
+    def _fresh_offline_pm_status(cls, svc: Any, now: float) -> dict[str, Any] | None:
+        """Return the last confirmed PM status only while it stays fresh for offline use."""
+        offline_pm_status = getattr(svc, "_last_confirmed_pm_status", None)
+        offline_pm_status_at = cls._offline_confirmed_pm_status_timestamp(
+            getattr(svc, "_last_confirmed_pm_status_at", None)
+        )
+        if offline_pm_status_at is None:
+            return None
+        if not cls._offline_confirmed_relay_sample_present(offline_pm_status, offline_pm_status_at):
+            return None
+        if not cls._offline_confirmed_relay_sample_fresh(svc, now, offline_pm_status_at):
+            return None
+        return cast(dict[str, Any], offline_pm_status)
+
+    @staticmethod
+    def _offline_power_state() -> tuple[float, float, int]:
+        """Return the fixed power/energy/status tuple used for offline publishing."""
+        return 0.0, 0.0, 0
+
+    @staticmethod
+    def _mark_offline_status_state(svc: Any) -> None:
+        """Mark service observability fields for one offline Shelly publish."""
+        svc._last_status_source = "shelly-offline"
+        svc._last_charger_fault_active = 0
+
+    def _publish_offline_live_state(
+        self,
+        svc: Any,
+        *,
+        power: float,
+        voltage: float,
+        total_current: float,
+        phase_data: dict[str, dict[str, float]],
+        now: float,
+        status: int,
+        energy_forward: float,
+        relay_on: bool,
+    ) -> bool:
+        """Publish one offline measurement set and matching virtual charger state."""
+        changed = False
+        changed |= svc._publish_live_measurements(power, voltage, total_current, phase_data, now)
+        changed |= self.update_virtual_state(status, energy_forward, relay_on)
+        return bool(changed)
 
     @staticmethod
     def extract_pm_measurements(svc: Any, pm_status: dict[str, Any]) -> tuple[bool, float, float, float, float]:
@@ -592,96 +644,7 @@ class UpdateCycleController(
         """Periodic update loop: read Shelly, compute auto logic, update DBus."""
         svc = self.service
         try:
-            now = svc._time_now()
-            worker_snapshot = self.prepare_update_cycle(svc, now)
-            pm_status = self.resolve_pm_status_for_update(svc, worker_snapshot, now)
-            if pm_status is None:
-                return self.publish_offline_update(now)
-
-            (
-                pm_status,
-                relay_on,
-                power,
-                voltage,
-                current,
-                energy_forward,
-                pm_confirmed,
-                auto_mode_active,
-            ) = self._prepared_online_update_state(pm_status, now)
-            learning_state_changed = self._refresh_learning_before_decision(
-                relay_on,
-                power,
-                voltage,
-                now,
-                pm_confirmed,
-            )
-            pv_power, battery_soc, grid_power = self.resolve_auto_inputs(worker_snapshot, now, auto_mode_active)
-
-            relay_on, power, current, pm_confirmed, phase_switch_override = self.orchestrate_pending_phase_switch(
-                relay_on,
-                power,
-                current,
-                pm_confirmed,
-                now,
-                auto_mode_active,
-            )
-            desired_relay = (
-                bool(phase_switch_override)
-                if phase_switch_override is not None
-                else svc._auto_decide_relay(relay_on, pv_power, battery_soc, grid_power)
-            )
-            charger_health = self.charger_health_override(svc, now)
-            if charger_health is not None:
-                if bool(desired_relay) or bool(relay_on):
-                    svc._warning_throttled(
-                        "charger-health-blocking",
-                        svc.auto_shelly_soft_fail_seconds,
-                        "Native charger health override %s blocks charging (status=%s fault=%s)",
-                        charger_health,
-                        getattr(svc, "_last_charger_state_status", None),
-                        getattr(svc, "_last_charger_state_fault", None),
-                    )
-                desired_relay = False
-            self.apply_charger_current_target(svc, desired_relay, now, auto_mode_active)
-            relay_on, power, current, relay_confirmed = self.apply_relay_decision(
-                desired_relay,
-                relay_on,
-                pm_status,
-                power,
-                current,
-                now,
-                auto_mode_active,
-            )
-            relay_sync_health = self._apply_relay_sync_health(relay_on, relay_confirmed, now)
-            if relay_sync_health is None and charger_health is not None:
-                svc._set_health(charger_health, cached=False)
-            effective_power = self._fresh_charger_power_readback(svc, now)
-            if effective_power is None:
-                effective_power = power
-            status = self.derive_status_code(svc, relay_on, effective_power, auto_mode_active, now)
-            changed = self.publish_online_update(pm_status, status, energy_forward, relay_on, power, voltage, now)
-            learning_updated = self.update_learned_charge_power(
-                relay_on,
-                status,
-                effective_power,
-                voltage,
-                now,
-                pm_confirmed=relay_confirmed,
-            )
-            if learning_state_changed or learning_updated:
-                svc._save_runtime_state()
-            self.complete_update_cycle(
-                svc,
-                changed,
-                now,
-                relay_on,
-                power,
-                current,
-                status,
-                pv_power,
-                battery_soc,
-                grid_power,
-            )
+            return self._run_update_cycle()
         except Exception as error:  # pylint: disable=broad-except
             logging.warning(
                 "Error updating Shelly wallbox data: %s (%s)",
@@ -690,6 +653,189 @@ class UpdateCycleController(
                 exc_info=error,
             )
         return True
+
+    def _run_update_cycle(self) -> bool:
+        """Execute one full update cycle and report whether the loop should continue."""
+        svc = self.service
+        now = svc._time_now()
+        worker_snapshot = self.prepare_update_cycle(svc, now)
+        pm_status = self.resolve_pm_status_for_update(svc, worker_snapshot, now)
+        if pm_status is None:
+            return self.publish_offline_update(now)
+        self._run_online_update_cycle(pm_status, worker_snapshot, now)
+        return True
+
+    def _run_online_update_cycle(
+        self,
+        pm_status: dict[str, Any],
+        worker_snapshot: dict[str, Any],
+        now: float,
+    ) -> None:
+        """Execute the online portion of one update cycle."""
+        (
+            pm_status,
+            relay_on,
+            power,
+            voltage,
+            current,
+            energy_forward,
+            pm_confirmed,
+            auto_mode_active,
+        ) = self._prepared_online_update_state(pm_status, now)
+        learning_state_changed = self._refresh_learning_before_decision(
+            relay_on,
+            power,
+            voltage,
+            now,
+            pm_confirmed,
+        )
+        pv_power, battery_soc, grid_power = self.resolve_auto_inputs(worker_snapshot, now, auto_mode_active)
+        relay_on, power, current, pm_confirmed, desired_relay, charger_health = self._resolved_relay_decision(
+            pm_status,
+            relay_on,
+            power,
+            current,
+            pm_confirmed,
+            now,
+            auto_mode_active,
+            pv_power,
+            battery_soc,
+            grid_power,
+        )
+        relay_on, power, current, relay_confirmed = self.apply_relay_decision(
+            desired_relay,
+            relay_on,
+            pm_status,
+            power,
+            current,
+            now,
+            auto_mode_active,
+        )
+        effective_power, status = self._status_after_relay_decision(
+            relay_on,
+            power,
+            auto_mode_active,
+            now,
+        )
+        self._apply_post_decision_health(relay_on, relay_confirmed, now, charger_health)
+        changed = self.publish_online_update(pm_status, status, energy_forward, relay_on, power, voltage, now)
+        learning_updated = self.update_learned_charge_power(
+            relay_on,
+            status,
+            effective_power,
+            voltage,
+            now,
+            pm_confirmed=relay_confirmed,
+        )
+        if learning_state_changed or learning_updated:
+            self.service._save_runtime_state()
+        self.complete_update_cycle(
+            self.service,
+            changed,
+            now,
+            relay_on,
+            power,
+            current,
+            status,
+            pv_power,
+            battery_soc,
+            grid_power,
+        )
+
+    def _resolved_relay_decision(
+        self,
+        pm_status: dict[str, Any],
+        relay_on: bool,
+        power: float,
+        current: float,
+        pm_confirmed: bool,
+        now: float,
+        auto_mode_active: bool,
+        pv_power: Any,
+        battery_soc: Any,
+        grid_power: Any,
+    ) -> tuple[bool, float, float, bool, bool, str | None]:
+        """Return relay-state context plus the desired relay target for this cycle."""
+        svc = self.service
+        relay_on, power, current, pm_confirmed, phase_switch_override = self.orchestrate_pending_phase_switch(
+            relay_on,
+            power,
+            current,
+            pm_confirmed,
+            now,
+            auto_mode_active,
+        )
+        desired_relay = self._desired_relay_target(
+            svc,
+            relay_on,
+            phase_switch_override,
+            pv_power,
+            battery_soc,
+            grid_power,
+        )
+        charger_health = self._blocking_charger_health(desired_relay, relay_on, now)
+        if charger_health is not None:
+            desired_relay = False
+        self.apply_charger_current_target(svc, desired_relay, now, auto_mode_active)
+        return relay_on, power, current, pm_confirmed, desired_relay, charger_health
+
+    @staticmethod
+    def _desired_relay_target(
+        svc: Any,
+        relay_on: bool,
+        phase_switch_override: bool | None,
+        pv_power: Any,
+        battery_soc: Any,
+        grid_power: Any,
+    ) -> bool:
+        """Return the desired relay state before charger-health overrides are applied."""
+        if phase_switch_override is not None:
+            return bool(phase_switch_override)
+        return bool(svc._auto_decide_relay(relay_on, pv_power, battery_soc, grid_power))
+
+    def _blocking_charger_health(self, desired_relay: bool, relay_on: bool, now: float) -> str | None:
+        """Return a charger-health override and emit one warning when it blocks charging."""
+        svc = self.service
+        charger_health = self.charger_health_override(svc, now)
+        if charger_health is None:
+            return None
+        if bool(desired_relay) or bool(relay_on):
+            svc._warning_throttled(
+                "charger-health-blocking",
+                svc.auto_shelly_soft_fail_seconds,
+                "Native charger health override %s blocks charging (status=%s fault=%s)",
+                charger_health,
+                getattr(svc, "_last_charger_state_status", None),
+                getattr(svc, "_last_charger_state_fault", None),
+            )
+        return charger_health
+
+    def _status_after_relay_decision(
+        self,
+        relay_on: bool,
+        power: float,
+        auto_mode_active: bool,
+        now: float,
+    ) -> tuple[float, int]:
+        """Return effective power and derived Venus status after relay application."""
+        svc = self.service
+        effective_power = self._fresh_charger_power_readback(svc, now)
+        if effective_power is None:
+            effective_power = power
+        status = self.derive_status_code(svc, relay_on, effective_power, auto_mode_active, now)
+        return effective_power, status
+
+    def _apply_post_decision_health(
+        self,
+        relay_on: bool,
+        relay_confirmed: bool,
+        now: float,
+        charger_health: str | None,
+    ) -> None:
+        """Apply relay-sync or charger-derived health after one relay decision."""
+        relay_sync_health = self._apply_relay_sync_health(relay_on, relay_confirmed, now)
+        if relay_sync_health is None and charger_health is not None:
+            self.service._set_health(charger_health, cached=False)
 
     def _prepared_online_update_state(
         self,

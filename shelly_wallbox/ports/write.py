@@ -189,30 +189,63 @@ class WriteControllerPort(_BaseServicePort):
         pm_status = normalized_snapshot.get("pm_status")
         pm_confirmed = bool(normalized_snapshot.get("pm_confirmed", False))
         captured_at = normalized_snapshot.get("pm_captured_at", normalized_snapshot.get("captured_at"))
-        if not (pm_confirmed and isinstance(pm_status, dict) and "output" in pm_status and captured_at is not None):
+        if not WriteControllerPort._relay_output_payload_present(pm_confirmed, pm_status, captured_at):
             return None
-        age_seconds = current_time - float(captured_at)
-        if age_seconds < -1.0 or age_seconds > max_age_seconds:
+        captured_at_value = WriteControllerPort._relay_output_timestamp(captured_at)
+        if captured_at_value is None:
+            return None
+        if not WriteControllerPort._relay_output_timestamp_fresh(current_time, captured_at_value, max_age_seconds):
             return None
         return bool(cast(dict[str, Any], pm_status).get("output"))
 
     def _fresh_last_output(self, current_time: float, max_age_seconds: float) -> bool | None:
         """Return a fresh confirmed relay output from the last remembered Shelly read."""
-        last_pm_status = getattr(self._service, "_last_confirmed_pm_status", None)
-        last_pm_status_at = getattr(self._service, "_last_confirmed_pm_status_at", None)
-        if last_pm_status is None and bool(getattr(self._service, "_last_pm_status_confirmed", False)):
-            last_pm_status = getattr(self._service, "_last_pm_status", None)
-            last_pm_status_at = getattr(self._service, "_last_pm_status_at", None)
-        if not (
-            isinstance(last_pm_status, dict)
-            and "output" in last_pm_status
-            and last_pm_status_at is not None
-        ):
+        last_pm_status, last_pm_status_at = self._last_relay_output_sample()
+        if not self._relay_output_payload_present(True, last_pm_status, last_pm_status_at):
             return None
-        age_seconds = current_time - float(last_pm_status_at)
-        if age_seconds < -1.0 or age_seconds > max_age_seconds:
+        last_pm_status_at_value = self._relay_output_timestamp(last_pm_status_at)
+        if last_pm_status_at_value is None:
+            return None
+        if not self._relay_output_timestamp_fresh(current_time, last_pm_status_at_value, max_age_seconds):
             return None
         return bool(cast(dict[str, Any], last_pm_status).get("output"))
+
+    def _last_relay_output_sample(self) -> tuple[Any, Any]:
+        """Return the best remembered relay-output sample for cutover freshness checks."""
+        last_pm_status = getattr(self._service, "_last_confirmed_pm_status", None)
+        last_pm_status_at = getattr(self._service, "_last_confirmed_pm_status_at", None)
+        if last_pm_status is not None:
+            return last_pm_status, last_pm_status_at
+        if bool(getattr(self._service, "_last_pm_status_confirmed", False)):
+            return getattr(self._service, "_last_pm_status", None), getattr(self._service, "_last_pm_status_at", None)
+        return None, None
+
+    @staticmethod
+    def _relay_output_payload_present(
+        confirmed: bool,
+        pm_status: Any,
+        captured_at: Any,
+    ) -> bool:
+        """Return whether a relay-output payload has the required shape for freshness checks."""
+        return bool(
+            confirmed
+            and isinstance(pm_status, dict)
+            and "output" in pm_status
+            and captured_at is not None
+        )
+
+    @staticmethod
+    def _relay_output_timestamp(captured_at: Any) -> float | None:
+        """Return a numeric relay-output timestamp when one is present and valid."""
+        if not isinstance(captured_at, (int, float)) or isinstance(captured_at, bool):
+            return None
+        return float(captured_at)
+
+    @staticmethod
+    def _relay_output_timestamp_fresh(current_time: float, captured_at: float, max_age_seconds: float) -> bool:
+        """Return whether a relay-output timestamp is fresh enough for cutover logic."""
+        age_seconds = current_time - float(captured_at)
+        return -1.0 <= age_seconds <= max_age_seconds
 
     def _fresh_confirmed_relay_output(self, snapshot: Any) -> bool | None:
         """Return the latest confirmed relay output only when it is still fresh."""

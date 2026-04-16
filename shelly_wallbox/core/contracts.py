@@ -139,6 +139,28 @@ def normalized_auto_state_pair(state: Any, code: Any) -> tuple[str, int]:
     return normalized_state, normalized_code
 
 
+def _displayable_timestamp_candidates(
+    last_confirmed_at: Any,
+    last_pm_at: Any,
+    last_pm_confirmed: Any,
+) -> tuple[float | None, float | None]:
+    """Return preferred and fallback timestamps for confirmed-read display."""
+    confirmed_timestamp = finite_float_or_none(last_confirmed_at)
+    fallback_timestamp = finite_float_or_none(last_pm_at) if bool(last_pm_confirmed) else None
+    return confirmed_timestamp, fallback_timestamp
+
+
+def _timestamp_displayable(
+    candidate: float | None,
+    current: float | None,
+    future_tolerance_seconds: float,
+) -> bool:
+    """Return whether one timestamp may be shown on outward-facing diagnostics."""
+    return candidate is not None and (
+        current is None or timestamp_not_future(candidate, current, future_tolerance_seconds)
+    )
+
+
 def displayable_confirmed_read_timestamp(
     *,
     last_confirmed_at: Any,
@@ -149,14 +171,62 @@ def displayable_confirmed_read_timestamp(
 ) -> float | None:
     """Return one safe timestamp for outward-facing confirmed Shelly-read diagnostics."""
     current = None if now is None else float(now)
-    confirmed_timestamp = finite_float_or_none(last_confirmed_at)
-    fallback_timestamp = finite_float_or_none(last_pm_at) if bool(last_pm_confirmed) else None
-    for candidate in (confirmed_timestamp, fallback_timestamp):
-        if candidate is None:
-            continue
-        if current is None or timestamp_not_future(candidate, current, future_tolerance_seconds):
+    for candidate in _displayable_timestamp_candidates(last_confirmed_at, last_pm_at, last_pm_confirmed):
+        if _timestamp_displayable(candidate, current, future_tolerance_seconds):
             return candidate
     return None
+
+
+AUTO_METRIC_NUMERIC_FIELDS = (
+    "surplus",
+    "grid",
+    "start_threshold",
+    "stop_threshold",
+    "threshold_scale",
+    "stop_alpha",
+    "surplus_volatility",
+)
+AUTO_METRIC_TEXT_FIELDS = ("profile", "threshold_mode", "stop_alpha_stage")
+
+
+def _normalized_metric_text(value: Any) -> str | None:
+    """Return one outward-safe text metric value."""
+    return None if value is None else str(value)
+
+
+def _sanitize_numeric_auto_metrics(sanitized: dict[str, Any]) -> None:
+    """Normalize the numeric outward-facing Auto metrics in place."""
+    for field in AUTO_METRIC_NUMERIC_FIELDS:
+        sanitized[field] = finite_float_or_none(sanitized.get(field))
+
+
+def _sanitize_text_auto_metrics(sanitized: dict[str, Any]) -> None:
+    """Normalize the text outward-facing Auto metrics in place."""
+    for field in AUTO_METRIC_TEXT_FIELDS:
+        sanitized[field] = _normalized_metric_text(sanitized.get(field))
+
+
+def _sanitize_soc_metric(sanitized: dict[str, Any]) -> None:
+    """Normalize the optional SOC field in place."""
+    soc_value = finite_float_or_none(sanitized.get("soc"))
+    sanitized["soc"] = soc_value if valid_battery_soc(soc_value) else None
+
+
+def _sanitize_learning_metrics(sanitized: dict[str, Any]) -> None:
+    """Normalize learned-power-related outward-facing Auto metrics in place."""
+    sanitized["learned_charge_power"] = non_negative_float_or_none(sanitized.get("learned_charge_power"))
+    learned_state = sanitized.get("learned_charge_power_state")
+    sanitized["learned_charge_power_state"] = (
+        normalize_learning_state(learned_state) if learned_state is not None else None
+    )
+
+
+def _sanitize_threshold_metrics(sanitized: dict[str, Any]) -> None:
+    """Drop outward threshold metrics when they are missing or logically inverted."""
+    if thresholds_ordered(sanitized.get("start_threshold"), sanitized.get("stop_threshold")):
+        return
+    sanitized["start_threshold"] = None
+    sanitized["stop_threshold"] = None
 
 
 def sanitized_auto_metrics(metrics: Any) -> dict[str, Any]:
@@ -164,31 +234,98 @@ def sanitized_auto_metrics(metrics: Any) -> dict[str, Any]:
     if not isinstance(metrics, dict):
         return {}
     sanitized: dict[str, Any] = dict(cast(dict[str, Any], metrics))
-    numeric_fields = (
-        "surplus",
-        "grid",
-        "start_threshold",
-        "stop_threshold",
-        "threshold_scale",
-        "stop_alpha",
-        "surplus_volatility",
-    )
-    for field in numeric_fields:
-        sanitized[field] = finite_float_or_none(sanitized.get(field))
-    sanitized["learned_charge_power"] = non_negative_float_or_none(sanitized.get("learned_charge_power"))
-    soc_value = finite_float_or_none(sanitized.get("soc"))
-    sanitized["soc"] = soc_value if valid_battery_soc(soc_value) else None
-    learned_state = sanitized.get("learned_charge_power_state")
-    sanitized["learned_charge_power_state"] = (
-        normalize_learning_state(learned_state) if learned_state is not None else None
-    )
-    for field in ("profile", "threshold_mode", "stop_alpha_stage"):
-        value = sanitized.get(field)
-        sanitized[field] = None if value is None else str(value)
-    if not thresholds_ordered(sanitized.get("start_threshold"), sanitized.get("stop_threshold")):
-        sanitized["start_threshold"] = None
-        sanitized["stop_threshold"] = None
+    _sanitize_numeric_auto_metrics(sanitized)
+    _sanitize_learning_metrics(sanitized)
+    _sanitize_soc_metric(sanitized)
+    _sanitize_text_auto_metrics(sanitized)
+    _sanitize_threshold_metrics(sanitized)
     return sanitized
+
+
+def _snapshot_mapping(snapshot: Any) -> dict[str, Any]:
+    """Return one shallow snapshot mapping for normalization helpers."""
+    return dict(cast(dict[str, Any], snapshot)) if isinstance(snapshot, dict) else {}
+
+
+def _resolved_snapshot_captured_at(
+    captured_at: float | None,
+    pm_captured_at: float | None,
+    current: float | None,
+) -> float:
+    """Return the best captured-at baseline before PM payload validation."""
+    if captured_at is not None:
+        return float(captured_at)
+    if current is not None:
+        return float(current)
+    if pm_captured_at is not None:
+        return float(pm_captured_at)
+    return 0.0
+
+
+def _clamped_snapshot_timestamp(
+    timestamp: float,
+    current: float | None,
+    *,
+    future_tolerance_seconds: float,
+    clamp_future_timestamps: bool,
+) -> float:
+    """Return one snapshot timestamp, optionally clamped to ``now``."""
+    if (
+        current is not None
+        and clamp_future_timestamps
+        and not timestamp_not_future(timestamp, current, future_tolerance_seconds)
+    ):
+        return float(current)
+    return float(timestamp)
+
+
+def _valid_pm_snapshot_payload(pm_status: dict[str, Any] | None) -> bool:
+    """Return whether one PM payload contains the minimum required state."""
+    return isinstance(pm_status, dict) and "output" in pm_status
+
+
+def _pm_snapshot_future_invalid(
+    timestamp: float,
+    current: float | None,
+    *,
+    future_tolerance_seconds: float,
+    clamp_future_timestamps: bool,
+) -> bool:
+    """Return whether one PM timestamp invalidates the whole PM payload."""
+    return bool(
+        current is not None
+        and clamp_future_timestamps
+        and not timestamp_not_future(timestamp, current, future_tolerance_seconds)
+    )
+
+
+def _normalized_pm_snapshot_payload(
+    *,
+    pm_status: dict[str, Any] | None,
+    pm_captured_at: float | None,
+    pm_confirmed: bool,
+    captured_at: float,
+    current: float | None,
+    future_tolerance_seconds: float,
+    clamp_future_timestamps: bool,
+) -> tuple[dict[str, Any] | None, float | None, bool, float]:
+    """Return one normalized PM payload plus its effective capture timestamp."""
+    if not _valid_pm_snapshot_payload(pm_status):
+        return None, None, False, float(captured_at)
+    resolved_pm_captured_at = float(captured_at) if pm_captured_at is None else float(pm_captured_at)
+    if _pm_snapshot_future_invalid(
+        resolved_pm_captured_at,
+        current,
+        future_tolerance_seconds=future_tolerance_seconds,
+        clamp_future_timestamps=clamp_future_timestamps,
+    ):
+        return None, None, False, float(captured_at)
+    return (
+        pm_status,
+        resolved_pm_captured_at,
+        bool(pm_confirmed),
+        max(float(captured_at), resolved_pm_captured_at),
+    )
 
 
 def normalized_worker_snapshot(
@@ -199,49 +336,36 @@ def normalized_worker_snapshot(
     clamp_future_timestamps: bool = True,
 ) -> dict[str, Any]:
     """Return one worker snapshot with consistent PM payload invariants."""
-    normalized: dict[str, Any] = dict(cast(dict[str, Any], snapshot)) if isinstance(snapshot, dict) else {}
+    normalized = _snapshot_mapping(snapshot)
     current = None if now is None else float(now)
 
     captured_at = non_negative_float_or_none(normalized.get("captured_at"))
-    pm_status_raw = normalized.get("pm_status")
-    pm_status = dict(cast(dict[str, Any], pm_status_raw)) if isinstance(pm_status_raw, dict) else None
-    pm_captured_at = non_negative_float_or_none(normalized.get("pm_captured_at"))
-    pm_confirmed = bool(normalized.get("pm_confirmed", False))
+    pm_status, pm_captured_at, pm_confirmed = _snapshot_pm_payload(normalized)
 
-    if captured_at is None:
-        if current is not None:
-            captured_at = float(current)
-        else:
-            captured_at = pm_captured_at if pm_captured_at is not None else 0.0
-    if (
-        current is not None
-        and clamp_future_timestamps
-        and not timestamp_not_future(captured_at, current, future_tolerance_seconds)
-    ):
-        captured_at = float(current)
+    resolved_captured_at = _resolved_snapshot_captured_at(captured_at, pm_captured_at, current)
+    resolved_captured_at = _clamped_snapshot_timestamp(
+        resolved_captured_at,
+        current,
+        future_tolerance_seconds=future_tolerance_seconds,
+        clamp_future_timestamps=clamp_future_timestamps,
+    )
+    pm_status, pm_captured_at, pm_confirmed, resolved_captured_at = _normalized_pm_snapshot_payload(
+        pm_status=pm_status,
+        pm_captured_at=pm_captured_at,
+        pm_confirmed=pm_confirmed,
+        captured_at=resolved_captured_at,
+        current=current,
+        future_tolerance_seconds=future_tolerance_seconds,
+        clamp_future_timestamps=clamp_future_timestamps,
+    )
 
-    if not (isinstance(pm_status, dict) and "output" in pm_status):
-        pm_status = None
-        pm_captured_at = None
-        pm_confirmed = False
-    else:
-        if pm_captured_at is None:
-            pm_captured_at = captured_at
-        if (
-            current is not None
-            and clamp_future_timestamps
-            and not timestamp_not_future(pm_captured_at, current, future_tolerance_seconds)
-        ):
-            pm_status = None
-            pm_captured_at = None
-            pm_confirmed = False
-        else:
-            captured_at = max(float(captured_at), float(pm_captured_at))
-
-    normalized["captured_at"] = float(captured_at)
-    normalized["pm_status"] = pm_status
-    normalized["pm_captured_at"] = None if pm_captured_at is None else float(pm_captured_at)
-    normalized["pm_confirmed"] = bool(pm_confirmed and pm_status is not None and pm_captured_at is not None)
+    _apply_normalized_pm_payload(
+        normalized,
+        resolved_captured_at=resolved_captured_at,
+        pm_status=pm_status,
+        pm_captured_at=pm_captured_at,
+        pm_confirmed=pm_confirmed,
+    )
     return normalized
 
 
@@ -294,17 +418,74 @@ def cutover_confirmed_off(
     future_tolerance_seconds: float = 1.0,
 ) -> bool:
     """Return whether Manual->Auto cutover may finish from one confirmed OFF sample."""
-    if pending_state is not None or relay_on or bool(confirmed_output):
+    if _cutover_blocked_by_pending_or_active(
+        pending_state=pending_state,
+        relay_on=relay_on,
+        confirmed_output=confirmed_output,
+    ):
         return False
-    if not timestamp_age_within(
+    if not _cutover_confirmation_recent(
+        confirmed_at=confirmed_at,
+        now=now,
+        max_age_seconds=max_age_seconds,
+        future_tolerance_seconds=future_tolerance_seconds,
+    ):
+        return False
+    return _cutover_request_satisfied(confirmed_at=confirmed_at, requested_at=requested_at)
+
+
+def _snapshot_pm_payload(normalized: dict[str, Any]) -> tuple[dict[str, Any] | None, float | None, bool]:
+    """Return the raw PM payload pieces from one worker snapshot mapping."""
+    pm_status_raw = normalized.get("pm_status")
+    pm_status = dict(cast(dict[str, Any], pm_status_raw)) if isinstance(pm_status_raw, dict) else None
+    pm_captured_at = non_negative_float_or_none(normalized.get("pm_captured_at"))
+    pm_confirmed = bool(normalized.get("pm_confirmed", False))
+    return pm_status, pm_captured_at, pm_confirmed
+
+
+def _apply_normalized_pm_payload(
+    normalized: dict[str, Any],
+    *,
+    resolved_captured_at: float,
+    pm_status: dict[str, Any] | None,
+    pm_captured_at: float | None,
+    pm_confirmed: bool,
+) -> None:
+    """Persist one normalized PM payload back into the worker snapshot mapping."""
+    normalized["captured_at"] = float(resolved_captured_at)
+    normalized["pm_status"] = pm_status
+    normalized["pm_captured_at"] = None if pm_captured_at is None else float(pm_captured_at)
+    normalized["pm_confirmed"] = bool(pm_confirmed and pm_status is not None and pm_captured_at is not None)
+
+
+def _cutover_blocked_by_pending_or_active(*, pending_state: Any, relay_on: bool, confirmed_output: Any) -> bool:
+    """Return whether cutover is blocked by pending or still-active relay state."""
+    return pending_state is not None or bool(relay_on) or bool(confirmed_output)
+
+
+def _cutover_confirmation_recent(
+    *,
+    confirmed_at: Any,
+    now: float,
+    max_age_seconds: float,
+    future_tolerance_seconds: float,
+) -> bool:
+    """Return whether one confirmed relay sample is recent enough for cutover."""
+    return timestamp_age_within(
         confirmed_at,
         now,
         max_age_seconds,
         future_tolerance_seconds=future_tolerance_seconds,
-    ):
-        return False
-    if requested_at is None:
-        return True
+    )
+
+
+def _cutover_request_satisfied(*, confirmed_at: Any, requested_at: Any) -> bool:
+    """Return whether cutover timing satisfies the requested relay-off timestamp."""
+    return True if requested_at is None else _confirmed_after_requested(confirmed_at, requested_at)
+
+
+def _confirmed_after_requested(confirmed_at: Any, requested_at: Any) -> bool:
+    """Return whether one confirmed relay sample happened at or after the request time."""
     confirmed_timestamp = finite_float_or_none(confirmed_at)
     requested_timestamp = finite_float_or_none(requested_at)
     if confirmed_timestamp is None or requested_timestamp is None:

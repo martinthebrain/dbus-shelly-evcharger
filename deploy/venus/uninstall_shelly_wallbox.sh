@@ -24,7 +24,7 @@ LEGACY_STARTUP=$REPO_DIR/install_shelly_wallbox.sh
 BOOT_HELPER=$SCRIPT_DIR/boot_shelly_wallbox.sh
 LEGACY_BOOT_HELPER=$REPO_DIR/boot_shelly_wallbox.sh
 CONFIG_PATH="$SCRIPT_DIR/config.shelly_wallbox.ini"
-GENERIC_SHELLY_HELPER_CMD="$REPO_DIR/disable_generic_shelly_once.py $CONFIG_PATH >/dev/null 2>&1 &"
+GENERIC_SHELLY_HELPER_CMD="$REPO_DIR/shelly_wallbox/ops/disable_generic_shelly_once.py $CONFIG_PATH >/dev/null 2>&1 &"
 LEGACY_GENERIC_SHELLY_HELPER_CMD="$REPO_DIR/disable_generic_shelly_once.py $REPO_DIR/config.shelly_wallbox.ini >/dev/null 2>&1 &"
 
 remove_rc_local_line() {

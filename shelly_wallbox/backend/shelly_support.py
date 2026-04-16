@@ -53,23 +53,44 @@ _PHASE_MAP_KEYS: dict[str, PhaseSelection] = {
 
 def _parse_switch_channel_ids(value: object, default: tuple[int, ...]) -> tuple[int, ...]:
     """Return one normalized tuple of Shelly switch channel IDs."""
+    tokens = _channel_id_tokens(value)
+    if not tokens:
+        return default
+    normalized = _unique_channel_ids(tokens)
+    return normalized or default
+
+
+def _channel_id_tokens(value: object) -> tuple[str, ...]:
+    """Return trimmed switch-channel tokens from one raw config value."""
     text = str(value).strip() if value is not None else ""
     if not text:
-        return default
+        return ()
+    return tuple(part.strip() for part in text.split(","))
+
+
+def _unique_channel_ids(tokens: tuple[str, ...]) -> tuple[int, ...]:
+    """Return de-duplicated normalized channel IDs preserving config order."""
     normalized: list[int] = []
-    for part in text.split(","):
-        token = part.strip()
-        if not token:
+    for token in tokens:
+        channel_id = _switch_channel_id(token)
+        if channel_id is None or channel_id in normalized:
             continue
-        try:
-            channel_id = int(token)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Invalid Shelly switch channel id '{token}'") from exc
-        if channel_id < 0:
-            raise ValueError(f"Invalid Shelly switch channel id '{token}'")
-        if channel_id not in normalized:
-            normalized.append(channel_id)
-    return tuple(normalized) if normalized else default
+        normalized.append(channel_id)
+    return tuple(normalized)
+
+
+def _switch_channel_id(value: object) -> int | None:
+    """Return one normalized Shelly switch channel ID token."""
+    token = str(value).strip()
+    if not token:
+        return None
+    try:
+        channel_id = int(token)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid Shelly switch channel id '{token}'") from exc
+    if channel_id < 0:
+        raise ValueError(f"Invalid Shelly switch channel id '{token}'")
+    return channel_id
 
 
 def _default_phase_switch_targets(
@@ -91,19 +112,28 @@ def _phase_switch_targets(
 ) -> dict[PhaseSelection, tuple[int, ...]]:
     """Return configured phase-selection to relay-channel mappings."""
     targets = _default_phase_switch_targets(device_id, supported_phase_selections)
-    if str(getattr(phase_map, "name", "")).upper() == "DEFAULT" and not tuple(phase_map.items()):
-        return targets
-    if not phase_map:
+    if _empty_phase_map(phase_map):
         return targets
     for raw_key, raw_value in phase_map.items():
-        key = str(raw_key).strip().lower()
-        selection = _PHASE_MAP_KEYS.get(key)
+        selection = _phase_map_selection(raw_key)
         if selection is None:
             raise ValueError(f"Unsupported PhaseMap key '{raw_key}'")
         if selection not in supported_phase_selections:
             continue
         targets[selection] = _parse_switch_channel_ids(raw_value, targets[selection])
     return targets
+
+
+def _empty_phase_map(phase_map: configparser.SectionProxy) -> bool:
+    """Return whether a PhaseMap section carries no effective custom mappings."""
+    if not phase_map:
+        return True
+    return str(getattr(phase_map, "name", "")).upper() == "DEFAULT" and not tuple(phase_map.items())
+
+
+def _phase_map_selection(raw_key: object) -> PhaseSelection | None:
+    """Return the normalized phase selection associated with one PhaseMap key."""
+    return _PHASE_MAP_KEYS.get(str(raw_key).strip().lower())
 
 
 def phase_powers_for_selection(
@@ -114,17 +144,11 @@ def phase_powers_for_selection(
     """Split total power across the selected active phases for display."""
     total = float(power_w)
     if selection == "P1_P2_P3":
-        per_phase = total / 3.0
-        return per_phase, per_phase, per_phase
+        return _distributed_phase_vector(total, 3.0)
     if selection == "P1_P2":
-        per_phase = total / 2.0
-        return per_phase, per_phase, 0.0
-    line = str(single_phase_line).strip().upper() if single_phase_line is not None else "L1"
-    if line == "L2":
-        return 0.0, total, 0.0
-    if line == "L3":
-        return 0.0, 0.0, total
-    return total, 0.0, 0.0
+        distributed = _distributed_phase_vector(total, 2.0)
+        return distributed[0], distributed[1], 0.0
+    return _single_phase_vector(total, single_phase_line)
 
 
 def phase_currents_for_selection(
@@ -137,11 +161,21 @@ def phase_currents_for_selection(
         return None
     total = float(current_a)
     if selection == "P1_P2_P3":
-        per_phase = total / 3.0
-        return per_phase, per_phase, per_phase
+        return _distributed_phase_vector(total, 3.0)
     if selection == "P1_P2":
-        per_phase = total / 2.0
-        return per_phase, per_phase, 0.0
+        distributed = _distributed_phase_vector(total, 2.0)
+        return distributed[0], distributed[1], 0.0
+    return _single_phase_vector(total, single_phase_line)
+
+
+def _distributed_phase_vector(total: float, divisor: float) -> tuple[float, float, float]:
+    """Return evenly distributed per-phase values for two- or three-phase totals."""
+    per_phase = float(total) / float(divisor)
+    return per_phase, per_phase, per_phase
+
+
+def _single_phase_vector(total: float, single_phase_line: object) -> tuple[float, float, float]:
+    """Return one single-phase vector mapped to the configured measured line."""
     line = str(single_phase_line).strip().upper() if single_phase_line is not None else "L1"
     if line == "L2":
         return 0.0, total, 0.0
@@ -203,35 +237,21 @@ def load_shelly_backend_settings(
     phase_map = _section(parser, "PhaseMap")
     default_phase = normalize_phase_selection(getattr(service, "phase", "L1"))
     device_id = int(_config_value(adapter, "Id", getattr(service, "pm_id", 0)))
-    switching_mode = normalize_switching_mode(
-        capabilities.get("SwitchingMode", default_switching_mode),
-        default_switching_mode,
-    )
-    supported_phase_selections = parse_phase_selection_list(
-        capabilities.get("SupportedPhaseSelections", "P1"),
-        default=("P1",),
-    )
-    max_power = None if switching_mode == "contactor" else finite_float_or_none(capabilities.get("MaxDirectSwitchPowerWatts", None))
-    if max_power is None and switching_mode != "contactor":
-        max_current = finite_float_or_none(getattr(service, "max_current", None))
-        voltage = finite_float_or_none(getattr(service, "_last_voltage", None))
-        if max_current is not None and voltage is not None and max_current > 0 and voltage > 0:
-            max_power = max_current * voltage
+    switching_mode = _resolved_switching_mode(capabilities, default_switching_mode)
+    supported_phase_selections = _supported_phase_selections(capabilities)
+    max_power = _resolved_max_direct_switch_power_w(service, capabilities, switching_mode)
 
     return ShellyBackendSettings(
         host=str(adapter.get("Host", getattr(service, "host", ""))).strip(),
         component=str(adapter.get("Component", getattr(service, "pm_component", "Switch"))).strip() or "Switch",
         device_id=device_id,
-        timeout_seconds=float(_config_value(adapter, "RequestTimeoutSeconds", getattr(service, "shelly_request_timeout_seconds", 2.0))),
+        timeout_seconds=_resolved_timeout_seconds(adapter, service),
         username=str(adapter.get("Username", getattr(service, "username", ""))).strip(),
         password=str(adapter.get("Password", getattr(service, "password", ""))).strip(),
         use_digest_auth=bool(
             normalize_binary_flag(adapter.get("DigestAuth", getattr(service, "use_digest_auth", False)))
         ),
-        phase_selection=normalize_phase_selection(
-            phase.get("MeasuredPhaseSelection", phase.get("MeasuredPhase", default_phase)),
-            default_phase,
-        ),
+        phase_selection=_resolved_phase_selection(phase, default_phase),
         switching_mode=switching_mode,
         supported_phase_selections=supported_phase_selections,
         requires_charge_pause_for_phase_change=bool(
@@ -240,6 +260,69 @@ def load_shelly_backend_settings(
         max_direct_switch_power_w=max_power,
         phase_switch_targets=_phase_switch_targets(phase_map, device_id, supported_phase_selections),
     )
+
+
+def _resolved_switching_mode(
+    capabilities: configparser.SectionProxy,
+    default_switching_mode: SwitchingMode,
+) -> SwitchingMode:
+    """Return the normalized switching mode from backend capabilities."""
+    return normalize_switching_mode(
+        capabilities.get("SwitchingMode", default_switching_mode),
+        default_switching_mode,
+    )
+
+
+def _supported_phase_selections(capabilities: configparser.SectionProxy) -> tuple[PhaseSelection, ...]:
+    """Return the normalized supported phase selections from backend capabilities."""
+    return parse_phase_selection_list(capabilities.get("SupportedPhaseSelections", "P1"), default=("P1",))
+
+
+def _configured_max_direct_switch_power_w(capabilities: configparser.SectionProxy) -> float | None:
+    """Return the explicitly configured direct-switch power limit when present."""
+    return finite_float_or_none(capabilities.get("MaxDirectSwitchPowerWatts", None))
+
+
+def _derived_max_direct_switch_power_w(service: Any) -> float | None:
+    """Return a fallback direct-switch power limit from service max current and voltage."""
+    max_current = finite_float_or_none(getattr(service, "max_current", None))
+    voltage = finite_float_or_none(getattr(service, "_last_voltage", None))
+    if max_current is None or voltage is None or max_current <= 0 or voltage <= 0:
+        return None
+    return max_current * voltage
+
+
+def _resolved_max_direct_switch_power_w(
+    service: Any,
+    capabilities: configparser.SectionProxy,
+    switching_mode: SwitchingMode,
+) -> float | None:
+    """Return the active direct-switch power limit implied by capabilities and service defaults."""
+    if switching_mode == "contactor":
+        return None
+    configured_power = _configured_max_direct_switch_power_w(capabilities)
+    return configured_power if configured_power is not None else _derived_max_direct_switch_power_w(service)
+
+
+def _resolved_timeout_seconds(adapter: configparser.SectionProxy, service: Any) -> float:
+    """Return the normalized Shelly backend timeout in seconds."""
+    return float(_config_value(adapter, "RequestTimeoutSeconds", getattr(service, "shelly_request_timeout_seconds", 2.0)))
+
+
+def _resolved_phase_selection(
+    phase: configparser.SectionProxy,
+    default_phase: PhaseSelection,
+) -> PhaseSelection:
+    """Return the normalized measured phase selection for one Shelly backend."""
+    return normalize_phase_selection(
+        phase.get("MeasuredPhaseSelection", phase.get("MeasuredPhase", default_phase)),
+        default_phase,
+    )
+
+
+def _has_credentials(username: str, password: str) -> bool:
+    """Return whether Shelly HTTP credentials are configured."""
+    return bool(username and password)
 
 
 class ShellyBackendBase:
@@ -265,11 +348,11 @@ class ShellyBackendBase:
     def _auth(self) -> HTTPDigestAuth | tuple[str, str] | None:
         """Return one optional auth object for Shelly HTTP calls."""
         settings = self.settings
-        if settings.use_digest_auth and settings.username and settings.password:
+        if not _has_credentials(settings.username, settings.password):
+            return None
+        if settings.use_digest_auth:
             return HTTPDigestAuth(settings.username, settings.password)
-        if settings.username and settings.password:
-            return settings.username, settings.password
-        return None
+        return settings.username, settings.password
 
     @staticmethod
     def _encoded_rpc_params(params: Mapping[str, ShellyRpcScalar]) -> dict[str, str | int | float]:
