@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import configparser
+from datetime import datetime
 import unittest
 from unittest.mock import mock_open, patch
 
@@ -43,6 +44,8 @@ from shelly_wallbox.core.common import (
     parse_hhmm,
     phase_values,
     read_version,
+    scheduled_enabled_days_text,
+    scheduled_mode_snapshot,
 )
 
 
@@ -215,6 +218,49 @@ class TestShellyWallboxCommon(unittest.TestCase):
                 max_age_seconds=2.0,
             )
         )
+
+    def test_scheduled_helpers_normalize_days_and_derive_states(self):
+        self.assertEqual(scheduled_enabled_days_text("weekdays"), "Mon,Tue,Wed,Thu,Fri")
+        self.assertEqual(scheduled_enabled_days_text("sat-sun"), "Sat,Sun")
+        self.assertEqual(scheduled_enabled_days_text("mon,wed,fri"), "Mon,Wed,Fri")
+
+        waiting = scheduled_mode_snapshot(
+            datetime(2026, 4, 19, 20, 0),
+            {4: ((7, 30), (19, 30))},
+            "Mon,Tue,Wed,Thu,Fri",
+            delay_seconds=3600.0,
+            latest_end_time="06:30",
+        )
+        self.assertEqual(waiting.state, "waiting-fallback")
+        self.assertEqual(waiting.target_day_label, "Mon")
+
+        night_boost = scheduled_mode_snapshot(
+            datetime(2026, 4, 19, 21, 0),
+            {4: ((7, 30), (19, 30))},
+            "Mon,Tue,Wed,Thu,Fri",
+            delay_seconds=3600.0,
+            latest_end_time="06:30",
+        )
+        self.assertEqual(night_boost.state, "night-boost")
+        self.assertTrue(night_boost.night_boost_active)
+
+        after_end = scheduled_mode_snapshot(
+            datetime(2026, 4, 20, 6, 45),
+            {4: ((7, 30), (19, 30))},
+            "Mon,Tue,Wed,Thu,Fri",
+            delay_seconds=3600.0,
+            latest_end_time="06:30",
+        )
+        self.assertEqual(after_end.state, "after-latest-end")
+
+        inactive = scheduled_mode_snapshot(
+            datetime(2026, 4, 17, 21, 0),
+            {4: ((7, 30), (19, 30))},
+            "Mon,Tue,Wed,Thu,Fri",
+            delay_seconds=3600.0,
+            latest_end_time="06:30",
+        )
+        self.assertEqual(inactive.state, "inactive-day")
         self.assertFalse(
             cutover_confirmed_off(
                 relay_on=False,

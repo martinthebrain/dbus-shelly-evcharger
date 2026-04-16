@@ -2,6 +2,7 @@
 import math
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -3034,6 +3035,47 @@ class TestUpdateCycleController(unittest.TestCase):
         self.assertEqual(second, 11.0)
         charger_backend.set_current.assert_called_once_with(11.0)
         self.assertEqual(service._charger_target_current_amps, 11.0)
+
+    def test_apply_charger_current_target_uses_scheduled_night_current_during_scheduled_night_charge(self):
+        charger_backend = SimpleNamespace(set_current=MagicMock())
+        service = SimpleNamespace(
+            _charger_backend=charger_backend,
+            auto_shelly_soft_fail_seconds=10.0,
+            _mark_failure=MagicMock(),
+            _mark_recovery=MagicMock(),
+            _warning_throttled=MagicMock(),
+            virtual_mode=2,
+            virtual_set_current=9.0,
+            min_current=6.0,
+            max_current=16.0,
+            auto_month_windows={4: ((7, 30), (19, 30))},
+            auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
+            auto_scheduled_night_start_delay_seconds=3600.0,
+            auto_scheduled_latest_end_time="06:30",
+            auto_scheduled_night_current_amps=13.0,
+            learned_charge_power_state="stable",
+            learned_charge_power_watts=2990.0,
+            learned_charge_power_updated_at=95.0,
+            learned_charge_power_phase="L1",
+            learned_charge_power_voltage=230.0,
+            phase="L1",
+            voltage_mode="phase",
+            auto_learn_charge_power_max_age_seconds=21600.0,
+            _charger_target_current_amps=None,
+            _charger_target_current_applied_at=None,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        applied = controller.apply_charger_current_target(
+            service,
+            True,
+            datetime(2026, 4, 20, 21, 0).timestamp(),
+            True,
+        )
+
+        self.assertEqual(applied, 13.0)
+        charger_backend.set_current.assert_called_once_with(13.0)
+        self.assertEqual(service._charger_target_current_amps, 13.0)
 
     def test_apply_charger_current_target_marks_charger_failure_when_current_write_raises(self):
         charger_backend = SimpleNamespace(

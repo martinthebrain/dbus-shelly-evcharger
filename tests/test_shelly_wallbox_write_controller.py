@@ -681,6 +681,51 @@ class TestDbusWriteController(unittest.TestCase):
         service._save_runtime_state.assert_called_once()
         service._save_runtime_overrides.assert_called_once()
 
+    def test_auto_runtime_setting_write_updates_scheduled_v2_settings_without_policy_rebuild(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=2,
+            virtual_autostart=1,
+            virtual_startstop=0,
+            virtual_enable=1,
+            auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
+            auto_scheduled_night_start_delay_seconds=3600.0,
+            auto_scheduled_latest_end_time="06:30",
+            auto_scheduled_night_current_amps=0.0,
+            _dbusservice={
+                "/Auto/ScheduledEnabledDays": "Mon,Tue,Wed,Thu,Fri",
+                "/Auto/ScheduledFallbackDelaySeconds": 3600.0,
+                "/Auto/ScheduledLatestEndTime": "06:30",
+                "/Auto/ScheduledNightCurrent": 0.0,
+            },
+            _time_now=MagicMock(return_value=42.0),
+            _publish_dbus_path=MagicMock(),
+            _state_summary=self._state_summary,
+            _save_runtime_state=MagicMock(),
+            _save_runtime_overrides=MagicMock(),
+            _validate_runtime_config=MagicMock(),
+        )
+        service._publish_dbus_path.side_effect = self._publish_side_effect(service)
+        controller = DbusWriteController(WriteControllerPort(service))
+
+        with patch("shelly_wallbox.controllers.write.validate_auto_policy") as validate_policy:
+            self.assertTrue(controller.handle_write("/Auto/ScheduledEnabledDays", "Mon,Wed,Fri"))
+            self.assertTrue(controller.handle_write("/Auto/ScheduledFallbackDelaySeconds", 1800.0))
+            self.assertTrue(controller.handle_write("/Auto/ScheduledLatestEndTime", "07:15"))
+            self.assertTrue(controller.handle_write("/Auto/ScheduledNightCurrent", 11.0))
+
+        self.assertEqual(service.auto_scheduled_enabled_days, "Mon,Wed,Fri")
+        self.assertEqual(service.auto_scheduled_night_start_delay_seconds, 1800.0)
+        self.assertEqual(service.auto_scheduled_latest_end_time, "07:15")
+        self.assertEqual(service.auto_scheduled_night_current_amps, 11.0)
+        self.assertEqual(service._dbusservice["/Auto/ScheduledEnabledDays"], "Mon,Wed,Fri")
+        self.assertEqual(service._dbusservice["/Auto/ScheduledFallbackDelaySeconds"], 1800.0)
+        self.assertEqual(service._dbusservice["/Auto/ScheduledLatestEndTime"], "07:15")
+        self.assertEqual(service._dbusservice["/Auto/ScheduledNightCurrent"], 11.0)
+        validate_policy.assert_not_called()
+        self.assertEqual(service._validate_runtime_config.call_count, 4)
+        self.assertEqual(service._save_runtime_state.call_count, 4)
+        self.assertEqual(service._save_runtime_overrides.call_count, 4)
+
     def test_auto_runtime_setting_write_updates_learn_charge_flag_with_policy_rebuild(self) -> None:
         service = SimpleNamespace(
             virtual_mode=1,

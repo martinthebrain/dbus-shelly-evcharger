@@ -2,6 +2,7 @@
 """Helpers for throttled DBus publishing in the Shelly wallbox service."""
 
 from dataclasses import dataclass
+from datetime import datetime
 import logging
 import math
 import time
@@ -20,7 +21,10 @@ from shelly_wallbox.core.common import (
     _fresh_charger_transport_reason,
     _fresh_charger_transport_source,
     _fresh_charger_transport_timestamp,
+    DEFAULT_SCHEDULED_ENABLED_DAYS,
     evse_fault_reason,
+    mode_uses_scheduled_logic,
+    scheduled_mode_snapshot,
 )
 from shelly_wallbox.core.contracts import (
     displayable_confirmed_read_timestamp,
@@ -570,6 +574,18 @@ class DbusPublishController:
             "/Auto/ResumeSoc": getattr(self.service, "auto_resume_soc", 0.0),
             "/Auto/StartDelaySeconds": getattr(self.service, "auto_start_delay_seconds", 0.0),
             "/Auto/StopDelaySeconds": getattr(self.service, "auto_stop_delay_seconds", 0.0),
+            "/Auto/ScheduledEnabledDays": str(
+                getattr(self.service, "auto_scheduled_enabled_days", "Mon,Tue,Wed,Thu,Fri")
+            ),
+            "/Auto/ScheduledFallbackDelaySeconds": getattr(
+                self.service,
+                "auto_scheduled_night_start_delay_seconds",
+                0.0,
+            ),
+            "/Auto/ScheduledLatestEndTime": str(
+                getattr(self.service, "auto_scheduled_latest_end_time", "06:30")
+            ),
+            "/Auto/ScheduledNightCurrent": getattr(self.service, "auto_scheduled_night_current_amps", 0.0),
             "/Auto/DbusBackoffBaseSeconds": getattr(self.service, "auto_dbus_backoff_base_seconds", 0.0),
             "/Auto/DbusBackoffMaxSeconds": getattr(self.service, "auto_dbus_backoff_max_seconds", 0.0),
             "/Auto/GridRecoveryStartSeconds": getattr(self.service, "auto_grid_recovery_start_seconds", 0.0),
@@ -663,6 +679,19 @@ class DbusPublishController:
     def _fault_active(cls, service: Any) -> int:
         """Return whether a hard EVSE fault is currently active."""
         return int(bool(cls._fault_reason(service)))
+
+    @staticmethod
+    def _scheduled_snapshot(service: Any, now: float) -> Any | None:
+        """Return the derived scheduled-mode snapshot when scheduled mode is active."""
+        if not mode_uses_scheduled_logic(getattr(service, "virtual_mode", 0)):
+            return None
+        return scheduled_mode_snapshot(
+            datetime.fromtimestamp(now),
+            getattr(service, "auto_month_windows", {}),
+            getattr(service, "auto_scheduled_enabled_days", DEFAULT_SCHEDULED_ENABLED_DAYS),
+            delay_seconds=float(getattr(service, "auto_scheduled_night_start_delay_seconds", 3600.0)),
+            latest_end_time=getattr(service, "auto_scheduled_latest_end_time", "06:30"),
+        )
 
     @staticmethod
     def _recovery_active(service: Any) -> int:
@@ -811,6 +840,7 @@ class DbusPublishController:
     def _diagnostic_counter_values(self, now: float) -> dict[str, str | int | float]:
         """Return change-driven diagnostic counters keyed by DBus path."""
         error_state = cast(dict[str, Any], self.service._error_state)
+        scheduled_snapshot = self._scheduled_snapshot(self.service, now)
         auto_state, auto_state_code = normalized_auto_state_pair(
             getattr(self.service, "_last_auto_state", "idle"),
             getattr(self.service, "_last_auto_state_code", 0),
@@ -829,6 +859,13 @@ class DbusPublishController:
             "/Auto/HealthCode": int(self.service._last_health_code),
             "/Auto/State": auto_state,
             "/Auto/StateCode": auto_state_code,
+            "/Auto/ScheduledState": "disabled" if scheduled_snapshot is None else scheduled_snapshot.state,
+            "/Auto/ScheduledStateCode": 0 if scheduled_snapshot is None else scheduled_snapshot.state_code,
+            "/Auto/ScheduledNightBoostActive": (
+                0 if scheduled_snapshot is None else int(bool(scheduled_snapshot.night_boost_active))
+            ),
+            "/Auto/ScheduledTargetDay": "" if scheduled_snapshot is None else scheduled_snapshot.target_day_label,
+            "/Auto/ScheduledTargetDate": "" if scheduled_snapshot is None else scheduled_snapshot.target_date_text,
             "/Auto/RecoveryActive": self._recovery_active(self.service),
             "/Auto/StatusSource": str(getattr(self.service, "_last_status_source", "unknown")),
             "/Auto/FaultActive": self._fault_active(self.service),

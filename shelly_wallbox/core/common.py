@@ -5,11 +5,12 @@ from __future__ import annotations
 
 from configparser import ConfigParser
 from collections.abc import Iterable
+from dataclasses import dataclass
 import logging
 import math
 import os
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any, cast
 
 from shelly_wallbox.core.contracts import finite_float_or_none
@@ -17,6 +18,7 @@ from shelly_wallbox.core.contracts import finite_float_or_none
 PhaseMeasurements = dict[str, dict[str, float]]
 TimeWindow = tuple[int, int]
 MonthRange = tuple[int, int]
+WeekdaySelection = tuple[int, ...]
 
 
 def _kwh(_p: Any, value: Any) -> str:
@@ -93,6 +95,7 @@ HEALTH_CODES: dict[str, int] = {
     "charger-transport-offline": 37,
     "charger-transport-response": 38,
     "charger-transport-error": 39,
+    "scheduled-night-charge": 40,
 }
 
 AUTO_STATE_CODES: dict[str, int] = {
@@ -103,6 +106,55 @@ AUTO_STATE_CODES: dict[str, int] = {
     "blocked": 4,
     "recovery": 5,
 }
+SCHEDULED_STATE_CODES: dict[str, int] = {
+    "disabled": 0,
+    "auto-window": 1,
+    "inactive-day": 2,
+    "waiting-fallback": 3,
+    "night-boost": 4,
+    "after-latest-end": 5,
+}
+WEEKDAY_LABELS: tuple[str, ...] = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+WEEKDAY_TOKEN_MAP: dict[str, int] = {
+    "mon": 0,
+    "monday": 0,
+    "mo": 0,
+    "tue": 1,
+    "tues": 1,
+    "tuesday": 1,
+    "tu": 1,
+    "wed": 2,
+    "wednesday": 2,
+    "we": 2,
+    "thu": 3,
+    "thur": 3,
+    "thurs": 3,
+    "thursday": 3,
+    "th": 3,
+    "fri": 4,
+    "friday": 4,
+    "fr": 4,
+    "sat": 5,
+    "saturday": 5,
+    "sa": 5,
+    "sun": 6,
+    "sunday": 6,
+    "su": 6,
+}
+DEFAULT_SCHEDULED_ENABLED_DAYS: WeekdaySelection = (0, 1, 2, 3, 4)
+
+
+@dataclass(frozen=True)
+class ScheduledModeSnapshot:
+    """Derived scheduled-mode status for one local timestamp."""
+
+    state: str
+    state_code: int
+    night_boost_active: bool
+    target_day_index: int
+    target_day_label: str
+    target_date_text: str
+    target_day_enabled: bool
 RECOVERY_AUTO_REASONS = {
     "inputs-missing",
     "battery-soc-missing",
@@ -139,7 +191,7 @@ BLOCKED_AUTO_REASONS = {
     "mode-transition",
     "contactor-interlock",
 }
-CHARGING_AUTO_REASONS = {"running", "auto-start", "auto-stop"}
+CHARGING_AUTO_REASONS = {"running", "auto-start", "auto-stop", "scheduled-night-charge"}
 WAITING_AUTO_REASONS = {"waiting", "waiting-surplus", "averaging"}
 EVSE_FAULT_HEALTH_REASONS = {
     "charger-fault",
@@ -527,6 +579,196 @@ def normalize_mode(mode: Any) -> int:
 def mode_uses_auto_logic(mode: Any) -> bool:
     """Return True when the selected mode should follow Auto surplus logic."""
     return normalize_mode(mode) in (1, 2)
+
+
+def mode_uses_scheduled_logic(mode: Any) -> bool:
+    """Return True when the selected mode should follow scheduled/plan logic."""
+    return normalize_mode(mode) == 2
+
+
+def _window_minutes_for_date(
+    window_date: date,
+    month_windows: dict[int, tuple[TimeWindow, TimeWindow]] | None,
+) -> tuple[int, int]:
+    """Return configured day-window minutes for one date, with a safe fallback."""
+    windows = month_windows or {}
+    start_window, end_window = windows.get(window_date.month, ((8, 0), (18, 0)))
+    start_hour, start_minute = start_window
+    end_hour, end_minute = end_window
+    return (start_hour * 60) + start_minute, (end_hour * 60) + end_minute
+
+
+def _datetime_for_minutes(window_date: date, minute_of_day: int) -> datetime:
+    """Return a naive local datetime for one date and minute-of-day value."""
+    hour, minute = divmod(int(minute_of_day), 60)
+    return datetime(window_date.year, window_date.month, window_date.day, hour, minute)
+
+
+def _normalized_weekday_candidates(value: Any) -> list[str]:
+    """Return lowercase weekday tokens from a string-like input."""
+    if value is None:
+        return []
+    raw_text = str(value).strip()
+    if not raw_text:
+        return []
+    lowered = raw_text.lower().replace(";", ",")
+    for separator in ("|", "/", "\\"):
+        lowered = lowered.replace(separator, ",")
+    return [token.strip() for token in lowered.replace(" ", ",").split(",") if token.strip()]
+
+
+def normalize_scheduled_enabled_days(
+    value: Any,
+    fallback: WeekdaySelection = DEFAULT_SCHEDULED_ENABLED_DAYS,
+) -> WeekdaySelection:
+    """Return one canonical tuple of enabled target weekdays for scheduled mode."""
+    if isinstance(value, (tuple, list, set, frozenset)):
+        tokens = [str(item).strip().lower() for item in value]
+    else:
+        tokens = _normalized_weekday_candidates(value)
+    if not tokens:
+        return tuple(fallback)
+    if len(tokens) == 1:
+        special = tokens[0]
+        if special in {"all", "daily", "everyday", "*"}:
+            return tuple(range(7))
+        if special in {"weekdays", "weekday", "workdays", "workday", "mon-fri", "mo-fr"}:
+            return DEFAULT_SCHEDULED_ENABLED_DAYS
+        if special in {"weekend", "weekends", "sat-sun", "sa-su"}:
+            return (5, 6)
+
+    normalized: list[int] = []
+    for token in tokens:
+        if token in WEEKDAY_TOKEN_MAP:
+            weekday = WEEKDAY_TOKEN_MAP[token]
+            if weekday not in normalized:
+                normalized.append(weekday)
+            continue
+        if "-" not in token:
+            continue
+        start_token, end_token = [part.strip() for part in token.split("-", 1)]
+        start_day = WEEKDAY_TOKEN_MAP.get(start_token)
+        end_day = WEEKDAY_TOKEN_MAP.get(end_token)
+        if start_day is None or end_day is None:
+            continue
+        current = start_day
+        while True:
+            if current not in normalized:
+                normalized.append(current)
+            if current == end_day:
+                break
+            current = (current + 1) % 7
+    return tuple(normalized) if normalized else tuple(fallback)
+
+
+def scheduled_enabled_days_text(
+    value: Any,
+    fallback: WeekdaySelection = DEFAULT_SCHEDULED_ENABLED_DAYS,
+) -> str:
+    """Return one stable CSV form of scheduled target weekdays."""
+    return ",".join(WEEKDAY_LABELS[index] for index in normalize_scheduled_enabled_days(value, fallback))
+
+
+def normalize_hhmm_text(value: Any, fallback: str = "06:30") -> str:
+    """Return one canonical HH:MM text or the fallback when invalid."""
+    fallback_window = parse_hhmm(fallback, (6, 30))
+    hour, minute = parse_hhmm(value, fallback_window)
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _scheduled_target_day(when: datetime, month_windows: dict[int, tuple[TimeWindow, TimeWindow]] | None) -> date:
+    """Return the target morning date controlled by one local timestamp."""
+    current_minutes = when.hour * 60 + when.minute
+    today = when.date()
+    start_minutes, end_minutes = _window_minutes_for_date(today, month_windows)
+    if start_minutes < end_minutes and current_minutes >= end_minutes:
+        return today + timedelta(days=1)
+    return today
+
+
+def scheduled_mode_snapshot(
+    when: datetime,
+    month_windows: dict[int, tuple[TimeWindow, TimeWindow]] | None,
+    enabled_days: Any,
+    delay_seconds: float = 3600.0,
+    latest_end_time: Any = "06:30",
+) -> ScheduledModeSnapshot:
+    """Return the scheduled-mode policy state for one local timestamp."""
+    target_date = _scheduled_target_day(when, month_windows)
+    target_day_index = int(target_date.weekday())
+    enabled_tuple = normalize_scheduled_enabled_days(enabled_days)
+    target_enabled = target_day_index in enabled_tuple
+    start_minutes, end_minutes = _window_minutes_for_date(target_date, month_windows)
+    current_minutes = when.hour * 60 + when.minute
+    if start_minutes < end_minutes and start_minutes <= current_minutes < end_minutes and when.date() == target_date:
+        return ScheduledModeSnapshot(
+            state="auto-window",
+            state_code=SCHEDULED_STATE_CODES["auto-window"],
+            night_boost_active=False,
+            target_day_index=target_day_index,
+            target_day_label=WEEKDAY_LABELS[target_day_index],
+            target_date_text=target_date.isoformat(),
+            target_day_enabled=target_enabled,
+        )
+
+    if not target_enabled:
+        return ScheduledModeSnapshot(
+            state="inactive-day",
+            state_code=SCHEDULED_STATE_CODES["inactive-day"],
+            night_boost_active=False,
+            target_day_index=target_day_index,
+            target_day_label=WEEKDAY_LABELS[target_day_index],
+            target_date_text=target_date.isoformat(),
+            target_day_enabled=False,
+        )
+
+    delay_seconds = max(0.0, float(delay_seconds))
+    latest_end_hour, latest_end_minute = parse_hhmm(latest_end_time, (6, 30))
+    latest_end_dt = datetime(
+        target_date.year,
+        target_date.month,
+        target_date.day,
+        latest_end_hour,
+        latest_end_minute,
+    )
+    previous_day = target_date - timedelta(days=1)
+    _previous_start_minutes, previous_end_minutes = _window_minutes_for_date(previous_day, month_windows)
+    fallback_start = _datetime_for_minutes(previous_day, previous_end_minutes) + timedelta(seconds=delay_seconds)
+    daytime_start = _datetime_for_minutes(target_date, start_minutes)
+    night_boost_end = min(latest_end_dt, daytime_start)
+
+    if when < fallback_start:
+        state = "waiting-fallback"
+    elif when < night_boost_end:
+        state = "night-boost"
+    elif when.date() == target_date and (start_minutes < end_minutes and current_minutes >= start_minutes):
+        state = "auto-window"
+    else:
+        state = "after-latest-end"
+    return ScheduledModeSnapshot(
+        state=state,
+        state_code=SCHEDULED_STATE_CODES[state],
+        night_boost_active=(state == "night-boost"),
+        target_day_index=target_day_index,
+        target_day_label=WEEKDAY_LABELS[target_day_index],
+        target_date_text=target_date.isoformat(),
+        target_day_enabled=True,
+    )
+
+
+def scheduled_night_window_active(
+    when: datetime,
+    month_windows: dict[int, tuple[TimeWindow, TimeWindow]] | None,
+    delay_seconds: float = 3600.0,
+) -> bool:
+    """Return whether plan mode should force nighttime charging for one local time."""
+    return scheduled_mode_snapshot(
+        when,
+        month_windows,
+        DEFAULT_SCHEDULED_ENABLED_DAYS,
+        delay_seconds=delay_seconds,
+        latest_end_time="23:59",
+    ).night_boost_active
 
 
 def parse_hhmm(value: Any, fallback: TimeWindow) -> TimeWindow:

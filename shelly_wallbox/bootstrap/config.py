@@ -17,9 +17,10 @@ import configparser
 from collections.abc import Callable
 from typing import Any
 
-from shelly_wallbox.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
 from shelly_wallbox.auto.policy import load_auto_policy_from_config
 from shelly_wallbox.backend.config import load_backend_selection
+from shelly_wallbox.core.common import DEFAULT_SCHEDULED_ENABLED_DAYS, normalize_hhmm_text, scheduled_enabled_days_text
+from shelly_wallbox.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
 
 MONTH_WINDOW_DEFAULTS: dict[int, tuple[str, str]] = {
     1: ("09:00", "16:30"),
@@ -201,6 +202,20 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
             "on",
         )
         svc.auto_month_windows = _seasonal_month_windows(svc.config, self._month_window)
+        svc.auto_scheduled_night_start_delay_seconds = float(
+            _config_value(defaults, "AutoScheduledNightStartDelaySeconds", 3600)
+        )
+        svc.auto_scheduled_enabled_days = scheduled_enabled_days_text(
+            defaults.get("AutoScheduledEnabledDays", "Mon,Tue,Wed,Thu,Fri"),
+            DEFAULT_SCHEDULED_ENABLED_DAYS,
+        )
+        svc.auto_scheduled_latest_end_time = normalize_hhmm_text(
+            defaults.get("AutoScheduledLatestEndTime", "06:30"),
+            "06:30",
+        )
+        svc.auto_scheduled_night_current_amps = float(
+            _config_value(defaults, "AutoScheduledNightCurrentAmps", 0)
+        )
         svc.auto_night_lock_stop = defaults.get("AutoNightLockStop", "0").strip().lower() in (
             "1",
             "true",

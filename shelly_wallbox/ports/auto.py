@@ -75,7 +75,11 @@ class AutoDecisionPort(_ControllerBoundPort):
         "virtual_startstop",
         "auto_daytime_only",
         "auto_month_windows",
+        "auto_scheduled_enabled_days",
+        "auto_scheduled_night_start_delay_seconds",
+        "auto_scheduled_latest_end_time",
         "auto_audit_log",
+        "auto_scheduled_night_current_amps",
     }
 
     _ALLOWED_METHODS = {

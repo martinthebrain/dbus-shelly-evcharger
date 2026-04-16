@@ -15,9 +15,16 @@ from __future__ import annotations
 
 import logging
 import platform
+import time
+from datetime import datetime
 from collections.abc import Callable
 from typing import Any
 
+from shelly_wallbox.core.common import (
+    DEFAULT_SCHEDULED_ENABLED_DAYS,
+    mode_uses_scheduled_logic,
+    scheduled_mode_snapshot,
+)
 from shelly_wallbox.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
 PathSpec = tuple[Any, Callable[[Any, Any], str] | None]
 PathMap = dict[str, PathSpec]
@@ -106,6 +113,16 @@ class _ServiceBootstrapPathMixin(_ComposableControllerMixin):
             "/Auto/ResumeSoc": (getattr(svc, "auto_resume_soc", 0.0), None),
             "/Auto/StartDelaySeconds": (getattr(svc, "auto_start_delay_seconds", 0.0), None),
             "/Auto/StopDelaySeconds": (getattr(svc, "auto_stop_delay_seconds", 0.0), None),
+            "/Auto/ScheduledEnabledDays": (
+                str(getattr(svc, "auto_scheduled_enabled_days", "Mon,Tue,Wed,Thu,Fri")),
+                None,
+            ),
+            "/Auto/ScheduledFallbackDelaySeconds": (
+                getattr(svc, "auto_scheduled_night_start_delay_seconds", 0.0),
+                None,
+            ),
+            "/Auto/ScheduledLatestEndTime": (str(getattr(svc, "auto_scheduled_latest_end_time", "06:30")), None),
+            "/Auto/ScheduledNightCurrent": (getattr(svc, "auto_scheduled_night_current_amps", 0.0), None),
             "/Auto/DbusBackoffBaseSeconds": (getattr(svc, "auto_dbus_backoff_base_seconds", 0.0), None),
             "/Auto/DbusBackoffMaxSeconds": (getattr(svc, "auto_dbus_backoff_max_seconds", 0.0), None),
             "/Auto/GridRecoveryStartSeconds": (getattr(svc, "auto_grid_recovery_start_seconds", 0.0), None),
@@ -159,11 +176,20 @@ class _ServiceBootstrapPathMixin(_ComposableControllerMixin):
     def _diagnostic_paths(self) -> PathMap:
         """Return Auto-diagnostic DBus paths published by the service."""
         svc = self.service
+        scheduled_snapshot = self._scheduled_snapshot()
         return {
             "/Auto/Health": (svc._last_health_reason, None),
             "/Auto/HealthCode": (svc._last_health_code, None),
             "/Auto/State": (getattr(svc, "_last_auto_state", "idle"), None),
             "/Auto/StateCode": (getattr(svc, "_last_auto_state_code", 0), None),
+            "/Auto/ScheduledState": ("disabled" if scheduled_snapshot is None else scheduled_snapshot.state, None),
+            "/Auto/ScheduledStateCode": (0 if scheduled_snapshot is None else scheduled_snapshot.state_code, None),
+            "/Auto/ScheduledNightBoostActive": (
+                0 if scheduled_snapshot is None else int(bool(scheduled_snapshot.night_boost_active)),
+                None,
+            ),
+            "/Auto/ScheduledTargetDay": ("" if scheduled_snapshot is None else scheduled_snapshot.target_day_label, None),
+            "/Auto/ScheduledTargetDate": ("" if scheduled_snapshot is None else scheduled_snapshot.target_date_text, None),
             "/Auto/RecoveryActive": (0, None),
             "/Auto/StatusSource": (str(getattr(svc, "_last_status_source", "unknown")), None),
             "/Auto/FaultActive": (0, None),
@@ -246,3 +272,16 @@ class _ServiceBootstrapPathMixin(_ComposableControllerMixin):
             **self._control_paths(),
             **self._diagnostic_paths(),
         }
+
+    def _scheduled_snapshot(self) -> Any | None:
+        """Return one initial scheduled-mode diagnostic snapshot for path registration."""
+        svc = self.service
+        if not mode_uses_scheduled_logic(getattr(svc, "virtual_mode", 0)):
+            return None
+        return scheduled_mode_snapshot(
+            datetime.fromtimestamp(time.time()),
+            getattr(svc, "auto_month_windows", {}),
+            getattr(svc, "auto_scheduled_enabled_days", DEFAULT_SCHEDULED_ENABLED_DAYS),
+            delay_seconds=float(getattr(svc, "auto_scheduled_night_start_delay_seconds", 3600.0)),
+            latest_end_time=getattr(svc, "auto_scheduled_latest_end_time", "06:30"),
+        )

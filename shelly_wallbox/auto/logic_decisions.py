@@ -222,6 +222,29 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
         )
         return False
 
+    def _scheduled_night_decision(
+        self,
+        relay_on: bool,
+        now: float,
+        cached_inputs: bool,
+    ) -> bool:
+        """Return the relay decision for scheduled/plan mode nighttime fallback."""
+        svc = self.service
+        decision = self._handle_common_runtime_gates(relay_on, now, cached_inputs)
+        if decision is not self._NO_DECISION:
+            assert isinstance(decision, bool)
+            return decision
+        if relay_on:
+            return cast(bool, self._running_result_with_health("scheduled-night-charge", cached_inputs))
+        if not svc.virtual_autostart:
+            return cast(bool, self._idle_result_with_health("autostart-disabled", cached_inputs))
+        if not self._minimum_offtime_elapsed(now):
+            return cast(bool, self._idle_result_with_health("waiting-offtime", cached_inputs))
+        svc.auto_start_condition_since = None
+        svc.auto_stop_condition_since = None
+        svc.auto_stop_condition_reason = None
+        return cast(bool, self._running_result_with_health("scheduled-night-charge", cached_inputs))
+
     def _pre_average_decision(
         self,
         relay_on: bool,
@@ -242,6 +265,8 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
         )
         if early_decision is not None:
             return early_decision
+        if self._scheduled_night_charge_active(now):
+            return NO_RELAY_DECISION, None
         battery_soc, early_decision = self._pre_average_battery_soc_result(
             battery_soc,
             relay_on,
@@ -341,6 +366,8 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
         cached_inputs: bool,
     ) -> RelayDecisionState:
         """Return any early decision caused by missing/stale grid input or recovery gates."""
+        if self._scheduled_night_charge_active(now):
+            return NO_RELAY_DECISION
         if not self._grid_recently_read(grid_power, now):
             return RelayDecisionState.resolved(self._handle_grid_missing(relay_on, now, cached_inputs))
         return self._decision_state(self._handle_grid_recovery_start_gate(relay_on, now, cached_inputs))
@@ -489,6 +516,8 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
         resolved = self._resolved_auto_decision(pre_average_decision)
         if resolved is not None:
             return resolved
+        if self._scheduled_night_charge_active(now):
+            return self._scheduled_night_decision(relay_on, now, cached_inputs)
         pv_power, battery_soc, grid_power = self._required_average_inputs(pv_power, battery_soc, grid_power)
         averages = self._averaged_auto_metrics(
             now,

@@ -23,6 +23,8 @@ from shelly_wallbox.core.common import (
     auto_state_code as _auto_state_code,
     derive_auto_state as _derive_auto_state,
     fresh_confirmed_relay_output as _fresh_confirmed_relay_output,
+    mode_uses_scheduled_logic as _mode_uses_scheduled_logic,
+    scheduled_mode_snapshot as _scheduled_mode_snapshot,
 )
 from shelly_wallbox.core.contracts import normalized_auto_decision_trace, thresholds_ordered
 from shelly_wallbox.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
@@ -264,6 +266,20 @@ class _AutoDecisionSamplesMixin(_ComposableControllerMixin):
         current_minutes = current_dt.hour * 60 + current_dt.minute
         start_minutes, end_minutes = self._daytime_window_minutes_for_month(current_dt.month)
         return self._minutes_within_daytime_window(current_minutes, start_minutes, end_minutes)
+
+    def _scheduled_night_charge_active(self, now: float | None = None) -> bool:
+        """Return whether scheduled/plan mode should force nighttime charging."""
+        svc = self.service
+        if not _mode_uses_scheduled_logic(getattr(svc, "virtual_mode", 0)):
+            return False
+        current_time = self._learning_policy_now() if now is None else float(now)
+        return _scheduled_mode_snapshot(
+            datetime.fromtimestamp(current_time),
+            getattr(svc, "auto_month_windows", {}),
+            getattr(svc, "auto_scheduled_enabled_days", "Mon,Tue,Wed,Thu,Fri"),
+            delay_seconds=float(getattr(svc, "auto_scheduled_night_start_delay_seconds", 3600.0)),
+            latest_end_time=getattr(svc, "auto_scheduled_latest_end_time", "06:30"),
+        ).night_boost_active
 
     def _daytime_window_minutes_for_month(self, month: int) -> tuple[int, int]:
         """Return configured daytime start/end minutes for one month."""

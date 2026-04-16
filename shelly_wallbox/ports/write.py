@@ -13,6 +13,7 @@ from shelly_wallbox.backend.models import (
     normalize_phase_selection,
     normalize_phase_selection_tuple,
 )
+from shelly_wallbox.core.common import DEFAULT_SCHEDULED_ENABLED_DAYS, normalize_hhmm_text, scheduled_enabled_days_text
 from shelly_wallbox.core.contracts import (
     finite_float_or_none,
     non_negative_int,
@@ -41,6 +42,10 @@ class WriteControllerPort(_BaseServicePort):
         "auto_resume_soc",
         "auto_start_delay_seconds",
         "auto_stop_delay_seconds",
+        "auto_scheduled_enabled_days",
+        "auto_scheduled_night_start_delay_seconds",
+        "auto_scheduled_latest_end_time",
+        "auto_scheduled_night_current_amps",
         "auto_dbus_backoff_base_seconds",
         "auto_dbus_backoff_max_seconds",
         "auto_grid_recovery_start_seconds",
@@ -181,6 +186,48 @@ class WriteControllerPort(_BaseServicePort):
     @auto_stop_delay_seconds.setter
     def auto_stop_delay_seconds(self, value: Any) -> None:
         self._service.auto_stop_delay_seconds = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_scheduled_enabled_days(self) -> str:
+        return scheduled_enabled_days_text(
+            getattr(self._service, "auto_scheduled_enabled_days", DEFAULT_SCHEDULED_ENABLED_DAYS),
+            DEFAULT_SCHEDULED_ENABLED_DAYS,
+        )
+
+    @auto_scheduled_enabled_days.setter
+    def auto_scheduled_enabled_days(self, value: Any) -> None:
+        self._service.auto_scheduled_enabled_days = scheduled_enabled_days_text(
+            value,
+            DEFAULT_SCHEDULED_ENABLED_DAYS,
+        )
+
+    @property
+    def auto_scheduled_night_start_delay_seconds(self) -> float:
+        return float(
+            finite_float_or_none(getattr(self._service, "auto_scheduled_night_start_delay_seconds", 0.0)) or 0.0
+        )
+
+    @auto_scheduled_night_start_delay_seconds.setter
+    def auto_scheduled_night_start_delay_seconds(self, value: Any) -> None:
+        self._service.auto_scheduled_night_start_delay_seconds = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_scheduled_latest_end_time(self) -> str:
+        return normalize_hhmm_text(getattr(self._service, "auto_scheduled_latest_end_time", "06:30"), "06:30")
+
+    @auto_scheduled_latest_end_time.setter
+    def auto_scheduled_latest_end_time(self, value: Any) -> None:
+        self._service.auto_scheduled_latest_end_time = normalize_hhmm_text(value, "06:30")
+
+    @property
+    def auto_scheduled_night_current_amps(self) -> float:
+        return float(
+            finite_float_or_none(getattr(self._service, "auto_scheduled_night_current_amps", 0.0)) or 0.0
+        )
+
+    @auto_scheduled_night_current_amps.setter
+    def auto_scheduled_night_current_amps(self, value: Any) -> None:
+        self._service.auto_scheduled_night_current_amps = float(finite_float_or_none(value) or 0.0)
 
     @property
     def auto_dbus_backoff_base_seconds(self) -> float:

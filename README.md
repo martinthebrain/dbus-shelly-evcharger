@@ -29,6 +29,7 @@ Older Python-2-only Venus installations are not the target setup.
 The codebase supports:
 - Manual charging control from the Victron GUI
 - Auto mode based on PV surplus, grid import, and battery SOC
+- Scheduled/Plan mode (`/Mode = 2`) with Auto-by-day plus overnight full-charge fallback
 - Helper-process based DBus input polling for better runtime stability
 - Audit logging for Auto-mode decisions
 - Watchdog and recovery behavior for stale helper snapshots or Shelly faults
@@ -163,6 +164,52 @@ Additional guards:
 - a high-SOC profile can switch to more permissive start/stop thresholds
 - stop smoothing uses EWMA and can adapt to volatile weather conditions
 
+## Scheduled / Plan Mode
+
+Venus OS exposes a third EV charger mode besides Manual and Auto. This service
+maps that mode to `/Mode = 2`.
+
+`/Mode = 2` behaves like normal Auto mode during the configured daytime window.
+Outside that window it can switch into a scheduled night fallback that is tuned
+for "charge with PV during the day, but still be ready the next morning".
+
+Scheduled mode v2 adds four policy inputs:
+
+- `AutoScheduledEnabledDays`
+  Target weekdays for the next morning, for example `Mon,Tue,Wed,Thu,Fri`
+- `AutoScheduledNightStartDelaySeconds`
+  How long to wait after the configured month-specific daytime end before night
+  fallback may begin
+- `AutoScheduledLatestEndTime`
+  Morning cutoff for the fallback window, for example `06:30`
+- `AutoScheduledNightCurrentAmps`
+  Dedicated fallback current for night charging; `0` means `MaxCurrent`
+
+The target-day logic is intentional: with `Mon,Tue,Wed,Thu,Fri`, a Sunday night
+fallback may run so the vehicle is ready for Monday morning, while a Friday
+night fallback does not run for Saturday morning.
+
+When the current time falls into an active scheduled fallback window:
+
+- charging may start even without PV surplus, battery SOC, or live helper input
+- the relay is kept enabled overnight
+- native charger-current control, when available, is driven to
+  `AutoScheduledNightCurrentAmps` or `MaxCurrent` if that value is `0`
+- once the next daytime window opens, or the configured latest end time is
+  reached, the service falls back to normal Auto behavior again
+
+This makes a common weekday strategy possible: use PV surplus while the sun is
+up, then guarantee a full vehicle by morning.
+
+Scheduled diagnostics are exposed on DBus and therefore also via the Venus MQTT
+bridge:
+
+- `/Auto/ScheduledState`
+- `/Auto/ScheduledStateCode`
+- `/Auto/ScheduledNightBoostActive`
+- `/Auto/ScheduledTargetDay`
+- `/Auto/ScheduledTargetDate`
+
 ## Configuration
 
 The wallbox uses `deploy/venus/config.shelly_wallbox.ini`.
@@ -269,6 +316,10 @@ Current persistent runtime-override paths include:
 - `/Auto/PhaseMismatchRetrySeconds`
 - `/Auto/PhaseMismatchLockoutCount`
 - `/Auto/PhaseMismatchLockoutSeconds`
+- `/Auto/ScheduledEnabledDays`
+- `/Auto/ScheduledFallbackDelaySeconds`
+- `/Auto/ScheduledLatestEndTime`
+- `/Auto/ScheduledNightCurrent`
 
 The active override state is visible on DBus via:
 

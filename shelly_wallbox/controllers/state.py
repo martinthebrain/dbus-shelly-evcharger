@@ -3,6 +3,7 @@
 
 import configparser
 from dataclasses import dataclass
+from datetime import datetime
 import json
 import logging
 import os
@@ -23,7 +24,12 @@ from shelly_wallbox.core.common import (
     _fresh_charger_retry_source,
     _fresh_charger_transport_reason,
     _fresh_charger_transport_source,
+    DEFAULT_SCHEDULED_ENABLED_DAYS,
     evse_fault_reason,
+    mode_uses_scheduled_logic,
+    normalize_hhmm_text,
+    scheduled_enabled_days_text,
+    scheduled_mode_snapshot,
 )
 from shelly_wallbox.core.contracts import (
     finite_float_or_none,
@@ -58,6 +64,30 @@ RUNTIME_OVERRIDE_SPECS: tuple[RuntimeOverrideSpec, ...] = (
     RuntimeOverrideSpec("/Auto/ResumeSoc", "AutoResumeSoc", "auto_resume_soc", "float"),
     RuntimeOverrideSpec("/Auto/StartDelaySeconds", "AutoStartDelaySeconds", "auto_start_delay_seconds", "float"),
     RuntimeOverrideSpec("/Auto/StopDelaySeconds", "AutoStopDelaySeconds", "auto_stop_delay_seconds", "float"),
+    RuntimeOverrideSpec(
+        "/Auto/ScheduledEnabledDays",
+        "AutoScheduledEnabledDays",
+        "auto_scheduled_enabled_days",
+        "weekday_set",
+    ),
+    RuntimeOverrideSpec(
+        "/Auto/ScheduledFallbackDelaySeconds",
+        "AutoScheduledNightStartDelaySeconds",
+        "auto_scheduled_night_start_delay_seconds",
+        "float",
+    ),
+    RuntimeOverrideSpec(
+        "/Auto/ScheduledLatestEndTime",
+        "AutoScheduledLatestEndTime",
+        "auto_scheduled_latest_end_time",
+        "hhmm",
+    ),
+    RuntimeOverrideSpec(
+        "/Auto/ScheduledNightCurrent",
+        "AutoScheduledNightCurrentAmps",
+        "auto_scheduled_night_current_amps",
+        "float",
+    ),
     RuntimeOverrideSpec(
         "/Auto/DbusBackoffBaseSeconds",
         "AutoDbusBackoffBaseSeconds",
@@ -216,6 +246,7 @@ class ServiceStateController:
         "auto_min_offtime_seconds",
         "auto_start_delay_seconds",
         "auto_stop_delay_seconds",
+        "auto_scheduled_night_start_delay_seconds",
         "auto_input_cache_seconds",
         "auto_input_helper_restart_seconds",
         "auto_input_helper_stale_seconds",
@@ -422,9 +453,24 @@ class ServiceStateController:
         """Return whether the broad Auto state currently represents recovery."""
         return "1" if str(getattr(svc, "_last_auto_state", "idle")) == "recovery" else "0"
 
+    @classmethod
+    def _scheduled_snapshot(cls, svc: Any, current_time: float) -> Any | None:
+        """Return one derived scheduled-mode snapshot when the mode is active."""
+        if not mode_uses_scheduled_logic(getattr(svc, "virtual_mode", 0)):
+            return None
+        return scheduled_mode_snapshot(
+            datetime.fromtimestamp(current_time),
+            getattr(svc, "auto_month_windows", {}),
+            getattr(svc, "auto_scheduled_enabled_days", DEFAULT_SCHEDULED_ENABLED_DAYS),
+            delay_seconds=float(getattr(svc, "auto_scheduled_night_start_delay_seconds", 3600.0)),
+            latest_end_time=getattr(svc, "auto_scheduled_latest_end_time", "06:30"),
+        )
+
     def state_summary(self) -> str:
         """Return a compact runtime state summary for debug logging."""
         svc = self.service
+        current_time = time.time()
+        scheduled_snapshot = self._scheduled_snapshot(svc, current_time)
         parts = (
             f"mode={getattr(svc, 'virtual_mode', 'na')}",
             f"enable={getattr(svc, 'virtual_enable', 'na')}",
@@ -465,6 +511,9 @@ class ServiceStateController:
             f"fault={self._summary_fault_active(svc)}",
             f"fault_reason={self._summary_fault_reason(svc)}",
             f"auto_state={getattr(svc, '_last_auto_state', 'na')}",
+            f"scheduled_state={self._summary_text(None if scheduled_snapshot is None else scheduled_snapshot.state, 'na')}",
+            f"scheduled_target_day={self._summary_text(None if scheduled_snapshot is None else scheduled_snapshot.target_day_label, 'na')}",
+            f"scheduled_boost={self._summary_flag(False if scheduled_snapshot is None else scheduled_snapshot.night_boost_active)}",
             f"recovery={self._summary_recovery_active(svc)}",
             f"health={getattr(svc, '_last_health_reason', 'na')}",
         )
@@ -626,14 +675,32 @@ class ServiceStateController:
             return str(ServiceStateController.coerce_runtime_int(value))
         if spec.value_kind == "phase":
             return str(ServiceStateController._normalize_runtime_phase_selection(value))
+        if spec.value_kind == "weekday_set":
+            return scheduled_enabled_days_text(value, DEFAULT_SCHEDULED_ENABLED_DAYS)
+        if spec.value_kind == "hhmm":
+            return normalize_hhmm_text(value, "06:30")
         return str(ServiceStateController.coerce_runtime_float(value))
+
+    @staticmethod
+    def _runtime_override_default_value(spec: RuntimeOverrideSpec) -> object:
+        """Return one safe fallback when a narrow test double lacks an override attr."""
+        if spec.value_kind in {"bool", "int"}:
+            return 0
+        if spec.value_kind == "phase":
+            return "P1"
+        if spec.value_kind == "weekday_set":
+            return DEFAULT_SCHEDULED_ENABLED_DAYS
+        if spec.value_kind == "hhmm":
+            return "06:30"
+        return 0.0
 
     def current_runtime_overrides(self) -> dict[str, str]:
         """Return the persistent runtime override payload as config-keyed text values."""
         svc = self.service
         values: dict[str, str] = {}
         for spec in RUNTIME_OVERRIDE_SPECS:
-            values[spec.config_key] = self._override_value_as_text(spec, getattr(svc, spec.attr_name))
+            raw_value = getattr(svc, spec.attr_name, self._runtime_override_default_value(spec))
+            values[spec.config_key] = self._override_value_as_text(spec, raw_value)
         return values
 
     def _serialized_runtime_overrides(self) -> str:
@@ -1131,12 +1198,29 @@ class ServiceStateController:
         self._clamp_min_int(svc, "sign_of_life_minutes", 1, "SignOfLifeLog", " minute")
         self._clamp_min_int(svc, "auto_pv_max_services", 1, "AutoPvMaxServices", "")
         self._clamp_interval_settings()
+        self._validate_scheduled_runtime_config(svc)
         self._validate_startup_retry_config(svc)
         self._validate_timeout_settings(svc)
         if hasattr(svc, "auto_policy"):
             validate_auto_policy(svc.auto_policy, svc)
         else:
             self._validate_legacy_auto_config(svc)
+
+    @staticmethod
+    def _validate_scheduled_runtime_config(svc: Any) -> None:
+        """Normalize scheduled-mode runtime settings to stable safe values."""
+        if hasattr(svc, "auto_scheduled_enabled_days"):
+            svc.auto_scheduled_enabled_days = scheduled_enabled_days_text(
+                getattr(svc, "auto_scheduled_enabled_days", DEFAULT_SCHEDULED_ENABLED_DAYS),
+                DEFAULT_SCHEDULED_ENABLED_DAYS,
+            )
+        if hasattr(svc, "auto_scheduled_latest_end_time"):
+            svc.auto_scheduled_latest_end_time = normalize_hhmm_text(
+                getattr(svc, "auto_scheduled_latest_end_time", "06:30"),
+                "06:30",
+            )
+        if hasattr(svc, "auto_scheduled_night_current_amps"):
+            ServiceStateController._clamp_non_negative_float(svc, "auto_scheduled_night_current_amps")
 
     @staticmethod
     def _validate_startup_retry_config(svc: Any) -> None:
@@ -1200,6 +1284,7 @@ class ServiceStateController:
         for attr_name in (
             "auto_grid_recovery_start_seconds",
             "auto_stop_surplus_delay_seconds",
+            "auto_scheduled_night_start_delay_seconds",
             "auto_stop_surplus_volatility_low_watts",
             "auto_stop_surplus_volatility_high_watts",
             "auto_phase_upshift_headroom_watts",

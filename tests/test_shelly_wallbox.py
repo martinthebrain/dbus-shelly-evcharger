@@ -162,6 +162,7 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         service.auto_watchdog_stale_seconds = -1
         service.auto_watchdog_recovery_seconds = -1
         service.auto_startup_warmup_seconds = -1
+        service.auto_scheduled_night_start_delay_seconds = -1
         service.auto_manual_override_seconds = -1
         service.startup_device_info_retry_seconds = -1
         service.startup_device_info_retries = -1
@@ -185,6 +186,7 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         self.assertEqual(service.auto_watchdog_stale_seconds, 0.0)
         self.assertEqual(service.auto_watchdog_recovery_seconds, 0.0)
         self.assertEqual(service.auto_startup_warmup_seconds, 0.0)
+        self.assertEqual(service.auto_scheduled_night_start_delay_seconds, 0.0)
         self.assertEqual(service.auto_manual_override_seconds, 0.0)
         self.assertEqual(service.startup_device_info_retry_seconds, 0.0)
         self.assertEqual(service.startup_device_info_retries, 0)

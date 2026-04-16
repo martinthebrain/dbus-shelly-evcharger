@@ -41,6 +41,10 @@ class DbusWriteController:
         "/Auto/ResumeSoc",
         "/Auto/StartDelaySeconds",
         "/Auto/StopDelaySeconds",
+        "/Auto/ScheduledEnabledDays",
+        "/Auto/ScheduledFallbackDelaySeconds",
+        "/Auto/ScheduledLatestEndTime",
+        "/Auto/ScheduledNightCurrent",
         "/Auto/DbusBackoffBaseSeconds",
         "/Auto/DbusBackoffMaxSeconds",
         "/Auto/GridRecoveryStartSeconds",
@@ -427,6 +431,7 @@ class DbusWriteController:
         """Apply one writable Auto tuning value that may persist in runtime overrides."""
         port = self.port
         current_time = port.time_now()
+        target_value: Any
         if path == "/Auto/StartSurplusWatts":
             port.auto_start_surplus_watts = float(value)
             self._sync_auto_policy_runtime(port)
@@ -451,6 +456,22 @@ class DbusWriteController:
             port.auto_stop_delay_seconds = float(value)
             port.validate_runtime_config()
             target_value = float(port.auto_stop_delay_seconds)
+        elif path == "/Auto/ScheduledEnabledDays":
+            port.auto_scheduled_enabled_days = value
+            port.validate_runtime_config()
+            target_value = str(port.auto_scheduled_enabled_days)
+        elif path == "/Auto/ScheduledFallbackDelaySeconds":
+            port.auto_scheduled_night_start_delay_seconds = float(value)
+            port.validate_runtime_config()
+            target_value = float(port.auto_scheduled_night_start_delay_seconds)
+        elif path == "/Auto/ScheduledLatestEndTime":
+            port.auto_scheduled_latest_end_time = value
+            port.validate_runtime_config()
+            target_value = str(port.auto_scheduled_latest_end_time)
+        elif path == "/Auto/ScheduledNightCurrent":
+            port.auto_scheduled_night_current_amps = float(value)
+            port.validate_runtime_config()
+            target_value = float(port.auto_scheduled_night_current_amps)
         elif path == "/Auto/DbusBackoffBaseSeconds":
             port.auto_dbus_backoff_base_seconds = float(value)
             port.validate_runtime_config()

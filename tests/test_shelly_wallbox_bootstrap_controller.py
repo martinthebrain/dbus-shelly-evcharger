@@ -120,6 +120,11 @@ class TestServiceBootstrapController(unittest.TestCase):
             auto_resume_soc=50.0,
             auto_start_delay_seconds=10.0,
             auto_stop_delay_seconds=30.0,
+            auto_month_windows={4: ((7, 30), (19, 30))},
+            auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
+            auto_scheduled_night_start_delay_seconds=3600.0,
+            auto_scheduled_latest_end_time="06:30",
+            auto_scheduled_night_current_amps=13.0,
             auto_dbus_backoff_base_seconds=5.0,
             auto_dbus_backoff_max_seconds=60.0,
             auto_grid_recovery_start_seconds=14.0,
@@ -162,6 +167,10 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service._dbusservice.paths["/Mode"]["value"], 0)
         self.assertEqual(service._dbusservice.paths["/PhaseSelection"]["value"], "P1")
         self.assertEqual(service._dbusservice.paths["/Auto/StartSurplusWatts"]["value"], 1850.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledEnabledDays"]["value"], "Mon,Tue,Wed,Thu,Fri")
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledFallbackDelaySeconds"]["value"], 3600.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledLatestEndTime"]["value"], "06:30")
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledNightCurrent"]["value"], 13.0)
         self.assertEqual(service._dbusservice.paths["/Auto/DbusBackoffBaseSeconds"]["value"], 5.0)
         self.assertEqual(service._dbusservice.paths["/Auto/GridRecoveryStartSeconds"]["value"], 14.0)
         self.assertEqual(service._dbusservice.paths["/Auto/StopSurplusVolatilityLowWatts"]["value"], 80.0)
@@ -174,6 +183,11 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service._dbusservice.paths["/Auto/PhaseMismatchLockoutCount"]["value"], 3)
         self.assertEqual(service._dbusservice.paths["/Auto/State"]["value"], "idle")
         self.assertEqual(service._dbusservice.paths["/Auto/StateCode"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledState"]["value"], "disabled")
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledStateCode"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledNightBoostActive"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledTargetDay"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledTargetDate"]["value"], "")
         self.assertEqual(service._dbusservice.paths["/Auto/RecoveryActive"]["value"], 0)
         self.assertEqual(service._dbusservice.paths["/Auto/StatusSource"]["value"], "unknown")
         self.assertEqual(service._dbusservice.paths["/Auto/FaultActive"]["value"], 0)
@@ -226,6 +240,10 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertTrue(service._dbusservice.paths["/Mode"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/PhaseSelection"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/Auto/StartSurplusWatts"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/ScheduledEnabledDays"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/ScheduledFallbackDelaySeconds"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/ScheduledLatestEndTime"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/ScheduledNightCurrent"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/Auto/DbusBackoffBaseSeconds"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/Auto/LearnChargePowerEnabled"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/Auto/PhasePreferLowestWhenIdle"]["writeable"])

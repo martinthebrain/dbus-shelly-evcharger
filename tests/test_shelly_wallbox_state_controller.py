@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -33,6 +34,10 @@ class TestServiceStateController(unittest.TestCase):
             virtual_autostart=1,
             _auto_mode_cutover_pending=True,
             _ignore_min_offtime_once=False,
+            auto_month_windows={4: ((7, 30), (19, 30))},
+            auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
+            auto_scheduled_night_start_delay_seconds=3600.0,
+            auto_scheduled_latest_end_time="06:30",
             active_phase_selection="P1_P2",
             requested_phase_selection="P1_P2_P3",
             supported_phase_selections=("P1", "P1_P2", "P1_P2_P3"),
@@ -172,6 +177,49 @@ class TestServiceStateController(unittest.TestCase):
         self.assertIn("fault_reason=contactor-lockout-open", lockout_summary)
         self.assertIn("recovery=1", lockout_summary)
 
+    def test_state_summary_includes_scheduled_v2_diagnostics(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=2,
+            virtual_enable=1,
+            virtual_startstop=1,
+            virtual_autostart=1,
+            _auto_mode_cutover_pending=False,
+            _ignore_min_offtime_once=False,
+            active_phase_selection="P1",
+            requested_phase_selection="P1",
+            supported_phase_selections=("P1",),
+            auto_month_windows={4: ((7, 30), (19, 30))},
+            auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
+            auto_scheduled_night_start_delay_seconds=3600.0,
+            auto_scheduled_latest_end_time="06:30",
+            backend_mode="split",
+            meter_backend_type="template_meter",
+            switch_backend_type="template_switch",
+            charger_backend_type=None,
+            _charger_target_current_amps=None,
+            _last_confirmed_pm_status={"_phase_selection": "P1", "output": False},
+            _phase_switch_mismatch_active=False,
+            _phase_switch_lockout_selection=None,
+            _phase_switch_lockout_until=None,
+            _last_switch_feedback_closed=None,
+            _last_switch_interlock_ok=None,
+            _last_charger_state_status="",
+            _last_charger_state_fault="",
+            _last_status_source="scheduled",
+            _last_auto_state="charging",
+            _last_health_reason="scheduled-night-charge",
+            _contactor_fault_counts={},
+            _contactor_lockout_reason="",
+        )
+        controller = ServiceStateController(service, self._normalize_mode)
+        now = datetime(2026, 4, 20, 21, 0).timestamp()
+        with patch("shelly_wallbox.controllers.state.time.time", return_value=now):
+            summary = controller.state_summary()
+
+        self.assertIn("scheduled_state=night-boost", summary)
+        self.assertIn("scheduled_target_day=Tue", summary)
+        self.assertIn("scheduled_boost=1", summary)
+
     def test_load_runtime_state_missing_file_and_load_config_success(self) -> None:
         service = SimpleNamespace(runtime_state_path="/tmp/does-not-exist.json")
         controller = ServiceStateController(service, self._normalize_mode)
@@ -207,6 +255,7 @@ class TestServiceStateController(unittest.TestCase):
                     "AutoStart=1\n"
                     "AutoStartSurplusWatts=1700\n"
                     "PhaseSelection=P1\n"
+                    "AutoScheduledEnabledDays=Mon,Tue,Wed,Thu,Fri\n"
                 )
             with open(overrides_path, "w", encoding="utf-8") as handle:
                 handle.write(
@@ -218,6 +267,8 @@ class TestServiceStateController(unittest.TestCase):
                     "AutoPhaseMismatchLockoutCount=4\n"
                     "AutoLearnChargePower=0\n"
                     "AutoReferenceChargePowerWatts=2050\n"
+                    "AutoScheduledEnabledDays=Sat,Sun\n"
+                    "AutoScheduledLatestEndTime=07:15\n"
                 )
 
             with patch.object(ServiceStateController, "config_path", return_value=config_path):
@@ -230,6 +281,8 @@ class TestServiceStateController(unittest.TestCase):
         self.assertEqual(config["DEFAULT"]["AutoPhaseMismatchLockoutCount"], "4")
         self.assertEqual(config["DEFAULT"]["AutoLearnChargePower"], "0")
         self.assertEqual(config["DEFAULT"]["AutoReferenceChargePowerWatts"], "2050")
+        self.assertEqual(config["DEFAULT"]["AutoScheduledEnabledDays"], "Sat,Sun")
+        self.assertEqual(config["DEFAULT"]["AutoScheduledLatestEndTime"], "07:15")
         self.assertTrue(service._runtime_overrides_active)
         self.assertEqual(service.runtime_overrides_path, overrides_path)
         self.assertEqual(
@@ -242,6 +295,8 @@ class TestServiceStateController(unittest.TestCase):
                 "AutoPhaseMismatchLockoutCount": "4",
                 "AutoLearnChargePower": "0",
                 "AutoReferenceChargePowerWatts": "2050",
+                "AutoScheduledEnabledDays": "Sat,Sun",
+                "AutoScheduledLatestEndTime": "07:15",
             },
         )
 
@@ -262,6 +317,10 @@ class TestServiceStateController(unittest.TestCase):
                 auto_resume_soc=50.0,
                 auto_start_delay_seconds=10.0,
                 auto_stop_delay_seconds=30.0,
+                auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
+                auto_scheduled_night_start_delay_seconds=3600.0,
+                auto_scheduled_latest_end_time="06:30",
+                auto_scheduled_night_current_amps=13.0,
                 auto_dbus_backoff_base_seconds=5.0,
                 auto_dbus_backoff_max_seconds=60.0,
                 auto_grid_recovery_start_seconds=14.0,
@@ -299,6 +358,10 @@ class TestServiceStateController(unittest.TestCase):
             self.assertIn("Mode = 1", payload)
             self.assertIn("PhaseSelection = P1_P2", payload)
             self.assertIn("AutoStartSurplusWatts = 1850.0", payload)
+            self.assertIn("AutoScheduledEnabledDays = Mon,Tue,Wed,Thu,Fri", payload)
+            self.assertIn("AutoScheduledNightStartDelaySeconds = 3600.0", payload)
+            self.assertIn("AutoScheduledLatestEndTime = 06:30", payload)
+            self.assertIn("AutoScheduledNightCurrentAmps = 13.0", payload)
             self.assertIn("AutoDbusBackoffBaseSeconds = 5.0", payload)
             self.assertIn("AutoLearnChargePower = 0", payload)
             self.assertIn("AutoReferenceChargePowerWatts = 2100.0", payload)

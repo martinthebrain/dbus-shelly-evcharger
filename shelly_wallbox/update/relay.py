@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+from datetime import datetime
 from typing import Any, cast
 
 from shelly_wallbox.backend.models import (
@@ -28,6 +29,8 @@ from shelly_wallbox.core.common import (
     _fresh_charger_transport_reason,
     evse_fault_reason,
     fresh_confirmed_relay_output,
+    mode_uses_scheduled_logic,
+    scheduled_mode_snapshot,
 )
 from shelly_wallbox.core.contracts import (
     finite_float_or_none,
@@ -1398,6 +1401,27 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
             return None
         return finite_float_or_none(round(float(learned_power) / (phase_voltage * phase_count)))
 
+    @staticmethod
+    def _scheduled_night_charge_active(svc: Any, now: float) -> bool:
+        """Return whether scheduled/plan mode should force nighttime max-current charging."""
+        if not mode_uses_scheduled_logic(getattr(svc, "virtual_mode", 0)):
+            return False
+        return scheduled_mode_snapshot(
+            datetime.fromtimestamp(float(now)),
+            getattr(svc, "auto_month_windows", {}),
+            getattr(svc, "auto_scheduled_enabled_days", "Mon,Tue,Wed,Thu,Fri"),
+            delay_seconds=float(getattr(svc, "auto_scheduled_night_start_delay_seconds", 3600.0)),
+            latest_end_time=getattr(svc, "auto_scheduled_latest_end_time", "06:30"),
+        ).night_boost_active
+
+    @staticmethod
+    def _scheduled_night_current_amps(svc: Any) -> float | None:
+        """Return one configured scheduled night-boost current, or MaxCurrent fallback."""
+        configured = finite_float_or_none(getattr(svc, "auto_scheduled_night_current_amps", None))
+        if configured is not None and configured > 0.0:
+            return configured
+        return finite_float_or_none(getattr(svc, "max_current", None))
+
     @classmethod
     def _derived_learned_current_target(cls, svc: Any, now: float) -> float | None:
         """Return one current target derived from a stable learned charging power."""
@@ -1425,6 +1449,8 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
             return None
         if cls._charger_current_backend(svc) is None:
             return None
+        if cls._scheduled_night_charge_active(svc, now):
+            return cls._clamped_charger_current_target(svc, cls._scheduled_night_current_amps(svc))
         learned_target = cls._derived_learned_current_target(svc, now)
         if learned_target is not None:
             return learned_target
