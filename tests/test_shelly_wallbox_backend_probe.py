@@ -46,6 +46,28 @@ class _FakeSimpleEvseTransport:
         raise AssertionError(f"Unexpected Modbus function code {request.function_code}")
 
 
+class _FakeSmartEvseTransport:
+    def __init__(self) -> None:
+        self.holding_registers: dict[int, int] = {
+            0x0000: 2,
+            0x0001: 0,
+            0x0002: 16,
+            0x0005: 1,
+            0x0007: 32,
+        }
+
+    def exchange(self, request: ModbusRequest, *, timeout_seconds: float) -> bytes:
+        if request.function_code == 0x03:
+            address = int.from_bytes(request.payload[0:2], "big")
+            count = int.from_bytes(request.payload[2:4], "big")
+            payload = b"".join(
+                int(self.holding_registers.get(address + index, 0)).to_bytes(2, "big")
+                for index in range(count)
+            )
+            return bytes((0x03, len(payload))) + payload
+        raise AssertionError(f"Unexpected Modbus function code {request.function_code}")
+
+
 class TestShellyWallboxBackendProbe(unittest.TestCase):
     @staticmethod
     def _write_config(directory: str, filename: str, content: str) -> str:
@@ -326,6 +348,34 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             self.assertEqual(charger_state["actual_current_amps"], 13.0)
             self.assertEqual(charger_state["status_text"], "charging")
 
+    def test_read_smartevse_charger_returns_live_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            charger_path = self._write_config(
+                temp_dir,
+                "charger.ini",
+                "[Adapter]\nType=smartevse_charger\nTransport=tcp\n"
+                "[Transport]\nHost=192.168.1.60\nPort=502\nUnitId=1\n",
+            )
+
+            stdout = io.StringIO()
+            with (
+                redirect_stdout(stdout),
+                patch(
+                    "shelly_wallbox.backend.smartevse_charger.create_modbus_transport",
+                    return_value=_FakeSmartEvseTransport(),
+                ),
+            ):
+                rc = main(["read-charger", charger_path])
+
+            payload = json.loads(stdout.getvalue())
+            charger_state = cast(dict[str, object], payload["charger_state"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(payload["type"], "smartevse_charger")
+            self.assertEqual(charger_state["enabled"], True)
+            self.assertEqual(charger_state["current_amps"], 16.0)
+            self.assertEqual(charger_state["phase_selection"], "P1")
+            self.assertEqual(charger_state["status_text"], "charging")
+
     def test_validate_wallbox_config_accepts_meterless_split_with_charger(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             charger_path = self._write_config(
@@ -400,6 +450,57 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             self.assertEqual(selection["meter_type"], "none")
             self.assertEqual(selection["switch_type"], "switch_group")
             self.assertEqual(selection["charger_type"], "simpleevse_charger")
+            self.assertEqual(payload["resolved_roles"], {"meter": False, "switch": True, "charger": True})
+
+    def test_validate_wallbox_config_accepts_smartevse_plus_switch_group_topology(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            phase1_path = self._write_config(
+                temp_dir,
+                "phase1-switch.ini",
+                "[Adapter]\nType=template_switch\nBaseUrl=http://phase1.local\n"
+                "[StateRequest]\nUrl=/state\n"
+                "[StateResponse]\nEnabledPath=enabled\n"
+                "[CommandRequest]\nUrl=/control\n",
+            )
+            phase2_path = self._write_config(
+                temp_dir,
+                "phase2-switch.ini",
+                "[Adapter]\nType=shelly_switch\nHost=192.168.1.61\n",
+            )
+            phase3_path = self._write_config(
+                temp_dir,
+                "phase3-switch.ini",
+                "[Adapter]\nType=shelly_contactor_switch\nHost=192.168.1.62\n",
+            )
+            switch_path = self._write_config(
+                temp_dir,
+                "switch-group.ini",
+                "[Adapter]\nType=switch_group\n"
+                f"[Members]\nP1={Path(phase1_path).name}\nP2={Path(phase2_path).name}\nP3={Path(phase3_path).name}\n",
+            )
+            charger_path = self._write_config(
+                temp_dir,
+                "charger.ini",
+                "[Adapter]\nType=smartevse_charger\nTransport=serial_rtu\n"
+                "[Transport]\nDevice=/dev/ttyUSB0\nBaudrate=9600\nParity=N\nStopBits=1\nUnitId=1\n",
+            )
+            wallbox_path = self._write_config(
+                temp_dir,
+                "config.ini",
+                "[DEFAULT]\nHost=192.168.1.20\n"
+                "[Backends]\nMode=split\nMeterType=none\nSwitchType=switch_group\n"
+                f"SwitchConfigPath={switch_path}\n"
+                "ChargerType=smartevse_charger\n"
+                f"ChargerConfigPath={charger_path}\n",
+            )
+
+            payload = validate_wallbox_config(wallbox_path)
+            selection = cast(dict[str, object], payload["selection"])
+
+            self.assertEqual(selection["mode"], "split")
+            self.assertEqual(selection["meter_type"], "none")
+            self.assertEqual(selection["switch_type"], "switch_group")
+            self.assertEqual(selection["charger_type"], "smartevse_charger")
             self.assertEqual(payload["resolved_roles"], {"meter": False, "switch": True, "charger": True})
 
     def test_validate_wallbox_config_rejects_invalid_meterless_split_without_charger(self) -> None:

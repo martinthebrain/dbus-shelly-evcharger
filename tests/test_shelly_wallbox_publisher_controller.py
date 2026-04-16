@@ -400,7 +400,7 @@ class TestDbusPublishController(unittest.TestCase):
             backend_mode="split",
             meter_backend_type="template_meter",
             switch_backend_type="template_switch",
-            charger_backend_type="template_charger",
+            charger_backend_type="smartevse_charger",
             _charger_backend=SimpleNamespace(set_current=MagicMock()),
             _charger_target_current_amps=13.0,
             _charger_target_current_applied_at=96.0,
@@ -458,7 +458,7 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(counter_values["/Auto/BackendMode"], "split")
         self.assertEqual(counter_values["/Auto/MeterBackend"], "template_meter")
         self.assertEqual(counter_values["/Auto/SwitchBackend"], "template_switch")
-        self.assertEqual(counter_values["/Auto/ChargerBackend"], "template_charger")
+        self.assertEqual(counter_values["/Auto/ChargerBackend"], "smartevse_charger")
         self.assertEqual(counter_values["/Auto/RecoveryActive"], 0)
         self.assertEqual(counter_values["/Auto/StatusSource"], "charger-fault")
         self.assertEqual(counter_values["/Auto/FaultActive"], 0)

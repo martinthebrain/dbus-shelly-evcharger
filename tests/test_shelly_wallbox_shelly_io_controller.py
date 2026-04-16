@@ -1,15 +1,24 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import tempfile
 import threading
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from shelly_wallbox.backend.modbus_transport import ModbusSlaveOfflineError
 from shelly_wallbox.backend.shelly_io import ShellyIoController
+from shelly_wallbox.backend.smartevse_charger import SmartEvseChargerBackend
 from shelly_wallbox.backend.models import MeterReading
 
 
 class TestShellyIoController(unittest.TestCase):
+    @staticmethod
+    def _write_config(directory: str, content: str) -> str:
+        path = Path(directory) / "smartevse-charger.ini"
+        path.write_text(content, encoding="utf-8")
+        return str(path)
+
     def test_request_auth_kwargs_supports_digest_basic_and_no_auth(self):
         digest_service = SimpleNamespace(use_digest_auth=True, username="user", password="pass")
         basic_service = SimpleNamespace(use_digest_auth=False, username="user", password="pass")
@@ -623,6 +632,51 @@ class TestShellyIoController(unittest.TestCase):
         self.assertEqual(service._last_charger_transport_source, "read")
         self.assertEqual(service._last_charger_transport_detail, "Modbus slave 1 on /dev/ttyS7 did not respond")
         self.assertEqual(service._last_charger_transport_at, 100.0)
+        self.assertEqual(service._charger_retry_reason, "offline")
+        self.assertEqual(service._charger_retry_source, "read")
+        self.assertEqual(service._charger_retry_until, 120.0)
+        self.assertEqual(service._source_retry_after["charger"], 120.0)
+
+    def test_fetch_pm_status_keeps_pm_flow_when_smartevse_readback_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=smartevse_charger\nTransport=tcp\n"
+                "[Transport]\nHost=192.168.1.60\nPort=502\nUnitId=1\n",
+            )
+            service = SimpleNamespace(
+                host="192.168.178.76",
+                pm_component="Switch",
+                pm_id=0,
+                rpc_call=MagicMock(return_value={"output": False}),
+                supported_phase_selections=("P1",),
+                requested_phase_selection="P1",
+                active_phase_selection="P1",
+                auto_shelly_soft_fail_seconds=10.0,
+                _mark_failure=MagicMock(),
+                _warning_throttled=MagicMock(),
+                _mark_recovery=MagicMock(),
+                _time_now=MagicMock(return_value=100.0),
+                _source_retry_after={},
+                shelly_request_timeout_seconds=2.0,
+            )
+            smartevse_backend = SmartEvseChargerBackend(service, config_path=config_path)
+            service._charger_backend = smartevse_backend
+
+            with patch(
+                "shelly_wallbox.backend.smartevse_charger.create_modbus_transport",
+                side_effect=ModbusSlaveOfflineError("Modbus slave 1 on /dev/ttyS7 did not respond"),
+            ):
+                controller = ShellyIoController(service)
+                pm_status = controller.fetch_pm_status()
+
+        self.assertFalse(pm_status["output"])
+        service._mark_failure.assert_called_once_with("charger")
+        service._warning_throttled.assert_called_once()
+        service._mark_recovery.assert_not_called()
+        self.assertEqual(service._last_charger_transport_reason, "offline")
+        self.assertEqual(service._last_charger_transport_source, "read")
+        self.assertEqual(service._last_charger_transport_detail, "Modbus slave 1 on /dev/ttyS7 did not respond")
         self.assertEqual(service._charger_retry_reason, "offline")
         self.assertEqual(service._charger_retry_source, "read")
         self.assertEqual(service._charger_retry_until, 120.0)
