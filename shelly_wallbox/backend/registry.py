@@ -11,6 +11,7 @@ from .modbus_charger import ModbusChargerBackend
 from .shelly_combined import ShellyCombinedBackend
 from .shelly_contactor_switch import ShellyContactorSwitchBackend
 from .shelly_meter import ShellyMeterBackend
+from .smartevse_charger import SmartEvseChargerBackend
 from .simpleevse_charger import SimpleEvseChargerBackend
 from .shelly_switch import ShellySwitchBackend
 from .switch_group import SwitchGroupBackend
@@ -36,6 +37,7 @@ SWITCH_BACKENDS: dict[str, BackendConstructor] = {
 CHARGER_BACKENDS: dict[str, BackendConstructor] = {
     "goe_charger": GoEChargerBackend,
     "modbus_charger": ModbusChargerBackend,
+    "smartevse_charger": SmartEvseChargerBackend,
     "simpleevse_charger": SimpleEvseChargerBackend,
     "template_charger": TemplateChargerBackend,
 }

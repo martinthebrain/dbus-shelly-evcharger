@@ -12,6 +12,7 @@ from shelly_wallbox.backend.modbus_charger import ModbusChargerBackend
 from shelly_wallbox.backend.shelly_combined import ShellyCombinedBackend
 from shelly_wallbox.backend.shelly_contactor_switch import ShellyContactorSwitchBackend
 from shelly_wallbox.backend.shelly_meter import ShellyMeterBackend
+from shelly_wallbox.backend.smartevse_charger import SmartEvseChargerBackend
 from shelly_wallbox.backend.simpleevse_charger import SimpleEvseChargerBackend
 from shelly_wallbox.backend.shelly_switch import ShellySwitchBackend
 from shelly_wallbox.backend.switch_group import SwitchGroupBackend
@@ -455,6 +456,40 @@ class TestShellyWallboxBackendFactory(unittest.TestCase):
             self.assertIsInstance(resolved.charger, SimpleEvseChargerBackend)
             resolved_charger = cast(SimpleEvseChargerBackend, resolved.charger)
             self.assertEqual(resolved.selection.charger_type, "simpleevse_charger")
+            self.assertEqual(resolved_charger.config_path, str(charger_path))
+            self.assertEqual(resolved_charger.settings.transport_settings.transport_kind, "tcp")
+
+    def test_build_service_backends_supports_smartevse_charger_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            charger_path = Path(temp_dir) / "charger.ini"
+            charger_path.write_text(
+                "[Adapter]\nType=smartevse_charger\nTransport=tcp\n"
+                "[Transport]\nHost=192.168.1.60\nPort=502\nUnitId=1\n",
+                encoding="utf-8",
+            )
+            service = SimpleNamespace(
+                backend_mode="split",
+                meter_backend_type="none",
+                switch_backend_type="none",
+                charger_backend_type="smartevse_charger",
+                meter_backend_config_path="",
+                switch_backend_config_path="",
+                charger_backend_config_path=str(charger_path),
+                phase="L1",
+                host="192.168.1.20",
+                pm_component="Switch",
+                pm_id=0,
+                max_current=16.0,
+                session=MagicMock(),
+            )
+
+            resolved = build_service_backends(service)
+
+            self.assertIsNone(resolved.meter)
+            self.assertIsNone(resolved.switch)
+            self.assertIsInstance(resolved.charger, SmartEvseChargerBackend)
+            resolved_charger = cast(SmartEvseChargerBackend, resolved.charger)
+            self.assertEqual(resolved.selection.charger_type, "smartevse_charger")
             self.assertEqual(resolved_charger.config_path, str(charger_path))
             self.assertEqual(resolved_charger.settings.transport_settings.transport_kind, "tcp")
 

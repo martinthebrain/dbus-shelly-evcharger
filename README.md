@@ -344,6 +344,33 @@ StopBits=1
 UnitId=1
 ```
 
+There is now also a first SmartEVSE-family Modbus backend: `smartevse_charger`.
+It follows the documented SmartEVSE-2 Modbus register map conservatively:
+
+- register `0x0000` for EVSE state
+- register `0x0001` for error bits
+- register `0x0002` for configured charging current
+- register `0x0005` for the access bit used as enable/disable control
+
+This first implementation keeps native phase switching disabled and reports
+only `P1` on the charger side, so mixed or external phase switching should
+still be handled through a separate switch backend.
+
+Minimal example:
+
+```ini
+[Adapter]
+Type=smartevse_charger
+Transport=serial_rtu
+
+[Transport]
+Device=/dev/ttyUSB0
+Baudrate=9600
+Parity=N
+StopBits=1
+UnitId=1
+```
+
 For charger-native split setups, `MeterType=none` is now supported as long as a
 `ChargerType` is configured. In that mode the service can synthesize its online
 PM status from fresh charger readback instead of requiring a separate meter

@@ -190,6 +190,20 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             self.assertEqual(payload["type"], "simpleevse_charger")
             self.assertEqual(payload["roles"], ["charger"])
 
+    def test_validate_backend_config_accepts_smartevse_charger_type(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            charger_path = self._write_config(
+                temp_dir,
+                "charger.ini",
+                "[Adapter]\nType=smartevse_charger\nTransport=tcp\n"
+                "[Transport]\nHost=192.168.1.60\nPort=502\nUnitId=1\n",
+            )
+
+            payload = validate_backend_config(charger_path)
+
+            self.assertEqual(payload["type"], "smartevse_charger")
+            self.assertEqual(payload["roles"], ["charger"])
+
     def test_probe_modbus_charger_prints_transport_and_profile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             charger_path = self._write_config(
@@ -260,6 +274,29 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             self.assertEqual(payload["transport_serial_port_owner"], "venus_serial_starter")
             self.assertEqual(payload["transport_serial_retry_count"], 2)
             self.assertEqual(payload["transport_serial_retry_delay_seconds"], 0.5)
+
+    def test_probe_smartevse_charger_prints_transport_and_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            charger_path = self._write_config(
+                temp_dir,
+                "charger.ini",
+                "[Adapter]\nType=smartevse_charger\nTransport=tcp\n"
+                "[Transport]\nHost=192.168.1.60\nPort=502\nUnitId=1\n",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                rc = main(["probe-charger", charger_path])
+
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(rc, 0)
+            self.assertEqual(payload["type"], "smartevse_charger")
+            self.assertEqual(payload["profile_name"], "smartevse")
+            self.assertEqual(payload["transport_kind"], "tcp")
+            self.assertEqual(payload["transport_unit_id"], 1)
+            self.assertIsNone(payload["transport_device"])
+            self.assertEqual(payload["transport_serial_port_owner"], "none")
+            self.assertEqual(payload["transport_serial_retry_count"], 0)
 
     def test_read_simpleevse_charger_returns_live_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
