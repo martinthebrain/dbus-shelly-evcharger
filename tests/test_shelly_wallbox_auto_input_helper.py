@@ -880,4 +880,4 @@ class TestShellyWallboxAutoInputHelper(unittest.TestCase):
             with patch("shelly_wallbox_auto_input_helper.os.path.abspath", return_value="/repo/shelly_wallbox_auto_input_helper.py"):
                 self.assertEqual(shelly_wallbox_auto_input_helper.main([]), 0)
 
-        helper_cls.assert_called_once_with("/repo/config.shelly_wallbox.ini", None, None)
+        helper_cls.assert_called_once_with("/repo/deploy/venus/config.shelly_wallbox.ini", None, None)

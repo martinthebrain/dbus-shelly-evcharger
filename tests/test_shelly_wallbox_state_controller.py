@@ -12,7 +12,7 @@ from shelly_wallbox.auto.policy import (
     AutoStopEwmaPolicy,
     AutoThresholdProfile,
 )
-from dbus_shelly_wallbox_state import ServiceStateController
+from shelly_wallbox.controllers.state import ServiceStateController
 from tests.wallbox_test_fixtures import make_runtime_state_service, make_state_validation_service
 
 
@@ -509,9 +509,9 @@ class TestServiceStateController(unittest.TestCase):
             controller.save_runtime_state()
             self.assertEqual(service._runtime_state_serialized, first_serialized)
 
-            with patch("dbus_shelly_wallbox_state.write_text_atomically", side_effect=RuntimeError("boom")):
+            with patch("shelly_wallbox.controllers.state.write_text_atomically", side_effect=RuntimeError("boom")):
                 service._runtime_state_serialized = None
-                with patch("dbus_shelly_wallbox_state.logging.warning") as warning_mock:
+                with patch("shelly_wallbox.controllers.state.logging.warning") as warning_mock:
                     controller.save_runtime_state()
                 warning_mock.assert_called_once()
 
@@ -529,7 +529,7 @@ class TestServiceStateController(unittest.TestCase):
             service.runtime_state_path = path
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write("{bad json")
-            with patch("dbus_shelly_wallbox_state.logging.warning") as warning_mock:
+            with patch("shelly_wallbox.controllers.state.logging.warning") as warning_mock:
                 controller.load_runtime_state()
             warning_mock.assert_called_once()
 

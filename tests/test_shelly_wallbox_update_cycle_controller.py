@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from dbus_shelly_wallbox_update_cycle import UpdateCycleController
+from shelly_wallbox.update.controller import UpdateCycleController
 
 
 def _phase_values(total_power, voltage, _phase, _voltage_mode):
@@ -1521,7 +1521,7 @@ class TestUpdateCycleController(unittest.TestCase):
         self.assertEqual(confirmed_pm_status, {"output": False, "_pm_confirmed": True})
         self.assertTrue(service._last_pm_status_confirmed)
 
-        with patch("dbus_shelly_wallbox_update_cycle.logging.info") as info_mock:
+        with patch("shelly_wallbox.update.controller.logging.info") as info_mock:
             controller.log_auto_relay_change(service, True)
             controller.sign_of_life()
 
@@ -1616,7 +1616,7 @@ class TestUpdateCycleController(unittest.TestCase):
         service._mark_failure.assert_called_once_with("shelly")
         service._warning_throttled.assert_called_once()
 
-        with patch("dbus_shelly_wallbox_update_cycle.logging.warning") as warning_mock:
+        with patch("shelly_wallbox.update.controller.logging.warning") as warning_mock:
             self.assertTrue(controller.update())
         warning_mock.assert_called_once()
 

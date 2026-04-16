@@ -1,4 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Patch-friendly bootstrap facade."""
+"""Public bootstrap facade."""
 
-from dbus_shelly_wallbox_bootstrap import *  # noqa: F401,F403
+from shelly_wallbox.bootstrap.controller import *  # noqa: F401,F403

@@ -19,11 +19,11 @@ import time
 from collections import deque
 from typing import Any, cast
 
-from dbus_shelly_wallbox_shelly_io import ShellyIoController
+from shelly_wallbox.backend.shelly_io import ShellyIoController
 from shelly_wallbox.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
 from shelly_wallbox.inputs.supervisor import AutoInputSupervisor
 from shelly_wallbox.publish.dbus import DbusPublishController
-from dbus_shelly_wallbox_update_cycle import UpdateCycleController
+from shelly_wallbox.update.controller import UpdateCycleController
 from shelly_wallbox.backend.factory import build_service_backends
 from shelly_wallbox.backend.models import normalize_phase_selection_tuple
 from shelly_wallbox.controllers.auto import AutoDecisionController

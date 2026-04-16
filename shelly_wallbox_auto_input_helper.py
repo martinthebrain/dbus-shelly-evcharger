@@ -272,6 +272,8 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     config_path = argv[0] if argv else os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
+        "deploy",
+        "venus",
         "config.shelly_wallbox.ini",
     )
     snapshot_path = argv[1] if len(argv) > 1 else None

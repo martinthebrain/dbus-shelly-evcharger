@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from dbus_shelly_wallbox_auto_logic import AutoDecisionWorkflowMixin
+from shelly_wallbox.auto.workflow import AutoDecisionWorkflowMixin
 from shelly_wallbox.auto.logic_types import NO_RELAY_DECISION
 
 

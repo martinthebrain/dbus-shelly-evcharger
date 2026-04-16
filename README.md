@@ -39,13 +39,13 @@ The codebase supports:
 ## Quick Start
 
 1. Copy the wallbox files to your Cerbo, for example to `/data/shellyWB`.
-2. Edit `config.shelly_wallbox.ini` and replace the example values with your
+2. Edit `deploy/venus/config.shelly_wallbox.ini` and replace the example values with your
    real Shelly host, device instance, phase, and optional DBus service names.
 3. Install the service:
 
    ```bash
    cd /data/shellyWB
-   ./install_shelly_wallbox.sh
+   ./deploy/venus/install_shelly_wallbox.sh
    ```
 
 4. Restart the service:
@@ -72,9 +72,9 @@ The codebase supports:
 The runtime surface is organized around a few stable entry points plus package
 groups:
 - `dbus_shelly_wallbox.py`: main service entry point and patch-friendly public module
-- `dbus_shelly_wallbox_bootstrap.py`: patch-friendly bootstrap and process wiring anchor
-- `dbus_shelly_wallbox_state.py`: patch-friendly state controller anchor
-- `dbus_shelly_wallbox_auto_logic.py` and `dbus_shelly_wallbox_update_cycle.py`: patch-friendly top-level Auto and update workflow anchors
+- `shelly_wallbox/bootstrap/controller.py`: bootstrap and process wiring controller
+- `shelly_wallbox/controllers/state.py`: state controller and runtime-state persistence
+- `shelly_wallbox/auto/workflow.py` and `shelly_wallbox/update/controller.py`: packaged Auto and update workflow controllers
 - `shelly_wallbox/app/`: package facades for the main/bootstrap entry points and bootstrap support helpers
 - `shelly_wallbox/core/`: package facades for shared helpers, lightweight contracts, and mixin typing seams
 - `shelly_wallbox/inputs/`: package slice for DBus input reads, helper supervision, and the helper-process subpackage under `shelly_wallbox/inputs/helper/`
@@ -82,13 +82,15 @@ groups:
 - `shelly_wallbox/backend/`: normalized meter, switch, and charger backends plus template adapters
 - `shelly_wallbox/auto/` and `shelly_wallbox/update/`: packaged Auto-policy and update-cycle helpers
 - `shelly_wallbox/bootstrap/`, `shelly_wallbox/service/`, and `shelly_wallbox/ports/`: service composition, bootstrap mixins, and typed controller/service seams
-- `shelly_wallbox/controllers/` and `shelly_wallbox/runtime/`: packaged controllers plus the primary Runtime/watchdog facade; the flat `dbus_shelly_wallbox_runtime_*.py` modules stay as patch-friendly compatibility anchors
-- `dbus_shelly_wallbox_shelly_io.py`: Shelly I/O worker logic and backend integration seam
+- `shelly_wallbox/controllers/` and `shelly_wallbox/runtime/`: packaged controllers plus the primary runtime/watchdog helpers
+- `shelly_wallbox/backend/shelly_io.py`: Shelly I/O worker logic and backend integration seam
 - `shelly_wallbox_auto_input_helper.py`: separate helper process for PV, grid, and battery DBus inputs; remains the patch-friendly entry anchor while helper internals live under `shelly_wallbox/inputs/helper/`
 - `shelly_wallbox/backend/probe.py`: validator/probe tool for backend adapter configs, usually run as `python3 -m shelly_wallbox.backend.probe`
-- `config.shelly_wallbox.ini`: documented example configuration
-- `service_shelly_wallbox/`: runit service scripts for Venus OS
-- `boot_shelly_wallbox.sh`, `install_shelly_wallbox.sh`, `restart_shelly_wallbox.sh`, `uninstall_shelly_wallbox.sh`: deployment helpers
+- `deploy/venus/config.shelly_wallbox.ini`: documented example configuration for Venus OS deployments
+- `deploy/venus/service_shelly_wallbox/`: runit service scripts for Venus OS
+- `deploy/venus/*.sh`: Venus deployment helpers
+- `scripts/dev/`: local verification helpers such as `check_all.sh`, `run_typecheck.sh`, and `run_stress_tests.sh`
+- `scripts/ops/`: operational helpers such as the Cerbo soak check
 
 The temporary compatibility-wrapper layer is gone. The remaining flat
 `dbus_shelly_wallbox_*.py` modules are now deliberate entry points, workflow
@@ -163,7 +165,7 @@ Additional guards:
 
 ## Configuration
 
-The wallbox uses `config.shelly_wallbox.ini`.
+The wallbox uses `deploy/venus/config.shelly_wallbox.ini`.
 
 This file is written as a documented example template and contains only generic
 placeholder values so it can be committed to GitHub safely.
@@ -220,8 +222,8 @@ The comments in the config explain each group of settings:
 ### Required Files on the Cerbo
 
 Copy the entire repository content to the Cerbo, except for the
-`tests/` directory and development helpers (`mypy.ini`, `check_all.sh`,
-`Makefile`, `run_*.sh`). Use as directory for example:
+`tests/` directory and development helpers (`mypy.ini`, `Makefile`,
+`scripts/dev/*`). Use as directory for example:
 
 ```bash
 /data/shellyWB
@@ -231,7 +233,7 @@ Then run:
 
 ```bash
 cd /data/shellyWB
-./install_shelly_wallbox.sh
+./deploy/venus/install_shelly_wallbox.sh
 ```
 
 The installer:
@@ -284,7 +286,7 @@ no separate relay/switch adapter is required.
 
 ### Service does not start
 
-- Check the service state with `svstat /service/dbus-shelly-wallbox` and run `./install_shelly_wallbox.sh` again to restore symlinks and executable bits.
+- Check the service state with `svstat /service/dbus-shelly-wallbox` and run `./deploy/venus/install_shelly_wallbox.sh` again to restore symlinks and executable bits.
 - Then start it in the foreground once with `python3 ./dbus_shelly_wallbox.py` to see the real traceback immediately.
 
 ### EV charger tile does not appear in the GX GUI
@@ -312,8 +314,9 @@ no separate relay/switch adapter is required.
 The codebase is now split into small packages with a few deliberately stable
 flat anchors:
 
-- `dbus_shelly_wallbox.py`, `dbus_shelly_wallbox_bootstrap.py`, and `dbus_shelly_wallbox_state.py`: intentionally stable top-level modules that remain easy to patch in tests and entrypoint code
-- `dbus_shelly_wallbox_auto_logic.py` and `dbus_shelly_wallbox_update_cycle.py`: patch-friendly top-level workflow anchors for the composed Auto and update logic
+- `dbus_shelly_wallbox.py`: intentionally stable top-level service entrypoint
+- `shelly_wallbox/bootstrap/controller.py` and `shelly_wallbox/controllers/state.py`: packaged controller sources for bootstrap and state management
+- `shelly_wallbox/auto/workflow.py` and `shelly_wallbox/update/controller.py`: packaged workflow controllers for Auto and update logic
 - `shelly_wallbox/app/`: package facades for the patch-friendly main and bootstrap entrypoints
 - `shelly_wallbox/core/`: package facades for common helpers, contracts, and split-mixin typing contracts
 - `shelly_wallbox/inputs/`: package slice for DBus input discovery, PV/battery/grid reads, helper supervision, and the auto-input helper internals
@@ -321,16 +324,18 @@ flat anchors:
 - `shelly_wallbox/backend/`: first package slice for normalized meter/switch/charger backends
 - `shelly_wallbox/auto/`: package slice for Auto policy and split workflow helpers
 - `shelly_wallbox/bootstrap/`: package slice for bootstrap config, runtime wiring, and DBus path registration mixins
-- `shelly_wallbox/core/`: package slice for shared helpers, contracts, and composition mixins
 - `shelly_wallbox/controllers/`: package slice for reusable service controllers while patch-sensitive state remains a facade
 - `shelly_wallbox/ports/`: package slice for typed controller-to-service forwarding ports
 - `shelly_wallbox/service/`: package slice for service mixins and lazy controller factories
 - `shelly_wallbox/runtime/`: package slice for runtime/watchdog setup, health, and audit helpers
 - `shelly_wallbox/update/`: package slice for learned-power, relay, and session update helpers
-- `dbus_shelly_wallbox_shelly_io.py`: flat I/O worker seam that still cleanly isolates Shelly/network interaction from the main service loop
+- `shelly_wallbox/backend/shelly_io.py`: Shelly/network I/O seam isolated from the main service loop
 - `shelly_wallbox_auto_input_helper.py`: helper-process entry anchor; its internals now live under `shelly_wallbox/inputs/helper/`
 - `disable_generic_shelly_once.py`: standalone one-shot helper for installations that also run a generic `dbus-shelly` service
-- `dbus_shelly_wallbox_write_snapshot.py`: one remaining flat helper seam around write-state rollback snapshots
+- `deploy/venus/`: Venus OS deployment material, including config template, service directory, and install/boot helpers
+- `scripts/dev/`: local verification scripts
+- `scripts/ops/`: operational helpers
+- `shelly_wallbox/controllers/write_snapshot.py`: helper seam around write-state rollback snapshots
 
 This structure keeps the service easier to read and test than a single large
 monolithic script.
@@ -340,9 +345,9 @@ monolithic script.
 Useful local commands:
 
 ```bash
-./check_all.sh
-./run_typecheck.sh
-./run_stress_tests.sh
+./scripts/dev/check_all.sh
+./scripts/dev/run_typecheck.sh
+./scripts/dev/run_stress_tests.sh
 make check
 make typecheck
 make stress

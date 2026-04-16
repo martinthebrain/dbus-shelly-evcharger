@@ -7,7 +7,7 @@ from typing import Any, cast
 
 from .models import MeterReading, PhaseSelection, SwitchCapabilities, SwitchState
 from shelly_wallbox.core.contracts import finite_float_or_none
-from dbus_shelly_wallbox_shelly_io import ShellyPmStatus
+from shelly_wallbox.backend.shelly_io import ShellyPmStatus
 
 
 class ShellyCombinedBackend:

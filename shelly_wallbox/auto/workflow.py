@@ -19,7 +19,7 @@ from shelly_wallbox.auto.logic_gates import _AutoDecisionGatesMixin
 from shelly_wallbox.auto.logic_samples import _AutoDecisionSamplesMixin
 from shelly_wallbox.auto.logic_types import NO_RELAY_DECISION, RelayDecisionState
 
-# Tests patch `dbus_shelly_wallbox_auto_logic.time.time` to cover default clock paths.
+# Tests patch `shelly_wallbox.auto.workflow.time.time` to cover default clock paths.
 _TEST_PATCH_EXPORTS = (time,)
 
 __all__ = ("AutoDecisionWorkflowMixin", "NO_RELAY_DECISION", "RelayDecisionState")

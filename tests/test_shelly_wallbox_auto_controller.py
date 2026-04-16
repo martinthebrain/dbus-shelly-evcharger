@@ -46,7 +46,7 @@ class TestAutoDecisionController(unittest.TestCase):
 
         self.assertIsNone(controller.average_auto_metric(1))
 
-        with patch("dbus_shelly_wallbox_auto_logic.time.time", return_value=123.0):
+        with patch("shelly_wallbox.auto.workflow.time.time", return_value=123.0):
             controller.mark_relay_changed(False)
 
         self.assertEqual(service.relay_last_changed_at, 123.0)
@@ -59,7 +59,7 @@ class TestAutoDecisionController(unittest.TestCase):
         service.auto_min_offtime_seconds = 20.0
         service.auto_samples = deque([(149.0, 2500.0, -2500.0)])
 
-        with patch("dbus_shelly_wallbox_auto_logic.time.time", return_value=999.0):
+        with patch("shelly_wallbox.auto.workflow.time.time", return_value=999.0):
             self.assertFalse(controller.auto_decide_relay(False, 2500.0, 60.0, -2500.0))
 
         self.assertEqual(service._last_health_reason, "waiting-offtime")
@@ -377,7 +377,7 @@ class TestAutoDecisionController(unittest.TestCase):
 
         delattr(service, "_time_now")
         service.learned_charge_power_updated_at = 995.0
-        with patch("dbus_shelly_wallbox_auto_logic.time.time", return_value=1000.0):
+        with patch("shelly_wallbox.auto.workflow.time.time", return_value=1000.0):
             self.assertEqual(controller._active_learned_charge_power(), 2280.0)
 
     def test_learned_charge_power_helpers_cover_invalid_state_and_defensive_none_paths(self):
@@ -514,7 +514,7 @@ class TestAutoDecisionController(unittest.TestCase):
         self.assertTrue(decision)
         self.assertIsNone(battery_soc)
 
-        with patch("dbus_shelly_wallbox_auto_logic.time.time", return_value=100.0):
+        with patch("shelly_wallbox.auto.workflow.time.time", return_value=100.0):
             with patch.object(controller, "_pre_average_decision", return_value=(controller._NO_DECISION, 55.0)):
                 with patch.object(controller, "_update_average_metrics", return_value=(None, None)):
                     self.assertTrue(controller.auto_decide_relay(True, 2200.0, 55.0, -2100.0))

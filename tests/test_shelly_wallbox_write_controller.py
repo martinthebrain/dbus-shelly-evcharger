@@ -8,7 +8,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from shelly_wallbox.ports import WriteControllerPort
-from dbus_shelly_wallbox_write_snapshot import _snapshot_dbus_paths
+from shelly_wallbox.controllers.write_snapshot import _snapshot_dbus_paths
 from shelly_wallbox.controllers.write import DbusWriteController
 
 

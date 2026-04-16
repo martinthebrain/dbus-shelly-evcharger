@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+REPO_DIR=$(realpath "$SCRIPT_DIR/../..")
 DEFAULT_VENV_MYPY="$HOME/.venvs/mypy/bin/mypy"
 DEFAULT_VENV_PYRIGHT="$HOME/.venvs/pyright/bin/pyright"
 MYPY_MODULE_CHECK='import importlib.util, sys; sys.exit(0 if importlib.util.find_spec("mypy") else 1)'
@@ -40,6 +41,6 @@ else
     exit 127
 fi
 
-cd "$SCRIPT_DIR"
-"${MYPY_CMD[@]}" --config-file "$SCRIPT_DIR/mypy_strict.ini"
-"${PYRIGHT_CMD[@]}" --project "$SCRIPT_DIR/pyrightconfig.json"
+cd "$REPO_DIR"
+"${MYPY_CMD[@]}" --config-file "$REPO_DIR/mypy_strict.ini"
+"${PYRIGHT_CMD[@]}" --project "$REPO_DIR/pyrightconfig.json"

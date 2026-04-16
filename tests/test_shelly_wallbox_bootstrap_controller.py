@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 sys.modules["vedbus"] = MagicMock()
 
-from dbus_shelly_wallbox_bootstrap import (
+from shelly_wallbox.bootstrap.controller import (
     MONTH_WINDOW_DEFAULTS,
     ServiceBootstrapController,
     _enable_fault_diagnostics,
@@ -80,16 +80,16 @@ class TestServiceBootstrapController(unittest.TestCase):
         def fake_signal(signum, handler):
             handlers[signum] = handler
 
-        with patch("dbus_shelly_wallbox_bootstrap.signal.SIGTERM", 15), patch(
-            "dbus_shelly_wallbox_bootstrap.signal.SIGINT", 2
-        ), patch("dbus_shelly_wallbox_bootstrap.signal.SIGHUP", None), patch(
-            "dbus_shelly_wallbox_bootstrap.signal.signal",
+        with patch("shelly_wallbox.bootstrap.controller.signal.SIGTERM", 15), patch(
+            "shelly_wallbox.bootstrap.controller.signal.SIGINT", 2
+        ), patch("shelly_wallbox.bootstrap.controller.signal.SIGHUP", None), patch(
+            "shelly_wallbox.bootstrap.controller.signal.signal",
             side_effect=fake_signal,
         ):
             _install_signal_logging(lambda: (_ for _ in ()).throw(RuntimeError("boom")))
 
         self.assertEqual(sorted(handlers), [2, 15])
-        with patch("dbus_shelly_wallbox_bootstrap.logging.debug") as debug_mock:
+        with patch("shelly_wallbox.bootstrap.controller.logging.debug") as debug_mock:
             handlers[15](15, None)
         debug_mock.assert_called_once()
 
@@ -382,7 +382,7 @@ class TestServiceBootstrapController(unittest.TestCase):
         service = SimpleNamespace(service_name="com.victronenergy.evcharger", deviceinstance=60)
         controller = self._controller(service)
 
-        with patch("dbus_shelly_wallbox_bootstrap.VeDbusService", return_value="dbus-service") as factory:
+        with patch("shelly_wallbox.bootstrap.controller.VeDbusService", return_value="dbus-service") as factory:
             controller.initialize_dbus_service()
 
         factory.assert_called_once_with("com.victronenergy.evcharger.http_60", register=False)
@@ -741,7 +741,7 @@ class TestServiceBootstrapController(unittest.TestCase):
         gobject_module.MainLoop.return_value = mainloop
         service_factory = MagicMock()
 
-        with patch("dbus_shelly_wallbox_bootstrap._install_signal_logging") as install_signal_logging:
+        with patch("shelly_wallbox.bootstrap.controller._install_signal_logging") as install_signal_logging:
             _run_service_loop(service_factory, gobject_module)
 
         service_factory.assert_called_once_with()
@@ -749,7 +749,7 @@ class TestServiceBootstrapController(unittest.TestCase):
         mainloop.run.assert_called_once_with()
 
     def test_enable_fault_diagnostics_swallows_failures(self):
-        with patch("dbus_shelly_wallbox_bootstrap.faulthandler.enable", side_effect=RuntimeError("nope")):
+        with patch("shelly_wallbox.bootstrap.controller.faulthandler.enable", side_effect=RuntimeError("nope")):
             _enable_fault_diagnostics()
 
     def test_setup_dbus_mainloop_initializes_threads_and_tolerates_missing_threads_init(self):
@@ -772,7 +772,7 @@ class TestServiceBootstrapController(unittest.TestCase):
 
             imported_dbus.mainloop = mainloop_module
             mainloop_module.glib = glib_module
-            from dbus_shelly_wallbox_bootstrap import _setup_dbus_mainloop
+            from shelly_wallbox.bootstrap.controller import _setup_dbus_mainloop
 
             _setup_dbus_mainloop()
 
@@ -801,17 +801,17 @@ class TestServiceBootstrapController(unittest.TestCase):
 
     def test_run_service_main_runs_loop_and_logs_critical_on_failure(self):
         gobject_module = MagicMock()
-        with patch("dbus_shelly_wallbox_bootstrap._enable_fault_diagnostics") as enable_faults:
-            with patch("dbus_shelly_wallbox_bootstrap._setup_dbus_mainloop") as setup_loop:
-                with patch("dbus_shelly_wallbox_bootstrap._run_service_loop") as run_loop:
+        with patch("shelly_wallbox.bootstrap.controller._enable_fault_diagnostics") as enable_faults:
+            with patch("shelly_wallbox.bootstrap.controller._setup_dbus_mainloop") as setup_loop:
+                with patch("shelly_wallbox.bootstrap.controller._run_service_loop") as run_loop:
                     run_service_main(lambda: None, "/tmp/does-not-matter.ini", gobject_module)
 
         enable_faults.assert_called_once_with()
         setup_loop.assert_called_once_with()
         run_loop.assert_called_once()
 
-        with patch("dbus_shelly_wallbox_bootstrap._setup_dbus_mainloop", side_effect=RuntimeError("boom")):
-            with patch("dbus_shelly_wallbox_bootstrap.logging.critical") as critical_mock:
+        with patch("shelly_wallbox.bootstrap.controller._setup_dbus_mainloop", side_effect=RuntimeError("boom")):
+            with patch("shelly_wallbox.bootstrap.controller.logging.critical") as critical_mock:
                 run_service_main(lambda: None, "/tmp/does-not-matter.ini", gobject_module)
         critical_mock.assert_called_once()
 
@@ -822,7 +822,7 @@ class TestServiceBootstrapController(unittest.TestCase):
         def _capture_handler(signum, handler):
             handlers[signum] = handler
 
-        with patch("dbus_shelly_wallbox_bootstrap.signal.signal", side_effect=_capture_handler):
+        with patch("shelly_wallbox.bootstrap.controller.signal.signal", side_effect=_capture_handler):
             _install_signal_logging(lambda: quit_calls.append("quit"))
 
         self.assertTrue(handlers)
@@ -837,14 +837,14 @@ class TestServiceBootstrapController(unittest.TestCase):
                 raise RuntimeError("nope")
             handlers[signum] = handler
 
-        with patch("dbus_shelly_wallbox_bootstrap.signal.signal", side_effect=_capture_handler):
-            with patch("dbus_shelly_wallbox_bootstrap.logging.debug") as debug_mock:
+        with patch("shelly_wallbox.bootstrap.controller.signal.signal", side_effect=_capture_handler):
+            with patch("shelly_wallbox.bootstrap.controller.logging.debug") as debug_mock:
                 _install_signal_logging()
 
         debug_mock.assert_called()
 
         handlers = {}
-        with patch("dbus_shelly_wallbox_bootstrap.signal.signal", side_effect=lambda signum, handler: handlers.setdefault(signum, handler)):
+        with patch("shelly_wallbox.bootstrap.controller.signal.signal", side_effect=lambda signum, handler: handlers.setdefault(signum, handler)):
             _install_signal_logging(None)
 
         self.assertTrue(handlers)
@@ -858,8 +858,8 @@ class TestServiceBootstrapController(unittest.TestCase):
         )
         controller = self._controller(service)
 
-        with patch("dbus_shelly_wallbox_bootstrap.time.sleep") as sleep_mock:
-            with patch("dbus_shelly_wallbox_bootstrap.logging.warning") as warning_mock:
+        with patch("shelly_wallbox.bootstrap.controller.time.sleep") as sleep_mock:
+            with patch("shelly_wallbox.bootstrap.controller.logging.warning") as warning_mock:
                 result = controller.fetch_device_info_with_fallback()
 
         self.assertEqual(result, {"mac": "ABC"})
@@ -896,7 +896,7 @@ class TestServiceBootstrapController(unittest.TestCase):
         )
         controller = self._controller(service)
 
-        with patch("dbus_shelly_wallbox_bootstrap.logging.error") as error_mock:
+        with patch("shelly_wallbox.bootstrap.controller.logging.error") as error_mock:
             with self.assertRaises(RuntimeError):
                 controller.register_paths()
 

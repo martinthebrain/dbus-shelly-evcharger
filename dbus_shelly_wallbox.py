@@ -33,7 +33,7 @@ sys.path.insert(
     ),
 )
 
-from dbus_shelly_wallbox_bootstrap import ServiceBootstrapController, run_service_main
+from shelly_wallbox.bootstrap.controller import ServiceBootstrapController, run_service_main
 from shelly_wallbox.core.common import (
     _a,
     _age_seconds,
@@ -57,7 +57,7 @@ from shelly_wallbox.service.bindings import (
     StatePublishMixin,
     UpdateCycleMixin,
 )
-from dbus_shelly_wallbox_state import ServiceStateController
+from shelly_wallbox.controllers.state import ServiceStateController
 
 if TYPE_CHECKING:
     FormatterMap = dict[str, Callable[[Any, Any], str] | None]

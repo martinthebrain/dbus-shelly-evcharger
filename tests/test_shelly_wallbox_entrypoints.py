@@ -15,7 +15,7 @@ class TestShellyWallboxEntrypoints(unittest.TestCase):
 
     @staticmethod
     def _fake_main_module_dependencies():
-        bootstrap_module = ModuleType("dbus_shelly_wallbox_bootstrap")
+        bootstrap_module = ModuleType("shelly_wallbox.bootstrap.controller")
         bootstrap_module.run_service_main = MagicMock()
         bootstrap_module.ServiceBootstrapController = type(
             "ServiceBootstrapController",
@@ -67,7 +67,7 @@ class TestShellyWallboxEntrypoints(unittest.TestCase):
         bindings_module.DbusAutoLogicMixin = DbusAutoLogicMixin
         bindings_module.UpdateCycleMixin = UpdateCycleMixin
 
-        state_module = ModuleType("dbus_shelly_wallbox_state")
+        state_module = ModuleType("shelly_wallbox.controllers.state")
         state_module.ServiceStateController = type(
             "ServiceStateController",
             (),
@@ -81,10 +81,10 @@ class TestShellyWallboxEntrypoints(unittest.TestCase):
         fake_gi.repository = fake_repository
 
         return {
-            "dbus_shelly_wallbox_bootstrap": bootstrap_module,
+            "shelly_wallbox.bootstrap.controller": bootstrap_module,
             "shelly_wallbox.core.common": common_module,
             "shelly_wallbox.service.bindings": bindings_module,
-            "dbus_shelly_wallbox_state": state_module,
+            "shelly_wallbox.controllers.state": state_module,
             "dbus": MagicMock(),
             "vedbus": MagicMock(),
             "gi": fake_gi,

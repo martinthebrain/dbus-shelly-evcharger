@@ -12,7 +12,7 @@ import logging
 from typing import Any
 
 from shelly_wallbox.core.contracts import write_failure_is_reversible
-from dbus_shelly_wallbox_write_snapshot import (
+from shelly_wallbox.controllers.write_snapshot import (
     SNAPSHOT_ATTRS,
     SNAPSHOT_DBUS_PATHS,
     SNAPSHOT_DEQUE_ATTRS,

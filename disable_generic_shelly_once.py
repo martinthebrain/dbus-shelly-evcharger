@@ -19,6 +19,8 @@ import dbus
 
 DEFAULT_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
+    "deploy",
+    "venus",
     "config.shelly_wallbox.ini",
 )
 DEFAULT_GENERIC_SHELLY_SERVICE = "com.victronenergy.shelly"

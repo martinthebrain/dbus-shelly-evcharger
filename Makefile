@@ -6,13 +6,13 @@ test:
 	$(PYTHON) -m unittest
 
 typecheck:
-	./run_typecheck.sh
+	./scripts/dev/run_typecheck.sh
 
 check:
-	./check_all.sh
+	./scripts/dev/check_all.sh
 
 stress:
-	bash ./run_stress_tests.sh
+	bash ./scripts/dev/run_stress_tests.sh
 
 soakcheck:
-	bash ./cerbo_soak_check.sh
+	bash ./scripts/ops/cerbo_soak_check.sh

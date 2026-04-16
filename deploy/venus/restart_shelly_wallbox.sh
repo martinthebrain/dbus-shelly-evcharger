@@ -6,4 +6,5 @@
 # normally bring it back if the service is still registered.
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-pkill -f "$SCRIPT_DIR/dbus_shelly_wallbox.py" || true
+REPO_DIR=$(realpath "$SCRIPT_DIR/../..")
+pkill -f "$REPO_DIR/dbus_shelly_wallbox.py" || true

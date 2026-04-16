@@ -6,9 +6,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
-from dbus_shelly_wallbox_bootstrap import ServiceBootstrapController
-from dbus_shelly_wallbox_shelly_io import ShellyIoController
-from dbus_shelly_wallbox_update_cycle import UpdateCycleController
+from shelly_wallbox.bootstrap.controller import ServiceBootstrapController
+from shelly_wallbox.backend.shelly_io import ShellyIoController
+from shelly_wallbox.update.controller import UpdateCycleController
 from shelly_wallbox.controllers.auto import AutoDecisionController
 from shelly_wallbox.controllers.state import ServiceStateController
 from shelly_wallbox.inputs.dbus import DbusInputController
@@ -19,7 +19,7 @@ from shelly_wallbox.publish.dbus import DbusPublishController
 from shelly_wallbox.runtime import RuntimeSupportController
 
 if TYPE_CHECKING:
-    from dbus_shelly_wallbox_shelly_io import ShellyIoHost
+    from shelly_wallbox.backend.shelly_io import ShellyIoHost
 
 
 class ServiceControllerFactoryMixin:

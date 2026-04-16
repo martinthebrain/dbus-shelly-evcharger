@@ -18,7 +18,7 @@ sys.modules["gi.repository"] = MagicMock()
 sys.modules["gi.repository.GLib"] = MagicMock()
 
 import dbus_shelly_wallbox  # noqa: E402
-import dbus_shelly_wallbox_runtime_support  # noqa: E402
+import shelly_wallbox.runtime.support as runtime_support_module  # noqa: E402
 from dbus_shelly_wallbox import ShellyWallboxService, mode_uses_auto_logic, month_in_ranges, month_window, normalize_mode, normalize_phase, parse_hhmm, phase_values  # noqa: E402
 
 
@@ -508,10 +508,10 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         first_bus = object()
         second_bus = object()
 
-        original_system_bus = dbus_shelly_wallbox_runtime_support.dbus.SystemBus
-        original_session_bus = dbus_shelly_wallbox_runtime_support.dbus.SessionBus
-        dbus_shelly_wallbox_runtime_support.dbus.SystemBus = MagicMock(side_effect=[first_bus, second_bus])
-        dbus_shelly_wallbox_runtime_support.dbus.SessionBus = MagicMock(
+        original_system_bus = runtime_support_module.dbus.SystemBus
+        original_session_bus = runtime_support_module.dbus.SessionBus
+        runtime_support_module.dbus.SystemBus = MagicMock(side_effect=[first_bus, second_bus])
+        runtime_support_module.dbus.SessionBus = MagicMock(
             side_effect=AssertionError("session bus not expected")
         )
         try:
@@ -521,8 +521,8 @@ class TestShellyWallboxHelpers(unittest.TestCase):
                 service._reset_system_bus()
                 self.assertIs(service._get_system_bus(), second_bus)
         finally:
-            dbus_shelly_wallbox_runtime_support.dbus.SystemBus = original_system_bus
-            dbus_shelly_wallbox_runtime_support.dbus.SessionBus = original_session_bus
+            runtime_support_module.dbus.SystemBus = original_system_bus
+            runtime_support_module.dbus.SessionBus = original_session_bus
 
     def test_request_uses_configured_shelly_timeout(self):
         service = ShellyWallboxService.__new__(ShellyWallboxService)

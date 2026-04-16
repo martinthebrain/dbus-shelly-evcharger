@@ -18,7 +18,7 @@ from .models import (
     normalize_phase_selection_tuple,
 )
 from shelly_wallbox.core.contracts import finite_float_or_none, normalize_binary_flag
-from dbus_shelly_wallbox_shelly_io import ShellyPmStatus, ShellyRpcScalar
+from shelly_wallbox.backend.shelly_io import ShellyPmStatus, ShellyRpcScalar
 
 
 def parse_phase_selection_list(value: object, default: tuple[PhaseSelection, ...] = ("P1",)) -> tuple[PhaseSelection, ...]:

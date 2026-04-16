@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from dbus_shelly_wallbox_runtime_support import RuntimeSupportController
+from shelly_wallbox.runtime.support import RuntimeSupportController
 from tests.wallbox_test_fixtures import make_auto_metrics, make_runtime_support_service
 
 
@@ -92,7 +92,7 @@ class TestRuntimeSupportController(unittest.TestCase):
         partial_controller.mark_recovery("dbus", "recovered %s", "ok")
         self.assertFalse(partial_service._failure_active["dbus"])
         self.assertEqual(partial_service._source_retry_after["dbus"], 0.0)
-        with patch("dbus_shelly_wallbox_runtime_support.time.time", return_value=100.0):
+        with patch("shelly_wallbox.runtime.support.time.time", return_value=100.0):
             partial_controller.delay_source_retry("dbus")
         self.assertFalse(partial_controller.source_retry_ready("dbus", 100.0))
         self.assertTrue(partial_controller.source_retry_ready("dbus", 106.0))
@@ -309,8 +309,8 @@ class TestRuntimeSupportController(unittest.TestCase):
         )
         controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
 
-        with patch("dbus_shelly_wallbox_runtime_support.time.time", side_effect=[100.0, 105.0, 131.0]):
-            with patch("dbus_shelly_wallbox_runtime_support.logging.warning") as warning_mock:
+        with patch("shelly_wallbox.runtime.support.time.time", side_effect=[100.0, 105.0, 131.0]):
+            with patch("shelly_wallbox.runtime.support.logging.warning") as warning_mock:
                 controller.warning_throttled("worker-failed", 30.0, "worker failed: %s", "boom")
                 controller.warning_throttled("worker-failed", 30.0, "worker failed: %s", "boom")
                 controller.warning_throttled("worker-failed", 30.0, "worker failed: %s", "boom")
@@ -559,7 +559,7 @@ class TestRuntimeSupportController(unittest.TestCase):
         )
 
         controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
-        with patch("dbus_shelly_wallbox_runtime_support.os.makedirs", side_effect=PermissionError("nope")):
+        with patch("shelly_wallbox.runtime.support.os.makedirs", side_effect=PermissionError("nope")):
             controller.write_auto_audit_event("waiting-surplus", cached=False)
 
         self.assertIsNone(service._last_auto_audit_key)
@@ -576,7 +576,7 @@ class TestRuntimeSupportController(unittest.TestCase):
             )
 
             controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
-            with patch("dbus_shelly_wallbox_runtime_support.os.makedirs", side_effect=PermissionError("nope")):
+            with patch("shelly_wallbox.runtime.support.os.makedirs", side_effect=PermissionError("nope")):
                 controller.write_auto_audit_event("waiting-surplus", cached=False)
 
             self.assertIsNone(service._last_auto_audit_key)
