@@ -25,7 +25,7 @@ from shelly_wallbox.inputs.supervisor import AutoInputSupervisor
 from shelly_wallbox.publish.dbus import DbusPublishController
 from shelly_wallbox.update.controller import UpdateCycleController
 from shelly_wallbox.backend.factory import build_service_backends
-from shelly_wallbox.backend.models import normalize_phase_selection_tuple
+from shelly_wallbox.backend.models import PhaseSelection, normalize_phase_selection, normalize_phase_selection_tuple
 from shelly_wallbox.controllers.auto import AutoDecisionController
 from shelly_wallbox.controllers.state import ServiceStateController
 from shelly_wallbox.controllers.write import DbusWriteController
@@ -125,8 +125,14 @@ class _ServiceBootstrapRuntimeMixin(_ComposableControllerMixin):
         svc.relay_last_changed_at = None
         svc.relay_last_off_at = None
         svc.supported_phase_selections = supported_phase_selections
-        svc.requested_phase_selection = supported_phase_selections[0]
-        svc.active_phase_selection = supported_phase_selections[0]
+        configured_phase_selection = normalize_phase_selection(
+            defaults.get("PhaseSelection", supported_phase_selections[0]),
+            cast(PhaseSelection, supported_phase_selections[0]),
+        )
+        if configured_phase_selection not in supported_phase_selections:
+            configured_phase_selection = cast(PhaseSelection, supported_phase_selections[0])
+        svc.requested_phase_selection = configured_phase_selection
+        svc.active_phase_selection = configured_phase_selection
         svc._grid_recovery_required = False
         svc._grid_recovery_since = None
         svc._auto_mode_cutover_pending = False

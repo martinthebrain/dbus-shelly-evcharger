@@ -79,6 +79,9 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
         svc._last_recovery_attempt_at = None
         svc._recovery_attempts = 0
         svc._runtime_state_serialized = None
+        svc._runtime_overrides_serialized = None
+        svc._runtime_overrides_active = False
+        svc._runtime_overrides_values = {}
         svc._dbus_publish_state = {}
         svc._dbus_live_publish_interval_seconds = 1.0
         svc._dbus_slow_publish_interval_seconds = 5.0

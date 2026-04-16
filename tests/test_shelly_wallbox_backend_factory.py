@@ -430,6 +430,7 @@ class TestShellyWallboxBackendFactory(unittest.TestCase):
             charger_path = Path(temp_dir) / "charger.ini"
             charger_path.write_text(
                 "[Adapter]\nType=simpleevse_charger\nTransport=tcp\n"
+                "[Capabilities]\nSupportedPhaseSelections=P1_P2_P3\n"
                 "[Transport]\nHost=192.168.1.50\nPort=502\nUnitId=1\n",
                 encoding="utf-8",
             )
@@ -458,12 +459,14 @@ class TestShellyWallboxBackendFactory(unittest.TestCase):
             self.assertEqual(resolved.selection.charger_type, "simpleevse_charger")
             self.assertEqual(resolved_charger.config_path, str(charger_path))
             self.assertEqual(resolved_charger.settings.transport_settings.transport_kind, "tcp")
+            self.assertEqual(resolved_charger.settings.supported_phase_selections, ("P1_P2_P3",))
 
     def test_build_service_backends_supports_smartevse_charger_backend(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             charger_path = Path(temp_dir) / "charger.ini"
             charger_path.write_text(
                 "[Adapter]\nType=smartevse_charger\nTransport=tcp\n"
+                "[Capabilities]\nSupportedPhaseSelections=P1_P2\n"
                 "[Transport]\nHost=192.168.1.60\nPort=502\nUnitId=1\n",
                 encoding="utf-8",
             )
@@ -492,6 +495,7 @@ class TestShellyWallboxBackendFactory(unittest.TestCase):
             self.assertEqual(resolved.selection.charger_type, "smartevse_charger")
             self.assertEqual(resolved_charger.config_path, str(charger_path))
             self.assertEqual(resolved_charger.settings.transport_settings.transport_kind, "tcp")
+            self.assertEqual(resolved_charger.settings.supported_phase_selections, ("P1_P2",))
 
     def test_build_service_backends_supports_split_charger_without_meter_backend(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -191,6 +191,92 @@ class TestServiceStateController(unittest.TestCase):
 
         self.assertEqual(config["DEFAULT"]["Host"], "192.168.1.20")
 
+    def test_load_config_applies_runtime_overrides_and_records_override_state(self) -> None:
+        service = SimpleNamespace(runtime_state_path="/tmp/does-not-exist.json", deviceinstance=60)
+        controller = ServiceStateController(service, self._normalize_mode)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "config.ini")
+            overrides_path = os.path.join(temp_dir, "runtime-overrides.ini")
+            with open(config_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "[DEFAULT]\n"
+                    "Host=192.168.1.20\n"
+                    f"RuntimeOverridesPath={overrides_path}\n"
+                    "Mode=0\n"
+                    "AutoStart=1\n"
+                    "AutoStartSurplusWatts=1700\n"
+                    "PhaseSelection=P1\n"
+                )
+            with open(overrides_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "[RuntimeOverrides]\n"
+                    "Mode=1\n"
+                    "AutoStart=0\n"
+                    "AutoStartSurplusWatts=1850\n"
+                    "PhaseSelection=P1_P2\n"
+                )
+
+            with patch.object(ServiceStateController, "config_path", return_value=config_path):
+                config = controller.load_config()
+
+        self.assertEqual(config["DEFAULT"]["Mode"], "1")
+        self.assertEqual(config["DEFAULT"]["AutoStart"], "0")
+        self.assertEqual(config["DEFAULT"]["AutoStartSurplusWatts"], "1850")
+        self.assertEqual(config["DEFAULT"]["PhaseSelection"], "P1_P2")
+        self.assertTrue(service._runtime_overrides_active)
+        self.assertEqual(service.runtime_overrides_path, overrides_path)
+        self.assertEqual(
+            service._runtime_overrides_values,
+            {
+                "Mode": "1",
+                "AutoStart": "0",
+                "AutoStartSurplusWatts": "1850",
+                "PhaseSelection": "P1_P2",
+            },
+        )
+
+    def test_save_runtime_overrides_writes_small_ini_and_skips_unchanged_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            overrides_path = os.path.join(temp_dir, "runtime-overrides.ini")
+            service = SimpleNamespace(
+                runtime_overrides_path=overrides_path,
+                virtual_mode=1,
+                virtual_autostart=0,
+                virtual_set_current=13.5,
+                min_current=6.0,
+                max_current=16.0,
+                requested_phase_selection="P1_P2",
+                auto_start_surplus_watts=1850.0,
+                auto_stop_surplus_watts=1350.0,
+                auto_min_soc=40.0,
+                auto_resume_soc=50.0,
+                auto_start_delay_seconds=10.0,
+                auto_stop_delay_seconds=30.0,
+                auto_phase_switching_enabled=True,
+                _runtime_overrides_serialized=None,
+                _runtime_overrides_active=False,
+                _runtime_overrides_values={},
+            )
+            controller = ServiceStateController(service, self._normalize_mode)
+
+            controller.save_runtime_overrides()
+
+            with open(overrides_path, "r", encoding="utf-8") as handle:
+                payload = handle.read()
+
+            self.assertIn("[RuntimeOverrides]", payload)
+            self.assertIn("Mode = 1", payload)
+            self.assertIn("PhaseSelection = P1_P2", payload)
+            self.assertIn("AutoStartSurplusWatts = 1850.0", payload)
+            self.assertTrue(service._runtime_overrides_active)
+            self.assertEqual(service._runtime_overrides_values["AutoPhaseSwitching"], "1")
+
+            with patch("shelly_wallbox.controllers.state.write_text_atomically") as write_mock:
+                controller.save_runtime_overrides()
+
+        write_mock.assert_not_called()
+
     def test_validate_runtime_config_clamps_invalid_values(self) -> None:
         service = make_state_validation_service(
             poll_interval_ms=0,

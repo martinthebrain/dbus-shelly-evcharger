@@ -2,6 +2,7 @@
 """Configuration and RAM-only runtime-state helpers for the Shelly wallbox service."""
 
 import configparser
+from dataclasses import dataclass
 import json
 import logging
 import os
@@ -32,6 +33,47 @@ from shelly_wallbox.core.contracts import (
     normalize_learning_state,
 )
 from shelly_wallbox.core.shared import compact_json, write_text_atomically
+
+
+@dataclass(frozen=True)
+class RuntimeOverrideSpec:
+    """One DBus-writable runtime setting that can persist in an override file."""
+
+    dbus_path: str
+    config_key: str
+    attr_name: str
+    value_kind: str
+
+
+RUNTIME_OVERRIDE_SPECS: tuple[RuntimeOverrideSpec, ...] = (
+    RuntimeOverrideSpec("/Mode", "Mode", "virtual_mode", "int"),
+    RuntimeOverrideSpec("/AutoStart", "AutoStart", "virtual_autostart", "bool"),
+    RuntimeOverrideSpec("/SetCurrent", "SetCurrent", "virtual_set_current", "float"),
+    RuntimeOverrideSpec("/MinCurrent", "MinCurrent", "min_current", "float"),
+    RuntimeOverrideSpec("/MaxCurrent", "MaxCurrent", "max_current", "float"),
+    RuntimeOverrideSpec("/PhaseSelection", "PhaseSelection", "requested_phase_selection", "phase"),
+    RuntimeOverrideSpec("/Auto/StartSurplusWatts", "AutoStartSurplusWatts", "auto_start_surplus_watts", "float"),
+    RuntimeOverrideSpec("/Auto/StopSurplusWatts", "AutoStopSurplusWatts", "auto_stop_surplus_watts", "float"),
+    RuntimeOverrideSpec("/Auto/MinSoc", "AutoMinSoc", "auto_min_soc", "float"),
+    RuntimeOverrideSpec("/Auto/ResumeSoc", "AutoResumeSoc", "auto_resume_soc", "float"),
+    RuntimeOverrideSpec("/Auto/StartDelaySeconds", "AutoStartDelaySeconds", "auto_start_delay_seconds", "float"),
+    RuntimeOverrideSpec("/Auto/StopDelaySeconds", "AutoStopDelaySeconds", "auto_stop_delay_seconds", "float"),
+    RuntimeOverrideSpec("/Auto/PhaseSwitching", "AutoPhaseSwitching", "auto_phase_switching_enabled", "bool"),
+)
+RUNTIME_OVERRIDE_BY_PATH: dict[str, RuntimeOverrideSpec] = {
+    spec.dbus_path: spec for spec in RUNTIME_OVERRIDE_SPECS
+}
+RUNTIME_OVERRIDE_BY_CONFIG_KEY: dict[str, RuntimeOverrideSpec] = {
+    spec.config_key: spec for spec in RUNTIME_OVERRIDE_SPECS
+}
+RUNTIME_OVERRIDE_SECTION = "RuntimeOverrides"
+
+
+class _CasePreservingConfigParser(configparser.ConfigParser):
+    """Config parser that keeps option names exactly as written."""
+
+    def optionxform(self, optionstr: str) -> str:
+        return optionstr
 
 
 class ServiceStateController:
@@ -78,6 +120,13 @@ class ServiceStateController:
             "venus",
             "config.shelly_wallbox.ini",
         )
+
+    @classmethod
+    def runtime_overrides_path(cls, defaults: configparser.SectionProxy) -> str:
+        """Return the persistent runtime-override path for the current service instance."""
+        device_instance = defaults.get("DeviceInstance", "60").strip() or "60"
+        fallback = f"/data/etc/dbus-shelly-wallbox-overrides-{device_instance}.ini"
+        return defaults.get("RuntimeOverridesPath", fallback).strip()
 
     @staticmethod
     def _summary_flag(value: object) -> str:
@@ -401,6 +450,93 @@ class ServiceStateController:
             "relay_last_changed_at": svc.relay_last_changed_at,
             "relay_last_off_at": svc.relay_last_off_at,
         }
+
+    @classmethod
+    def _read_runtime_override_values(cls, path: str) -> dict[str, str]:
+        """Return normalized runtime-override config values from one INI file."""
+        if not str(path).strip():
+            return {}
+        parser = _CasePreservingConfigParser()
+        try:
+            read_files = parser.read(path)
+        except Exception as error:  # pylint: disable=broad-except
+            logging.warning("Unable to read runtime overrides from %s: %s", path, error)
+            return {}
+        if not read_files or not parser.has_section(RUNTIME_OVERRIDE_SECTION):
+            return {}
+        values: dict[str, str] = {}
+        section = parser[RUNTIME_OVERRIDE_SECTION]
+        for config_key, raw_value in section.items():
+            spec = RUNTIME_OVERRIDE_BY_CONFIG_KEY.get(str(config_key).strip())
+            if spec is None:
+                continue
+            values[spec.config_key] = str(raw_value).strip()
+        return values
+
+    @classmethod
+    def _apply_runtime_overrides_to_config(
+        cls,
+        svc: Any,
+        config: configparser.ConfigParser,
+    ) -> configparser.ConfigParser:
+        """Overlay persistent runtime overrides onto one loaded config parser."""
+        defaults = config["DEFAULT"]
+        path = cls.runtime_overrides_path(defaults)
+        values = cls._read_runtime_override_values(path)
+        for config_key, value in values.items():
+            defaults[config_key] = str(value)
+        svc.runtime_overrides_path = path
+        svc._runtime_overrides_active = bool(values)
+        svc._runtime_overrides_values = dict(values)
+        svc._runtime_overrides_serialized = compact_json(values)
+        return config
+
+    @staticmethod
+    def _override_value_as_text(spec: RuntimeOverrideSpec, value: object) -> str:
+        """Return one runtime override as stable text for INI persistence."""
+        if spec.value_kind == "bool":
+            return str(int(bool(value)))
+        if spec.value_kind == "int":
+            return str(ServiceStateController.coerce_runtime_int(value))
+        if spec.value_kind == "phase":
+            return str(ServiceStateController._normalize_runtime_phase_selection(value))
+        return str(ServiceStateController.coerce_runtime_float(value))
+
+    def current_runtime_overrides(self) -> dict[str, str]:
+        """Return the persistent runtime override payload as config-keyed text values."""
+        svc = self.service
+        values: dict[str, str] = {}
+        for spec in RUNTIME_OVERRIDE_SPECS:
+            values[spec.config_key] = self._override_value_as_text(spec, getattr(svc, spec.attr_name))
+        return values
+
+    def _serialized_runtime_overrides(self) -> str:
+        """Return one stable serialized snapshot of the current runtime overrides."""
+        return compact_json(self.current_runtime_overrides())
+
+    def save_runtime_overrides(self) -> None:
+        """Persist runtime-overridable DBus settings to a small INI file."""
+        svc = self.service
+        path = str(getattr(svc, "runtime_overrides_path", "")).strip()
+        if not path:
+            return
+        payload = self.current_runtime_overrides()
+        serialized = compact_json(payload)
+        if serialized == getattr(svc, "_runtime_overrides_serialized", None):
+            return
+        parser = _CasePreservingConfigParser()
+        parser[RUNTIME_OVERRIDE_SECTION] = payload
+        try:
+            from io import StringIO
+
+            handle = StringIO()
+            parser.write(handle)
+            write_text_atomically(path, handle.getvalue())
+            svc._runtime_overrides_serialized = serialized
+            svc._runtime_overrides_active = True
+            svc._runtime_overrides_values = dict(payload)
+        except Exception as error:  # pylint: disable=broad-except
+            logging.warning("Unable to write runtime overrides to %s: %s", path, error)
 
     def _serialized_runtime_state(self) -> str:
         """Return the normalized JSON string used for RAM-only state persistence."""
@@ -1001,4 +1137,4 @@ class ServiceStateController:
                 "deploy/venus/config.shelly_wallbox.ini is missing or incomplete. "
                 "Copy it from the documented deploy/venus/config.shelly_wallbox.ini template and set DEFAULT Host."
             )
-        return config
+        return self._apply_runtime_overrides_to_config(self.service, config)

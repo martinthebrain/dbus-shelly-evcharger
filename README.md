@@ -33,7 +33,7 @@ The codebase supports:
 - Audit logging for Auto-mode decisions
 - Watchdog and recovery behavior for stale helper snapshots or Shelly faults
 - Works out-of-the-box with Home Assistant via the Venus OS MQTT bridge. All
-  parameters can be monitored and controlled remotely by
+  runtime control parameters can be monitored and controlled remotely by
   subscribing/publishing to the corresponding MQTT topics.
 
 ## Quick Start
@@ -217,6 +217,43 @@ The comments in the config explain each group of settings:
 - helper / watchdog behavior
 - audit logging
 
+### Runtime Overrides via DBus / MQTT
+
+The service now keeps a small persistent runtime-override file separate from
+the main deployment config:
+
+- `RuntimeStatePath` stays RAM-only and restores volatile UI/runtime state
+- `RuntimeOverridesPath` stores selected DBus-writable control values so they
+  survive restarts and can be driven via the Venus MQTT bridge
+
+This split is intentional:
+
+- structural settings such as backend types, hosts, credentials, and adapter
+  wiring stay in `config.shelly_wallbox.ini`
+- day-to-day runtime controls can be changed safely through DBus/MQTT without
+  rewriting the structural installation config
+
+Current persistent runtime-override paths include:
+
+- `/Mode`
+- `/AutoStart`
+- `/SetCurrent`
+- `/MinCurrent`
+- `/MaxCurrent`
+- `/PhaseSelection`
+- `/Auto/StartSurplusWatts`
+- `/Auto/StopSurplusWatts`
+- `/Auto/MinSoc`
+- `/Auto/ResumeSoc`
+- `/Auto/StartDelaySeconds`
+- `/Auto/StopDelaySeconds`
+- `/Auto/PhaseSwitching`
+
+The active override state is visible on DBus via:
+
+- `/Auto/RuntimeOverridesActive`
+- `/Auto/RuntimeOverridesPath`
+
 ## Install on Cerbo GX / Venus OS
 
 ### Required Files on the Cerbo
@@ -328,6 +365,11 @@ amps, `1001` for actual amps, `1004` for runtime enable/disable, `1006` for
 EVSE state, and `1007` for status/fault flags. Native phase switching is not
 exposed there, so `simpleevse_charger` stays single-phase on the charger side
 and relies on a separate switch backend if you want external phase switching.
+For fixed one-/two-/three-phase SimpleEVSE installs without native phase
+feedback, `[Capabilities] SupportedPhaseSelections=` may contain exactly one
+configured layout such as `P1_P2_P3`. When no separate meter backend exists,
+Venus power/energy values are then estimated from charger current, voltage, and
+that configured phase count; DBus marks this via `/Auto/ChargerEstimate*`.
 
 Minimal example:
 
@@ -335,6 +377,9 @@ Minimal example:
 [Adapter]
 Type=simpleevse_charger
 Transport=serial_rtu
+
+[Capabilities]
+SupportedPhaseSelections=P1_P2_P3
 
 [Transport]
 Device=/dev/ttyUSB0
@@ -355,6 +400,11 @@ It follows the documented SmartEVSE-2 Modbus register map conservatively:
 This first implementation keeps native phase switching disabled and reports
 only `P1` on the charger side, so mixed or external phase switching should
 still be handled through a separate switch backend.
+For fixed one-/two-/three-phase SmartEVSE installs without native phase
+feedback, `[Capabilities] SupportedPhaseSelections=` may contain exactly one
+configured layout such as `P1_P2_P3`. In meterless setups the service can then
+estimate Venus power/energy from charger current, voltage, and that configured
+phase count, again marked through `/Auto/ChargerEstimate*`.
 
 Minimal example:
 
@@ -362,6 +412,9 @@ Minimal example:
 [Adapter]
 Type=smartevse_charger
 Transport=serial_rtu
+
+[Capabilities]
+SupportedPhaseSelections=P1_P2_P3
 
 [Transport]
 Device=/dev/ttyUSB0
@@ -431,6 +484,33 @@ sections to the switch backend config. Each section supports:
 Typical example: an auxiliary contact on `Input` channel `7` with `ValuePath=state`.
 The service reads these Shelly RPC states directly and feeds them into the same
 health, DBus, summary, and audit diagnostics.
+
+Native Shelly meter and switch backends also accept an optional
+`[Adapter] ShellyProfile=...` preset so common Shelly families no longer need a
+small template adapter just to pick the right component namespace. The current
+wallbox-focused presets are:
+
+- `switch_1ch`
+- `switch_1ch_with_pm`
+- `switch_multi_or_plug`
+- `switch_or_cover_profile`
+- `pm1_meter_only`
+- `em1_meter_single_or_dual`
+- `em_3phase_profiled`
+
+A compact configuration matrix for these presets lives in
+[SHELLY_PROFILES.md](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/dbus-shelly-evcharger/SHELLY_PROFILES.md).
+
+These presets currently cover the relevant local RPC namespaces for wallbox
+setups:
+
+- `Switch.GetStatus`-based relays and plugs
+- `PM1.GetStatus` meters
+- `EM1.GetStatus` single-/dual-channel energy meters
+- `EM.GetStatus` three-phase meters
+
+You can still override `Component=` and `Id=` manually when a preset needs a
+slight variant for your installation.
 
 If each switched phase is handled by its own dedicated child adapter, use
 `switch_group`. It acts as a pure coordinator and maps concrete child switch
@@ -621,7 +701,9 @@ deployment on the Cerbo.
 - The service uses runtime state in RAM to avoid unnecessary flash wear.
 - The example config is sanitized for GitHub. Replace all example addresses and
   identifiers before real deployment.
-- This script is specifically designed for Shelly Gen4 models. Older generations (Gen1-3) are not compatible due to different API paths and lower relay power ratings (10A vs 16A).
+- Gen4 remains the primary tested direct-switch path, but the native Shelly
+  backends now also expose config-selectable RPC-family presets for additional
+  modern Shelly switch and meter devices such as `PM1`, `EM1`, and `EM`.
 
 ## Disclaimer
 

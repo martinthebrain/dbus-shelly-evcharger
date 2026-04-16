@@ -14,7 +14,12 @@ from .modbus_transport import (
     create_modbus_transport,
     load_modbus_transport_settings,
 )
-from .models import ChargerState, PhaseSelection, normalize_phase_selection
+from .models import (
+    ChargerState,
+    PhaseSelection,
+    normalize_phase_selection,
+    normalize_phase_selection_tuple,
+)
 
 
 _SIMPLEEVSE_SUPPORTED_PHASE_SELECTIONS: tuple[PhaseSelection, ...] = ("P1",)
@@ -59,13 +64,28 @@ def _config(config_path: str) -> configparser.ConfigParser:
     return parser
 
 
+def _supported_phase_selections(parser: configparser.ConfigParser) -> tuple[PhaseSelection, ...]:
+    """Return one fixed configured phase layout for SimpleEVSE-backed installations."""
+    raw_value = (
+        parser["Capabilities"].get("SupportedPhaseSelections", "P1")
+        if parser.has_section("Capabilities")
+        else "P1"
+    )
+    normalized = normalize_phase_selection_tuple(raw_value, _SIMPLEEVSE_SUPPORTED_PHASE_SELECTIONS)
+    if len(normalized) != 1:
+        raise ValueError(
+            "SimpleEVSE charger backend requires exactly one fixed [Capabilities] SupportedPhaseSelections value"
+        )
+    return normalized
+
+
 def load_simpleevse_charger_settings(service: object, config_path: str) -> SimpleEvseChargerSettings:
     """Return normalized SimpleEVSE charger settings."""
     parser = _config(config_path)
     return SimpleEvseChargerSettings(
         transport_settings=load_modbus_transport_settings(parser, service),
         profile_name="simpleevse",
-        supported_phase_selections=_SIMPLEEVSE_SUPPORTED_PHASE_SELECTIONS,
+        supported_phase_selections=_supported_phase_selections(parser),
         current_register=_SIMPLEEVSE_CURRENT_REGISTER,
         actual_current_register=_SIMPLEEVSE_ACTUAL_CURRENT_REGISTER,
         vehicle_state_register=_SIMPLEEVSE_VEHICLE_STATE_REGISTER,
@@ -171,6 +191,7 @@ class SimpleEvseChargerBackend:
 
     def read_charger_state(self) -> ChargerState:
         """Read one normalized charger state from the SimpleEVSE Modbus registers."""
+        fixed_phase_selection = self.settings.supported_phase_selections[0]
         current_setting = self._read_register(self.settings.current_register)
         actual_current = self._read_register(self.settings.actual_current_register)
         vehicle_state = self._read_register(self.settings.vehicle_state_register)
@@ -181,7 +202,7 @@ class SimpleEvseChargerBackend:
         return ChargerState(
             enabled=_enabled(control_bits, evse_state),
             current_amps=float(current_setting),
-            phase_selection="P1",
+            phase_selection=fixed_phase_selection,
             actual_current_amps=float(actual_current),
             power_w=None,
             energy_kwh=None,
@@ -198,7 +219,11 @@ class SimpleEvseChargerBackend:
         self._write_register(self.settings.current_register, _rounded_current_setting(amps))
 
     def set_phase_selection(self, selection: PhaseSelection) -> None:
-        """Reject native phase writes because SimpleEVSE has no phase register."""
-        normalized = normalize_phase_selection(selection, "P1")
-        if normalized != "P1":
-            raise ValueError("SimpleEVSE charger backend does not support native phase switching")
+        """Reject native phase writes, except for the already configured fixed layout."""
+        fixed_phase_selection = self.settings.supported_phase_selections[0]
+        normalized = normalize_phase_selection(selection, fixed_phase_selection)
+        if normalized != fixed_phase_selection:
+            raise ValueError(
+                "SimpleEVSE charger backend does not support native phase switching "
+                f"(configured fixed phase selection: {fixed_phase_selection})"
+            )

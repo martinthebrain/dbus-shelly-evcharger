@@ -146,9 +146,13 @@ def probe_meter_backend(path: str) -> dict[str, object]:
     if constructor is None:
         raise ValueError(f"Backend type '{adapter_type}' is not a meter backend")
     backend = constructor(_probe_service(), config_path=path)
+    settings = getattr(backend, "settings", None)
     return {
         "path": path,
         "type": adapter_type,
+        "shelly_profile": getattr(settings, "profile_name", None),
+        "component": getattr(settings, "component", None),
+        "device_id": getattr(settings, "device_id", None),
         "meter": _json_ready(backend.read_meter()),
     }
 
@@ -164,6 +168,9 @@ def probe_switch_backend(path: str) -> dict[str, object]:
     return {
         "path": path,
         "type": adapter_type,
+        "shelly_profile": getattr(settings, "profile_name", None),
+        "component": getattr(settings, "component", None),
+        "device_id": getattr(settings, "device_id", None),
         "capabilities": _json_ready(backend.capabilities()),
         "phase_switch_targets": _json_ready(getattr(settings, "phase_switch_targets", {})),
         "phase_members": _json_ready(getattr(settings, "phase_members", {})),

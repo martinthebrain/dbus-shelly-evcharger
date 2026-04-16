@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
+from shelly_wallbox.auto.policy import AutoPolicy, validate_auto_policy
 from shelly_wallbox.backend.models import effective_supported_phase_selections
 from shelly_wallbox.core.contracts import write_failure_is_reversible
 from shelly_wallbox.controllers.write_snapshot import (
@@ -33,6 +34,15 @@ class DbusWriteController:
     SNAPSHOT_VALUE_ATTRS = SNAPSHOT_VALUE_ATTRS
     SNAPSHOT_MAPPING_ATTRS = SNAPSHOT_MAPPING_ATTRS
     CURRENT_SETTING_PATHS = ("/SetCurrent", "/MaxCurrent", "/MinCurrent")
+    AUTO_RUNTIME_SETTING_PATHS = {
+        "/Auto/StartSurplusWatts",
+        "/Auto/StopSurplusWatts",
+        "/Auto/MinSoc",
+        "/Auto/ResumeSoc",
+        "/Auto/StartDelaySeconds",
+        "/Auto/StopDelaySeconds",
+        "/Auto/PhaseSwitching",
+    }
 
     def __init__(self, port: Any) -> None:
         self.port = port
@@ -386,6 +396,46 @@ class DbusWriteController:
             target_value = port.min_current
         port.publish_dbus_path(path, target_value, current_time, force=True)
 
+    @staticmethod
+    def _sync_auto_policy_runtime(port: Any) -> None:
+        """Rebuild and validate the structured Auto policy after runtime tuning writes."""
+        validate_auto_policy(AutoPolicy.from_service(port._service), port._service)
+        port.validate_runtime_config()
+
+    def _handle_auto_runtime_setting_write(self, path: str, value: Any) -> None:
+        """Apply one writable Auto tuning value that may persist in runtime overrides."""
+        port = self.port
+        current_time = port.time_now()
+        if path == "/Auto/StartSurplusWatts":
+            port.auto_start_surplus_watts = float(value)
+            self._sync_auto_policy_runtime(port)
+            target_value = float(port.auto_start_surplus_watts)
+        elif path == "/Auto/StopSurplusWatts":
+            port.auto_stop_surplus_watts = float(value)
+            self._sync_auto_policy_runtime(port)
+            target_value = float(port.auto_stop_surplus_watts)
+        elif path == "/Auto/MinSoc":
+            port.auto_min_soc = float(value)
+            self._sync_auto_policy_runtime(port)
+            target_value = float(port.auto_min_soc)
+        elif path == "/Auto/ResumeSoc":
+            port.auto_resume_soc = float(value)
+            self._sync_auto_policy_runtime(port)
+            target_value = float(port.auto_resume_soc)
+        elif path == "/Auto/StartDelaySeconds":
+            port.auto_start_delay_seconds = float(value)
+            port.validate_runtime_config()
+            target_value = float(port.auto_start_delay_seconds)
+        elif path == "/Auto/StopDelaySeconds":
+            port.auto_stop_delay_seconds = float(value)
+            port.validate_runtime_config()
+            target_value = float(port.auto_stop_delay_seconds)
+        else:
+            port.auto_phase_switching_enabled = int(value)
+            self._sync_auto_policy_runtime(port)
+            target_value = int(port.auto_phase_switching_enabled)
+        port.publish_dbus_path(path, target_value, current_time, force=True)
+
     def _handle_phase_selection_write(self, value: Any) -> None:
         """Apply one phase selection when the current backend can do so safely."""
         port = self.port
@@ -482,6 +532,9 @@ class DbusWriteController:
             return
         if path in self.CURRENT_SETTING_PATHS:
             self._handle_current_setting_write(path, value)
+            return
+        if path in self.AUTO_RUNTIME_SETTING_PATHS:
+            self._handle_auto_runtime_setting_write(path, value)
 
     def handle_write(self, path: str, value: Any) -> bool:
         """Handle writable DBus path updates from Venus OS."""
@@ -491,6 +544,7 @@ class DbusWriteController:
         try:
             self._execute_write(path, value)
             port.save_runtime_state()
+            port.save_runtime_overrides()
             return True
         except Exception as error:  # pylint: disable=broad-except
             if write_failure_is_reversible(self._external_side_effect_started):

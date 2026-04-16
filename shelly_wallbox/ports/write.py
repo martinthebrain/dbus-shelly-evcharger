@@ -35,6 +35,12 @@ class WriteControllerPort(_BaseServicePort):
         "supported_phase_selections",
         "min_current",
         "max_current",
+        "auto_start_surplus_watts",
+        "auto_stop_surplus_watts",
+        "auto_min_soc",
+        "auto_resume_soc",
+        "auto_start_delay_seconds",
+        "auto_stop_delay_seconds",
         "auto_start_condition_since",
         "auto_stop_condition_since",
         "manual_override_until",
@@ -106,6 +112,62 @@ class WriteControllerPort(_BaseServicePort):
     @max_current.setter
     def max_current(self, value: Any) -> None:
         self._service.max_current = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_start_surplus_watts(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_start_surplus_watts", 0.0)) or 0.0)
+
+    @auto_start_surplus_watts.setter
+    def auto_start_surplus_watts(self, value: Any) -> None:
+        self._service.auto_start_surplus_watts = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_stop_surplus_watts(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_stop_surplus_watts", 0.0)) or 0.0)
+
+    @auto_stop_surplus_watts.setter
+    def auto_stop_surplus_watts(self, value: Any) -> None:
+        self._service.auto_stop_surplus_watts = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_min_soc(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_min_soc", 0.0)) or 0.0)
+
+    @auto_min_soc.setter
+    def auto_min_soc(self, value: Any) -> None:
+        self._service.auto_min_soc = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_resume_soc(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_resume_soc", 0.0)) or 0.0)
+
+    @auto_resume_soc.setter
+    def auto_resume_soc(self, value: Any) -> None:
+        self._service.auto_resume_soc = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_start_delay_seconds(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_start_delay_seconds", 0.0)) or 0.0)
+
+    @auto_start_delay_seconds.setter
+    def auto_start_delay_seconds(self, value: Any) -> None:
+        self._service.auto_start_delay_seconds = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_stop_delay_seconds(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_stop_delay_seconds", 0.0)) or 0.0)
+
+    @auto_stop_delay_seconds.setter
+    def auto_stop_delay_seconds(self, value: Any) -> None:
+        self._service.auto_stop_delay_seconds = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_phase_switching_enabled(self) -> int:
+        return normalize_binary_flag(getattr(self._service, "auto_phase_switching_enabled", 1), default=1)
+
+    @auto_phase_switching_enabled.setter
+    def auto_phase_switching_enabled(self, value: Any) -> None:
+        self._service.auto_phase_switching_enabled = bool(normalize_binary_flag(value))
 
     @property
     def supported_phase_selections(self) -> tuple[str, ...]:
@@ -335,3 +397,15 @@ class WriteControllerPort(_BaseServicePort):
 
     def save_runtime_state(self) -> Any:
         return self._service._save_runtime_state()
+
+    def save_runtime_overrides(self) -> Any:
+        save_overrides = getattr(self._service, "_save_runtime_overrides", None)
+        if callable(save_overrides):
+            return save_overrides()
+        return None
+
+    def validate_runtime_config(self) -> Any:
+        validate_runtime = getattr(self._service, "_validate_runtime_config", None)
+        if callable(validate_runtime):
+            return validate_runtime()
+        return None

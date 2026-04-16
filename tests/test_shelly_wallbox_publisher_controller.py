@@ -126,6 +126,13 @@ class TestDbusPublishController(unittest.TestCase):
             supported_phase_selections=("P1", "P1_P2"),
             min_current=6.0,
             max_current=16.0,
+            auto_start_surplus_watts=1850.0,
+            auto_stop_surplus_watts=1350.0,
+            auto_min_soc=40.0,
+            auto_resume_soc=50.0,
+            auto_start_delay_seconds=10.0,
+            auto_stop_delay_seconds=30.0,
+            auto_phase_switching_enabled=True,
             learned_charge_power_state="stable",
             learned_charge_power_watts=2990.0,
             learned_charge_power_updated_at=95.0,
@@ -143,6 +150,13 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(values["/PhaseSelection"], "P1_P2")
         self.assertEqual(values["/PhaseSelectionActive"], "P1")
         self.assertEqual(values["/SupportedPhaseSelections"], "P1,P1_P2")
+        self.assertEqual(values["/Auto/StartSurplusWatts"], 1850.0)
+        self.assertEqual(values["/Auto/StopSurplusWatts"], 1350.0)
+        self.assertEqual(values["/Auto/MinSoc"], 40.0)
+        self.assertEqual(values["/Auto/ResumeSoc"], 50.0)
+        self.assertEqual(values["/Auto/StartDelaySeconds"], 10.0)
+        self.assertEqual(values["/Auto/StopDelaySeconds"], 30.0)
+        self.assertEqual(values["/Auto/PhaseSwitching"], 1)
 
     def test_config_values_can_disable_learned_current_display(self) -> None:
         service = SimpleNamespace(
@@ -408,6 +422,10 @@ class TestDbusPublishController(unittest.TestCase):
             _last_charger_state_fault="",
             _last_charger_fault_active=1,
             _last_charger_state_at=97.0,
+            _last_charger_estimate_source="current-voltage-phase",
+            _last_charger_estimate_at=99.0,
+            _runtime_overrides_active=True,
+            runtime_overrides_path="/data/etc/wallbox-overrides.ini",
             _last_charger_transport_reason="offline",
             _last_charger_transport_source="read",
             _last_charger_transport_detail="Modbus slave 1 on /dev/ttyS7 did not respond",
@@ -466,6 +484,10 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(counter_values["/Auto/ChargerStatus"], "charging")
         self.assertEqual(counter_values["/Auto/ChargerFault"], "")
         self.assertEqual(counter_values["/Auto/ChargerFaultActive"], 1)
+        self.assertEqual(counter_values["/Auto/ChargerEstimateActive"], 1)
+        self.assertEqual(counter_values["/Auto/ChargerEstimateSource"], "current-voltage-phase")
+        self.assertEqual(counter_values["/Auto/RuntimeOverridesActive"], 1)
+        self.assertEqual(counter_values["/Auto/RuntimeOverridesPath"], "/data/etc/wallbox-overrides.ini")
         self.assertEqual(counter_values["/Auto/ChargerTransportActive"], 1)
         self.assertEqual(counter_values["/Auto/ChargerTransportReason"], "offline")
         self.assertEqual(counter_values["/Auto/ChargerTransportSource"], "read")
@@ -507,6 +529,7 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(age_values["/Auto/ContactorLockoutAge"], -1.0)
         self.assertEqual(age_values["/Auto/LastSwitchFeedbackAge"], 4.0)
         self.assertEqual(age_values["/Auto/LastChargerReadAge"], 3.0)
+        self.assertEqual(age_values["/Auto/LastChargerEstimateAge"], 1.0)
         self.assertEqual(age_values["/Auto/LastChargerTransportAge"], 2.0)
         self.assertEqual(age_values["/Auto/ChargerRetryRemaining"], 5.0)
 

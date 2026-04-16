@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from .shelly_support import ShellyBackendBase
+from .shelly_support import ShellyBackendBase, validate_shelly_profile_role
 from .models import PhaseSelection, SwitchCapabilities, SwitchState, SwitchingMode
 
 
@@ -24,6 +24,7 @@ class ShellySwitchBackend(ShellyBackendBase):
             config_path=config_path,
             default_switching_mode=default_switching_mode,
         )
+        validate_shelly_profile_role(self.settings.profile_name, "switch")
         default_selection = self.settings.supported_phase_selections[0]
         self._selected_phase_selection: PhaseSelection = (
             self.settings.phase_selection

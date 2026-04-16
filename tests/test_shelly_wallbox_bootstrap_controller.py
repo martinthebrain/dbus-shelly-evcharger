@@ -114,6 +114,15 @@ class TestServiceBootstrapController(unittest.TestCase):
             requested_phase_selection="P1",
             active_phase_selection="P1",
             supported_phase_selections=("P1",),
+            auto_start_surplus_watts=1850.0,
+            auto_stop_surplus_watts=1350.0,
+            auto_min_soc=40.0,
+            auto_resume_soc=50.0,
+            auto_start_delay_seconds=10.0,
+            auto_stop_delay_seconds=30.0,
+            auto_phase_switching_enabled=True,
+            runtime_overrides_path="/data/etc/wallbox-overrides.ini",
+            _runtime_overrides_active=True,
             backend_mode="split",
             meter_backend_type="shelly_meter",
             switch_backend_type="template_switch",
@@ -131,6 +140,8 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service._dbusservice.paths["/Mgmt/ProcessName"]["value"], "/tmp/dbus_shelly_wallbox.py")
         self.assertEqual(service._dbusservice.paths["/Mode"]["value"], 0)
         self.assertEqual(service._dbusservice.paths["/PhaseSelection"]["value"], "P1")
+        self.assertEqual(service._dbusservice.paths["/Auto/StartSurplusWatts"]["value"], 1850.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseSwitching"]["value"], 1)
         self.assertEqual(service._dbusservice.paths["/Auto/State"]["value"], "idle")
         self.assertEqual(service._dbusservice.paths["/Auto/StateCode"]["value"], 0)
         self.assertEqual(service._dbusservice.paths["/Auto/RecoveryActive"]["value"], 0)
@@ -146,6 +157,8 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service._dbusservice.paths["/Auto/ChargerTransportReason"]["value"], "")
         self.assertEqual(service._dbusservice.paths["/Auto/ChargerTransportSource"]["value"], "")
         self.assertEqual(service._dbusservice.paths["/Auto/ChargerTransportDetail"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/RuntimeOverridesActive"]["value"], 1)
+        self.assertEqual(service._dbusservice.paths["/Auto/RuntimeOverridesPath"]["value"], "/data/etc/wallbox-overrides.ini")
         self.assertEqual(service._dbusservice.paths["/Auto/ChargerRetryActive"]["value"], 0)
         self.assertEqual(service._dbusservice.paths["/Auto/ChargerRetryReason"]["value"], "")
         self.assertEqual(service._dbusservice.paths["/Auto/ChargerRetrySource"]["value"], "")
@@ -182,6 +195,8 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service._dbusservice.paths["/Auto/ChargerRetryRemaining"]["value"], -1)
         self.assertTrue(service._dbusservice.paths["/Mode"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/PhaseSelection"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/StartSurplusWatts"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/PhaseSwitching"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/Auto/PhaseLockoutReset"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/Auto/ContactorLockoutReset"]["writeable"])
         self.assertTrue(service._dbusservice.register_called)
@@ -294,9 +309,13 @@ class TestServiceBootstrapController(unittest.TestCase):
                     "StartStop": "1",
                     "Enable": "0",
                     "SetCurrent": "12.5",
+                    "PhaseSelection": "P1_P2",
                 }
             },
             max_current=16.0,
+            _switch_backend=SimpleNamespace(
+                capabilities=MagicMock(return_value=SimpleNamespace(supported_phase_selections=("P1", "P1_P2")))
+            ),
         )
         controller = self._controller(service)
 
@@ -318,9 +337,9 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service.learned_charge_power_signature_mismatch_sessions, 0)
         self.assertIsNone(service.learned_charge_power_signature_checked_session_started_at)
         self.assertIsNone(service.relay_last_changed_at)
-        self.assertEqual(service.supported_phase_selections, ("P1",))
-        self.assertEqual(service.requested_phase_selection, "P1")
-        self.assertEqual(service.active_phase_selection, "P1")
+        self.assertEqual(service.supported_phase_selections, ("P1", "P1_P2"))
+        self.assertEqual(service.requested_phase_selection, "P1_P2")
+        self.assertEqual(service.active_phase_selection, "P1_P2")
         self.assertFalse(service._auto_mode_cutover_pending)
 
     def test_restore_runtime_state_sets_manual_startup_target_only_outside_auto_mode(self):

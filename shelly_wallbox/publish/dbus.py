@@ -388,6 +388,14 @@ class DbusPublishController:
         text = str(raw_value).strip() if raw_value is not None else ""
         return text
 
+    def _charger_estimate_active(self) -> int:
+        """Return whether meterless charger values are currently estimated."""
+        return int(bool(getattr(self.service, "_last_charger_estimate_source", None)))
+
+    def _charger_estimate_source(self) -> str:
+        """Return the current charger estimate source label for diagnostics."""
+        return self._diagnostic_text_value(getattr(self.service, "_last_charger_estimate_source", None))
+
     def _charger_transport_active(self, now: float) -> int:
         """Return whether a charger-transport issue is currently active."""
         return int(_fresh_charger_transport_timestamp(self.service, now) is not None)
@@ -556,6 +564,13 @@ class DbusPublishController:
             "/SetCurrent": self._display_set_current(now),
             "/MinCurrent": getattr(self.service, "min_current", 0.0),
             "/MaxCurrent": getattr(self.service, "max_current", 0.0),
+            "/Auto/StartSurplusWatts": getattr(self.service, "auto_start_surplus_watts", 0.0),
+            "/Auto/StopSurplusWatts": getattr(self.service, "auto_stop_surplus_watts", 0.0),
+            "/Auto/MinSoc": getattr(self.service, "auto_min_soc", 0.0),
+            "/Auto/ResumeSoc": getattr(self.service, "auto_resume_soc", 0.0),
+            "/Auto/StartDelaySeconds": getattr(self.service, "auto_start_delay_seconds", 0.0),
+            "/Auto/StopDelaySeconds": getattr(self.service, "auto_stop_delay_seconds", 0.0),
+            "/Auto/PhaseSwitching": int(bool(getattr(self.service, "auto_phase_switching_enabled", True))),
         }
 
     @staticmethod
@@ -782,6 +797,10 @@ class DbusPublishController:
             "/Auto/ChargerStatus": self._charger_text_observed("_last_charger_state_status"),
             "/Auto/ChargerFault": self._charger_text_observed("_last_charger_state_fault"),
             "/Auto/ChargerFaultActive": int(bool(getattr(self.service, "_last_charger_fault_active", 0))),
+            "/Auto/ChargerEstimateActive": self._charger_estimate_active(),
+            "/Auto/ChargerEstimateSource": self._charger_estimate_source(),
+            "/Auto/RuntimeOverridesActive": int(bool(getattr(self.service, "_runtime_overrides_active", False))),
+            "/Auto/RuntimeOverridesPath": str(getattr(self.service, "runtime_overrides_path", "") or ""),
             "/Auto/ChargerTransportActive": self._charger_transport_active(now),
             "/Auto/ChargerTransportReason": self._charger_transport_reason(now),
             "/Auto/ChargerTransportSource": self._charger_transport_source(now),
@@ -863,6 +882,12 @@ class DbusPublishController:
             ),
             "/Auto/LastChargerReadAge": self._age_seconds(
                 getattr(svc, "_last_charger_state_at", None), now
+            ),
+            "/Auto/LastChargerEstimateAge": self._age_seconds(
+                getattr(svc, "_last_charger_estimate_at", None)
+                if self._charger_estimate_active()
+                else None,
+                now,
             ),
             "/Auto/LastChargerTransportAge": self._age_seconds(
                 _fresh_charger_transport_timestamp(svc, now), now

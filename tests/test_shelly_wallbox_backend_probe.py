@@ -204,6 +204,7 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
                 temp_dir,
                 "charger.ini",
                 "[Adapter]\nType=simpleevse_charger\nTransport=tcp\n"
+                "[Capabilities]\nSupportedPhaseSelections=P1_P2_P3\n"
                 "[Transport]\nHost=192.168.1.50\nPort=502\nUnitId=1\n",
             )
 
@@ -257,6 +258,7 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
                 temp_dir,
                 "charger.ini",
                 "[Adapter]\nType=simpleevse_charger\nTransport=tcp\n"
+                "[Capabilities]\nSupportedPhaseSelections=P1_P2_P3\n"
                 "[Transport]\nHost=192.168.1.50\nPort=502\nUnitId=1\n",
             )
 
@@ -273,6 +275,7 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             self.assertIsNone(payload["transport_device"])
             self.assertEqual(payload["transport_serial_port_owner"], "none")
             self.assertEqual(payload["transport_serial_retry_count"], 0)
+            self.assertEqual(payload["supported_phase_selections"], ["P1_P2_P3"])
 
     def test_probe_simpleevse_charger_prints_serial_owner_details(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -303,6 +306,7 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
                 temp_dir,
                 "charger.ini",
                 "[Adapter]\nType=smartevse_charger\nTransport=tcp\n"
+                "[Capabilities]\nSupportedPhaseSelections=P1_P2\n"
                 "[Transport]\nHost=192.168.1.60\nPort=502\nUnitId=1\n",
             )
 
@@ -319,6 +323,7 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             self.assertIsNone(payload["transport_device"])
             self.assertEqual(payload["transport_serial_port_owner"], "none")
             self.assertEqual(payload["transport_serial_retry_count"], 0)
+            self.assertEqual(payload["supported_phase_selections"], ["P1_P2"])
 
     def test_read_simpleevse_charger_returns_live_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -520,17 +525,24 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             meter_path = self._write_config(
                 temp_dir,
                 "meter.ini",
-                "[Adapter]\nType=shelly_meter\nHost=192.168.1.10\nComponent=Switch\nId=0\n"
+                "[Adapter]\nType=shelly_meter\nHost=192.168.1.10\nShellyProfile=em_3phase_profiled\n"
                 "[Phase]\nMeasuredPhaseSelection=P1_P2_P3\n",
             )
             session = MagicMock()
             session.get.return_value = _FakeResponse(
                 {
-                    "output": True,
-                    "apower": 3450.0,
-                    "current": 15.0,
-                    "voltage": 230.0,
-                    "aenergy": {"total": 6789.0},
+                    "a_act_power": 1150.0,
+                    "b_act_power": 1150.0,
+                    "c_act_power": 1150.0,
+                    "a_current": 5.0,
+                    "b_current": 5.0,
+                    "c_current": 5.0,
+                    "a_voltage": 229.0,
+                    "b_voltage": 230.0,
+                    "c_voltage": 231.0,
+                    "a_total_act_energy": 2000.0,
+                    "b_total_act_energy": 2000.0,
+                    "c_total_act_energy": 2789.0,
                 }
             )
 
@@ -542,6 +554,9 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
             self.assertEqual(rc, 0)
             self.assertEqual(payload["type"], "shelly_meter")
+            self.assertEqual(payload["shelly_profile"], "em_3phase_profiled")
+            self.assertEqual(payload["component"], "EM")
+            self.assertEqual(payload["device_id"], 0)
             self.assertEqual(payload["meter"]["phase_selection"], "P1_P2_P3")
             self.assertEqual(payload["meter"]["phase_powers_w"], [1150.0, 1150.0, 1150.0])
 
@@ -586,7 +601,7 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             switch_path = self._write_config(
                 temp_dir,
                 "switch.ini",
-                "[Adapter]\nType=shelly_switch\nHost=192.168.1.11\nComponent=Switch\nId=1\n"
+                "[Adapter]\nType=shelly_switch\nHost=192.168.1.11\nShellyProfile=switch_1ch_with_pm\nId=1\n"
                 "[Capabilities]\nSwitchingMode=contactor\nSupportedPhaseSelections=P1,P1_P2_P3\n"
                 "RequiresChargePauseForPhaseChange=1\n"
                 "[PhaseMap]\nP1=1\nP1_P2_P3=1,2,3\n",
@@ -606,6 +621,9 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
             self.assertEqual(rc, 0)
             self.assertEqual(payload["type"], "shelly_switch")
+            self.assertEqual(payload["shelly_profile"], "switch_1ch_with_pm")
+            self.assertEqual(payload["component"], "Switch")
+            self.assertEqual(payload["device_id"], 1)
             self.assertEqual(payload["capabilities"]["switching_mode"], "contactor")
             self.assertEqual(payload["capabilities"]["supported_phase_selections"], ["P1", "P1_P2_P3"])
             self.assertEqual(payload["phase_switch_targets"], {"P1": [1], "P1_P2_P3": [1, 2, 3]})

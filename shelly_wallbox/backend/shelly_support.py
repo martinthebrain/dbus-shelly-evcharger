@@ -188,6 +188,7 @@ def _single_phase_vector(total: float, single_phase_line: object) -> tuple[float
 class ShellyBackendSettings:
     """Normalized Shelly backend config independent from service defaults."""
 
+    profile_name: str | None
     host: str
     component: str
     device_id: int
@@ -213,6 +214,104 @@ class ShellySignalReadbackSettings:
     device_id: int
     value_path: str
     invert: bool
+
+
+@dataclass(frozen=True)
+class ShellyProfileDefaults:
+    """One config-selectable Shelly family preset."""
+
+    component: str
+    device_id: int
+    roles: tuple[str, ...]
+    default_phase_selection: PhaseSelection | None = None
+
+
+_SHELLY_PROFILES: dict[str, ShellyProfileDefaults] = {
+    "switch_1ch": ShellyProfileDefaults(
+        component="Switch",
+        device_id=0,
+        roles=("switch",),
+    ),
+    "switch_1ch_with_pm": ShellyProfileDefaults(
+        component="Switch",
+        device_id=0,
+        roles=("switch", "meter"),
+    ),
+    "switch_multi_or_plug": ShellyProfileDefaults(
+        component="Switch",
+        device_id=0,
+        roles=("switch", "meter"),
+    ),
+    "switch_or_cover_profile": ShellyProfileDefaults(
+        component="Switch",
+        device_id=0,
+        roles=("switch",),
+    ),
+    "pm1_meter_only": ShellyProfileDefaults(
+        component="PM1",
+        device_id=0,
+        roles=("meter",),
+        default_phase_selection="P1",
+    ),
+    "pm1_meter": ShellyProfileDefaults(
+        component="PM1",
+        device_id=0,
+        roles=("meter",),
+        default_phase_selection="P1",
+    ),
+    "em1_meter_single_or_dual": ShellyProfileDefaults(
+        component="EM1",
+        device_id=0,
+        roles=("meter",),
+        default_phase_selection="P1",
+    ),
+    "em1_meter": ShellyProfileDefaults(
+        component="EM1",
+        device_id=0,
+        roles=("meter",),
+        default_phase_selection="P1",
+    ),
+    "em_3phase_profiled": ShellyProfileDefaults(
+        component="EM",
+        device_id=0,
+        roles=("meter",),
+        default_phase_selection="P1_P2_P3",
+    ),
+    "em_meter": ShellyProfileDefaults(
+        component="EM",
+        device_id=0,
+        roles=("meter",),
+        default_phase_selection="P1_P2_P3",
+    ),
+}
+
+
+def normalize_shelly_profile_name(value: object) -> str | None:
+    """Return one normalized optional Shelly family preset name."""
+    profile_name = str(value).strip().lower() if value is not None else ""
+    return profile_name or None
+
+
+def resolve_shelly_profile(profile_name: str | None) -> ShellyProfileDefaults | None:
+    """Return one Shelly profile descriptor when configured."""
+    if profile_name is None:
+        return None
+    defaults = _SHELLY_PROFILES.get(profile_name)
+    if defaults is None:
+        supported = ",".join(sorted(_SHELLY_PROFILES))
+        raise ValueError(f"Unsupported ShellyProfile '{profile_name}' (supported: {supported})")
+    return defaults
+
+
+def validate_shelly_profile_role(profile_name: str | None, role: str) -> None:
+    """Ensure the configured Shelly profile is valid for the requested backend role."""
+    defaults = resolve_shelly_profile(profile_name)
+    if defaults is None or str(role).strip().lower() in defaults.roles:
+        return
+    supported_roles = ",".join(defaults.roles)
+    raise ValueError(
+        f"ShellyProfile '{profile_name}' is not valid for {role} backends (supported roles: {supported_roles})"
+    )
 
 
 def _config_value(defaults: configparser.SectionProxy, key: str, fallback: object) -> str:
@@ -299,15 +398,32 @@ def load_shelly_backend_settings(
     phase_map = _section(parser, "PhaseMap")
     feedback = _section(parser, "Feedback")
     interlock = _section(parser, "Interlock")
-    default_phase = normalize_phase_selection(getattr(service, "phase", "L1"))
-    device_id = int(_config_value(adapter, "Id", getattr(service, "pm_id", 0)))
+    profile_name = normalize_shelly_profile_name(adapter.get("ShellyProfile", ""))
+    profile_defaults = resolve_shelly_profile(profile_name)
+    default_phase = normalize_phase_selection(
+        profile_defaults.default_phase_selection if profile_defaults is not None else getattr(service, "phase", "L1")
+    )
+    device_id = int(
+        _config_value(
+            adapter,
+            "Id",
+            profile_defaults.device_id if profile_defaults is not None else getattr(service, "pm_id", 0),
+        )
+    )
     switching_mode = _resolved_switching_mode(capabilities, default_switching_mode)
     supported_phase_selections = _supported_phase_selections(capabilities)
     max_power = _resolved_max_direct_switch_power_w(service, capabilities, switching_mode)
 
     return ShellyBackendSettings(
+        profile_name=profile_name,
         host=str(adapter.get("Host", getattr(service, "host", ""))).strip(),
-        component=str(adapter.get("Component", getattr(service, "pm_component", "Switch"))).strip() or "Switch",
+        component=str(
+            adapter.get(
+                "Component",
+                profile_defaults.component if profile_defaults is not None else getattr(service, "pm_component", "Switch"),
+            )
+        ).strip()
+        or "Switch",
         device_id=device_id,
         timeout_seconds=_resolved_timeout_seconds(adapter, service),
         username=str(adapter.get("Username", getattr(service, "username", ""))).strip(),

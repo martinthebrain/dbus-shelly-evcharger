@@ -127,6 +127,34 @@ class TestShellyWallboxBackendSwitch(unittest.TestCase):
                 ],
             )
 
+    def test_shelly_switch_uses_profile_defaults_for_single_channel_switches(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "switch.ini"
+            path.write_text(
+                "[Adapter]\nType=shelly_switch\nHost=192.168.1.33\nShellyProfile=switch_1ch_with_pm\n",
+                encoding="utf-8",
+            )
+            session = MagicMock()
+            session.get.side_effect = [
+                _FakeResponse({"output": True}),
+                _FakeResponse({}),
+            ]
+            backend = ShellySwitchBackend(self._service(session), config_path=str(path))
+
+            state = backend.read_switch_state()
+            backend.set_enabled(False)
+
+            self.assertEqual(backend.settings.profile_name, "switch_1ch_with_pm")
+            self.assertEqual(backend.settings.component, "Switch")
+            self.assertTrue(state.enabled)
+            self.assertEqual(
+                [call.kwargs["url"] for call in session.get.call_args_list],
+                [
+                    "http://192.168.1.33/rpc/Switch.GetStatus?id=0",
+                    "http://192.168.1.33/rpc/Switch.Set?id=0&on=false",
+                ],
+            )
+
     def test_switch_group_set_enabled_coordinates_mixed_child_backends(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = self._write_switch_group_config(temp_dir)

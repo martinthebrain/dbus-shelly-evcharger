@@ -58,6 +58,10 @@ class StatePublishMixin(ServiceControllerFactoryMixin):
         self._ensure_state_controller()
         return cast(dict[str, Any], self._state_controller.save_runtime_state())
 
+    def _save_runtime_overrides(self) -> dict[str, Any]:
+        self._ensure_state_controller()
+        return cast(dict[str, Any], self._state_controller.save_runtime_overrides())
+
     def _validate_runtime_config(self) -> None:
         self._ensure_state_controller()
         self._state_controller.validate_runtime_config()

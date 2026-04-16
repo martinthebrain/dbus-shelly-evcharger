@@ -103,6 +103,10 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
             "RuntimeStatePath",
             f"/run/dbus-shelly-wallbox-{svc.deviceinstance}.json",
         ).strip()
+        svc.runtime_overrides_path = defaults.get(
+            "RuntimeOverridesPath",
+            getattr(svc, "runtime_overrides_path", f"/data/etc/dbus-shelly-wallbox-overrides-{svc.deviceinstance}.ini"),
+        ).strip()
 
     def _load_auto_source_config(self, defaults: configparser.SectionProxy) -> None:
         """Load PV, battery, and grid source configuration for Auto mode."""

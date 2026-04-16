@@ -14,17 +14,26 @@ from .modbus_transport import (
     create_modbus_transport,
     load_modbus_transport_settings,
 )
-from .models import ChargerState, PhaseSelection, normalize_phase_selection
+from .models import (
+    ChargerState,
+    PhaseSelection,
+    normalize_phase_selection,
+    normalize_phase_selection_tuple,
+)
 
 
 _SMARTEVSE_SUPPORTED_PHASE_SELECTIONS: tuple[PhaseSelection, ...] = ("P1",)
 _SMARTEVSE_STATE_REGISTER = 0x0000
 _SMARTEVSE_ERROR_REGISTER = 0x0001
 _SMARTEVSE_CURRENT_REGISTER = 0x0002
+_SMARTEVSE_MODE_REGISTER = 0x0003
 _SMARTEVSE_ACCESS_REGISTER = 0x0005
 _SMARTEVSE_MAX_CURRENT_REGISTER = 0x0007
 _SMARTEVSE_MIN_CURRENT_AMPS = 6
 _SMARTEVSE_MAX_CURRENT_AMPS = 80
+_SMARTEVSE_MODE_NORMAL = 0
+_SMARTEVSE_MODE_SMART = 1
+_SMARTEVSE_MODE_SOLAR = 2
 _SMARTEVSE_ERROR_LESS_THAN_6A_BIT = 0x0001
 _SMARTEVSE_ERROR_NO_COMM_BIT = 0x0002
 _SMARTEVSE_ERROR_TEMP_HIGH_BIT = 0x0004
@@ -48,6 +57,7 @@ class SmartEvseChargerSettings:
     state_register: int
     error_register: int
     current_register: int
+    mode_register: int
     access_register: int
     max_current_register: int
 
@@ -61,16 +71,32 @@ def _config(config_path: str) -> configparser.ConfigParser:
     return parser
 
 
+def _supported_phase_selections(parser: configparser.ConfigParser) -> tuple[PhaseSelection, ...]:
+    """Return one fixed configured phase layout for SmartEVSE-backed installations."""
+    raw_value = (
+        parser["Capabilities"].get("SupportedPhaseSelections", "P1")
+        if parser.has_section("Capabilities")
+        else "P1"
+    )
+    normalized = normalize_phase_selection_tuple(raw_value, _SMARTEVSE_SUPPORTED_PHASE_SELECTIONS)
+    if len(normalized) != 1:
+        raise ValueError(
+            "SmartEVSE charger backend requires exactly one fixed [Capabilities] SupportedPhaseSelections value"
+        )
+    return normalized
+
+
 def load_smartevse_charger_settings(service: object, config_path: str) -> SmartEvseChargerSettings:
     """Return normalized SmartEVSE charger settings."""
     parser = _config(config_path)
     return SmartEvseChargerSettings(
         transport_settings=load_modbus_transport_settings(parser, service),
         profile_name="smartevse",
-        supported_phase_selections=_SMARTEVSE_SUPPORTED_PHASE_SELECTIONS,
+        supported_phase_selections=_supported_phase_selections(parser),
         state_register=_SMARTEVSE_STATE_REGISTER,
         error_register=_SMARTEVSE_ERROR_REGISTER,
         current_register=_SMARTEVSE_CURRENT_REGISTER,
+        mode_register=_SMARTEVSE_MODE_REGISTER,
         access_register=_SMARTEVSE_ACCESS_REGISTER,
         max_current_register=_SMARTEVSE_MAX_CURRENT_REGISTER,
     )
@@ -84,7 +110,7 @@ def _normalized_current_amps(raw_value: int) -> float:
     return float(value)
 
 
-def _rounded_current_setting(amps: float) -> int:
+def _rounded_current_setting(amps: float, *, max_current_amps: int | None = None) -> int:
     """Return one SmartEVSE-compatible current setpoint."""
     rounded = int(math.floor(float(amps) + 0.5))
     if rounded == 0:
@@ -93,6 +119,11 @@ def _rounded_current_setting(amps: float) -> int:
         raise ValueError(
             "Unsupported charger current "
             f"'{amps}' for SmartEVSE backend (expected 0 or {_SMARTEVSE_MIN_CURRENT_AMPS}..{_SMARTEVSE_MAX_CURRENT_AMPS} A)"
+        )
+    if max_current_amps is not None and max_current_amps >= _SMARTEVSE_MIN_CURRENT_AMPS and rounded > max_current_amps:
+        raise ValueError(
+            "Unsupported charger current "
+            f"'{amps}' for SmartEVSE backend (exceeds SmartEVSE maximum charging current {max_current_amps} A)"
         )
     return rounded
 
@@ -124,26 +155,26 @@ def _enabled(access_value: int) -> bool:
     return bool(int(access_value))
 
 
-def _status_text(state_value: int, error_bits: int, enabled: bool) -> str | None:
+def _status_text(state_value: int, error_bits: int, enabled: bool, mode_value: int) -> str | None:
     """Return one normalized SmartEVSE status text."""
     if int(error_bits) & _SMARTEVSE_HARD_ERROR_BITS:
         return "error"
-    if int(error_bits) & _SMARTEVSE_ERROR_NO_SUN_BIT:
+    if int(error_bits) & _SMARTEVSE_ERROR_NO_SUN_BIT and int(mode_value) == _SMARTEVSE_MODE_SOLAR:
         return "waiting-solar"
     if not bool(enabled) and int(state_value) not in {2, 6, 7, 10}:
         return "disabled"
     return {
         0: "idle",
-        1: "ready",
+        1: "connected",
         2: "charging",
         3: "waiting-ventilation",
-        4: "ready",
-        5: "ready",
-        6: "charging",
-        7: "charging",
-        8: "waiting-activation",
-        9: "ready",
-        10: "charging",
+        4: "connected-load-balance",
+        5: "connected-load-balance",
+        6: "charging-load-balance",
+        7: "charging-load-balance",
+        8: "activation-required",
+        9: "connected-authorized",
+        10: "charging-authorized",
     }.get(int(state_value))
 
 
@@ -179,19 +210,21 @@ class SmartEvseChargerBackend:
 
     def read_charger_state(self) -> ChargerState:
         """Read one normalized charger state from SmartEVSE Modbus registers."""
+        fixed_phase_selection = self.settings.supported_phase_selections[0]
         state_value = self._read_register(self.settings.state_register)
         error_bits = self._read_register(self.settings.error_register)
         current_setting = self._read_register(self.settings.current_register)
+        mode_value = self._read_register(self.settings.mode_register)
         access_value = self._read_register(self.settings.access_register)
         enabled = _enabled(access_value)
         return ChargerState(
             enabled=enabled,
             current_amps=_normalized_current_amps(current_setting),
-            phase_selection="P1",
+            phase_selection=fixed_phase_selection,
             actual_current_amps=None,
             power_w=None,
             energy_kwh=None,
-            status_text=_status_text(state_value, error_bits, enabled),
+            status_text=_status_text(state_value, error_bits, enabled, mode_value),
             fault_text=_fault_text(error_bits),
         )
 
@@ -201,10 +234,18 @@ class SmartEvseChargerBackend:
 
     def set_current(self, amps: float) -> None:
         """Apply one whole-amp current limit to the SmartEVSE current register."""
-        self._write_register(self.settings.current_register, _rounded_current_setting(amps))
+        max_current_amps = self._read_register(self.settings.max_current_register)
+        self._write_register(
+            self.settings.current_register,
+            _rounded_current_setting(amps, max_current_amps=max_current_amps),
+        )
 
     def set_phase_selection(self, selection: PhaseSelection) -> None:
-        """Reject native phase writes because SmartEVSE phase writes are not documented here."""
-        normalized = normalize_phase_selection(selection, "P1")
-        if normalized != "P1":
-            raise ValueError("SmartEVSE charger backend does not support native phase switching")
+        """Reject native phase writes, except for the already configured fixed layout."""
+        fixed_phase_selection = self.settings.supported_phase_selections[0]
+        normalized = normalize_phase_selection(selection, fixed_phase_selection)
+        if normalized != fixed_phase_selection:
+            raise ValueError(
+                "SmartEVSE charger backend does not support native phase switching "
+                f"(configured fixed phase selection: {fixed_phase_selection})"
+            )

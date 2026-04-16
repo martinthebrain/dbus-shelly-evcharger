@@ -5,7 +5,7 @@ from collections.abc import Callable
 from functools import partial
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from shelly_wallbox.ports import WriteControllerPort
 from shelly_wallbox.controllers.write_snapshot import _snapshot_dbus_paths
@@ -615,6 +615,43 @@ class TestDbusWriteController(unittest.TestCase):
         self.assertFalse(controller.handle_write("/AutoStart", 1))
         self.assertEqual(service.virtual_autostart, 1)
         service._save_runtime_state.assert_not_called()
+
+    def test_auto_runtime_setting_write_publishes_and_persists_overrides(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_startstop=0,
+            virtual_enable=1,
+            auto_start_surplus_watts=1500.0,
+            auto_stop_surplus_watts=1200.0,
+            auto_min_soc=40.0,
+            auto_resume_soc=50.0,
+            auto_start_delay_seconds=10.0,
+            auto_stop_delay_seconds=30.0,
+            auto_phase_switching_enabled=True,
+            auto_policy=SimpleNamespace(),
+            _dbusservice={"/Auto/StartSurplusWatts": 1500.0},
+            _time_now=MagicMock(return_value=42.0),
+            _publish_dbus_path=MagicMock(),
+            _state_summary=self._state_summary,
+            _save_runtime_state=MagicMock(),
+            _save_runtime_overrides=MagicMock(),
+            _validate_runtime_config=MagicMock(),
+        )
+        service._publish_dbus_path.side_effect = self._publish_side_effect(service)
+        controller = DbusWriteController(WriteControllerPort(service))
+
+        with patch("shelly_wallbox.controllers.write.AutoPolicy.from_service", return_value=service.auto_policy), patch(
+            "shelly_wallbox.controllers.write.validate_auto_policy"
+        ) as validate_policy:
+            self.assertTrue(controller.handle_write("/Auto/StartSurplusWatts", 1825.0))
+
+        self.assertEqual(service.auto_start_surplus_watts, 1825.0)
+        self.assertEqual(service._dbusservice["/Auto/StartSurplusWatts"], 1825.0)
+        validate_policy.assert_called_once_with(service.auto_policy, service)
+        service._validate_runtime_config.assert_called_once()
+        service._save_runtime_state.assert_called_once()
+        service._save_runtime_overrides.assert_called_once()
 
     def test_manual_startstop_and_setcurrent_use_charger_backend_when_available(self) -> None:
         charger_backend = SimpleNamespace(

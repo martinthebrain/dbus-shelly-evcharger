@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 from collections.abc import Mapping
 from typing import Any, Protocol, TypedDict, cast
@@ -16,6 +17,7 @@ from shelly_wallbox.backend.models import (
     PhaseSelection,
     normalize_phase_selection,
     normalize_phase_selection_tuple,
+    phase_selection_count,
 )
 from shelly_wallbox.backend.modbus_transport import modbus_transport_issue_reason
 from shelly_wallbox.core.common import (
@@ -29,6 +31,54 @@ JsonObject = dict[str, object]
 ShellyRpcScalar = str | int | float | bool
 EncodedRpcScalar = str | int | float
 PendingRelayCommand = tuple[bool | None, float | None]
+
+
+def _single_phase_vector(total: float, single_phase_line: object) -> tuple[float, float, float]:
+    """Return one single-phase vector mapped to the configured display line."""
+    line = str(single_phase_line).strip().upper() if single_phase_line is not None else "L1"
+    if line == "L2":
+        return 0.0, float(total), 0.0
+    if line == "L3":
+        return 0.0, 0.0, float(total)
+    return float(total), 0.0, 0.0
+
+
+def _distributed_phase_vector(total: float, divisor: float) -> tuple[float, float, float]:
+    """Return evenly distributed per-phase values for two- or three-phase totals."""
+    per_phase = float(total) / float(divisor)
+    return per_phase, per_phase, per_phase
+
+
+def _phase_powers_for_selection(
+    power_w: float,
+    selection: PhaseSelection,
+    single_phase_line: object = "L1",
+) -> tuple[float, float, float]:
+    """Split total power across the selected active phases for display."""
+    total = float(power_w)
+    if selection == "P1_P2_P3":
+        return _distributed_phase_vector(total, 3.0)
+    if selection == "P1_P2":
+        distributed = _distributed_phase_vector(total, 2.0)
+        return distributed[0], distributed[1], 0.0
+    return _single_phase_vector(total, single_phase_line)
+
+
+def _phase_currents_for_selection(
+    current_a: float | None,
+    selection: PhaseSelection,
+    single_phase_line: object = "L1",
+) -> tuple[float, float, float] | None:
+    """Split total current across the selected active phases for display."""
+    if current_a is None:
+        return None
+    total = float(current_a)
+    if selection == "P1_P2_P3":
+        return _distributed_phase_vector(total, 3.0)
+    if selection == "P1_P2":
+        distributed = _distributed_phase_vector(total, 2.0)
+        return distributed[0], distributed[1], 0.0
+    return _single_phase_vector(total, single_phase_line)
 
 
 class ShellyEnergyData(TypedDict, total=False):
@@ -138,6 +188,11 @@ class ShellyIoHost(Protocol):
     _last_charger_state_status: str | None
     _last_charger_state_fault: str | None
     _last_charger_state_at: float | None
+    _last_charger_estimate_source: str | None
+    _last_charger_estimate_at: float | None
+    _charger_estimated_energy_kwh: float | None
+    _charger_estimated_energy_at: float | None
+    _charger_estimated_power_w: float | None
     _last_charger_transport_reason: str | None
     _last_charger_transport_source: str | None
     _last_charger_transport_detail: str | None
@@ -499,6 +554,79 @@ class ShellyIoController:
         mode_uses_auto_logic = getattr(self.service, "_mode_uses_auto_logic", None)
         return bool(mode_uses_auto_logic(current_mode)) if callable(mode_uses_auto_logic) else False
 
+    def _remember_charger_estimate(self, source: str, now: float | None = None) -> None:
+        """Persist one charger estimate marker for DBus diagnostics."""
+        svc = self.service
+        captured_at = self._runtime_now() if now is None else float(now)
+        svc._last_charger_estimate_source = str(source).strip() or None
+        svc._last_charger_estimate_at = captured_at
+
+    def _clear_charger_estimate(self) -> None:
+        """Clear the current charger estimate marker after real readback resumed."""
+        svc = self.service
+        svc._last_charger_estimate_source = None
+        svc._last_charger_estimate_at = None
+
+    def _estimated_phase_voltage_v(self, selection: PhaseSelection) -> float:
+        """Return the per-phase voltage used for meterless charger power estimation."""
+        svc = self.service
+        cached_voltage = finite_float_or_none(getattr(svc, "_last_voltage", None))
+        if cached_voltage is None or cached_voltage <= 0.0:
+            return 230.0
+        phase_voltage = float(cached_voltage)
+        if selection != "P1" and str(getattr(svc, "voltage_mode", "phase")).strip().lower() != "phase":
+            phase_voltage = phase_voltage / math.sqrt(3.0)
+        return 230.0 if phase_voltage <= 0.0 else float(phase_voltage)
+
+    @staticmethod
+    def _charging_like_status(state: ChargerState) -> bool:
+        """Return whether charger status text indicates an active charging session."""
+        status = str(getattr(state, "status_text", "") or "").strip().lower()
+        return status.startswith("charging")
+
+    @classmethod
+    def _resolved_pm_charger_current(cls, state: ChargerState) -> float | None:
+        """Return the best current value to expose on meterless synthesized PM status."""
+        if state.actual_current_amps is not None:
+            return float(state.actual_current_amps)
+        if state.current_amps is None:
+            return None
+        if state.status_text is not None:
+            return float(state.current_amps) if cls._charging_like_status(state) else 0.0
+        if state.enabled is False:
+            return 0.0
+        return float(state.current_amps)
+
+    def _estimated_charger_power_w(
+        self,
+        current_a: float | None,
+        phase_selection: PhaseSelection,
+    ) -> float | None:
+        """Return one estimated total charge power from current, voltage, and phase count."""
+        if current_a is None:
+            return None
+        return float(current_a) * self._estimated_phase_voltage_v(phase_selection) * float(
+            phase_selection_count(phase_selection)
+        )
+
+    def _sync_estimated_charger_energy_cache(self, energy_kwh: float, power_w: float, now: float) -> None:
+        """Keep the meterless charger energy estimate baseline in sync."""
+        svc = self.service
+        svc._charger_estimated_energy_kwh = max(0.0, float(energy_kwh))
+        svc._charger_estimated_energy_at = float(now)
+        svc._charger_estimated_power_w = max(0.0, float(power_w))
+
+    def _integrated_estimated_charger_energy_kwh(self, power_w: float, now: float) -> float:
+        """Integrate one running estimated energy counter from the last known charger power."""
+        svc = self.service
+        energy_kwh = finite_float_or_none(getattr(svc, "_charger_estimated_energy_kwh", None)) or 0.0
+        last_at = finite_float_or_none(getattr(svc, "_charger_estimated_energy_at", None))
+        last_power = finite_float_or_none(getattr(svc, "_charger_estimated_power_w", None))
+        if last_at is not None and last_power is not None and float(now) > last_at:
+            energy_kwh += (max(0.0, float(last_power)) * ((float(now) - last_at) / 3600.0)) / 1000.0
+        self._sync_estimated_charger_energy_cache(energy_kwh, power_w, now)
+        return energy_kwh
+
     def _sync_virtual_enabled_state(self, state: ChargerState, auto_mode_active: bool) -> None:
         """Mirror charger enabled readback onto virtual enable/start-stop state."""
         if state.enabled is None:
@@ -809,15 +937,49 @@ class ShellyIoController:
     ) -> ShellyPmStatus:
         """Project charger-native readback onto the legacy Shelly PM payload shape."""
         svc = self.service
+        current_time = self._runtime_now()
         phase_selection = self._resolved_pm_phase_selection(state, active_phase_selection)
-        current_a = self._resolved_charger_current(state)
-        power_w = 0.0 if state.power_w is None else float(state.power_w)
-        energy_kwh = 0.0 if state.energy_kwh is None else float(state.energy_kwh)
+        current_a = self._resolved_pm_charger_current(state)
+        power_w = finite_float_or_none(state.power_w)
+        power_estimated = False
+        if power_w is None:
+            power_w = self._estimated_charger_power_w(current_a, phase_selection)
+            power_estimated = power_w is not None
+        if power_w is None:
+            power_w = 0.0
+        energy_kwh = finite_float_or_none(state.energy_kwh)
+        energy_estimated = False
+        if energy_kwh is None:
+            energy_kwh = self._integrated_estimated_charger_energy_kwh(power_w, current_time)
+            energy_estimated = True
+        else:
+            self._sync_estimated_charger_energy_cache(energy_kwh, power_w, current_time)
         voltage_v = finite_float_or_none(getattr(svc, "_last_voltage", None))
+        if voltage_v is None and (power_estimated or energy_estimated):
+            voltage_v = self._estimated_phase_voltage_v(phase_selection)
+        if power_estimated or energy_estimated:
+            self._remember_charger_estimate(
+                "current-voltage-phase" if power_estimated else "power-time",
+                current_time,
+            )
+        else:
+            self._clear_charger_estimate()
         pm_status = self._charger_pm_status_base(power_w, energy_kwh, phase_selection)
         self._apply_optional_pm_output(pm_status, relay_on)
         self._apply_optional_pm_current(pm_status, current_a)
         self._apply_optional_pm_voltage(pm_status, voltage_v)
+        phase_currents = _phase_currents_for_selection(
+            current_a,
+            phase_selection,
+            getattr(svc, "phase", "L1"),
+        )
+        if phase_currents is not None:
+            pm_status["_phase_currents_a"] = phase_currents
+        pm_status["_phase_powers_w"] = _phase_powers_for_selection(
+            power_w,
+            phase_selection,
+            getattr(svc, "phase", "L1"),
+        )
         return pm_status
 
     @staticmethod

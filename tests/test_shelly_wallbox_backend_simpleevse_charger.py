@@ -80,6 +80,26 @@ class TestShellyWallboxBackendSimpleEvseCharger(unittest.TestCase):
             self.assertEqual(state.status_text, "charging")
             self.assertIsNone(state.fault_text)
 
+    def test_simpleevse_charger_uses_configured_fixed_phase_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=simpleevse_charger\nTransport=tcp\n"
+                "[Transport]\nHost=192.168.1.50\nPort=502\nUnitId=1\n"
+                "[Capabilities]\nSupportedPhaseSelections=P1_P2_P3\n",
+            )
+            fake_transport = _FakeSimpleEvseTransport()
+            with patch(
+                "shelly_wallbox.backend.simpleevse_charger.create_modbus_transport",
+                return_value=fake_transport,
+            ):
+                backend = SimpleEvseChargerBackend(self._service(), config_path=config_path)
+                state = backend.read_charger_state()
+                backend.set_phase_selection("P1_P2_P3")
+
+            self.assertEqual(backend.settings.supported_phase_selections, ("P1_P2_P3",))
+            self.assertEqual(state.phase_selection, "P1_P2_P3")
+
     def test_read_charger_state_maps_simpleevse_fault_bits(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = self._write_config(
@@ -132,5 +152,17 @@ class TestShellyWallboxBackendSimpleEvseCharger(unittest.TestCase):
             )
             backend = SimpleEvseChargerBackend(self._service(), config_path=config_path)
 
-            with self.assertRaisesRegex(ValueError, "does not support native phase switching"):
+            with self.assertRaisesRegex(ValueError, "configured fixed phase selection: P1"):
                 backend.set_phase_selection("P1_P2_P3")
+
+    def test_simpleevse_charger_rejects_multiple_supported_phase_selections(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=simpleevse_charger\nTransport=tcp\n"
+                "[Transport]\nHost=192.168.1.50\nPort=502\nUnitId=1\n"
+                "[Capabilities]\nSupportedPhaseSelections=P1,P1_P2_P3\n",
+            )
+
+            with self.assertRaisesRegex(ValueError, "requires exactly one fixed"):
+                SimpleEvseChargerBackend(self._service(), config_path=config_path)
