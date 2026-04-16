@@ -240,6 +240,28 @@ class DbusWriteController:
         svc._publish_dbus_path("/Auto/PhaseLockoutAge", -1, current_time, force=True)
         svc._publish_dbus_path("/Auto/PhaseLockoutReset", 0, current_time, force=True)
 
+    @staticmethod
+    def _clear_contactor_lockout_state(svc: Any) -> None:
+        """Clear latched contactor-fault runtime state after an operator reset."""
+        svc._contactor_fault_counts = {}
+        svc._contactor_fault_active_reason = None
+        svc._contactor_fault_active_since = None
+        svc._contactor_lockout_reason = ""
+        svc._contactor_lockout_source = ""
+        svc._contactor_lockout_at = None
+        svc._contactor_suspected_open_since = None
+        svc._contactor_suspected_welded_since = None
+
+    @staticmethod
+    def _publish_contactor_lockout_paths(svc: Any, current_time: float) -> None:
+        """Force-publish contactor lockout diagnostics after operator actions."""
+        svc._publish_dbus_path("/Auto/ContactorFaultCount", 0, current_time, force=True)
+        svc._publish_dbus_path("/Auto/ContactorLockoutActive", 0, current_time, force=True)
+        svc._publish_dbus_path("/Auto/ContactorLockoutReason", "", current_time, force=True)
+        svc._publish_dbus_path("/Auto/ContactorLockoutSource", "", current_time, force=True)
+        svc._publish_dbus_path("/Auto/ContactorLockoutAge", -1, current_time, force=True)
+        svc._publish_dbus_path("/Auto/ContactorLockoutReset", 0, current_time, force=True)
+
     def _apply_auto_disable(self, svc: Any, current_time: float) -> None:
         """Queue a relay-off transition after an Auto deny request."""
         self._queue_relay_command(svc, False, current_time)
@@ -414,6 +436,20 @@ class DbusWriteController:
         self._publish_phase_lockout_paths(port, current_time)
         logging.info("DBus write /Auto/PhaseLockoutReset=1 cleared phase lockout state %s", port.state_summary())
 
+    def _handle_contactor_lockout_reset_write(self, value: Any) -> None:
+        """Clear latched contactor-fault state on explicit operator request."""
+        port = self.port
+        current_time = port.time_now()
+        if not bool(int(value)):
+            port.publish_dbus_path("/Auto/ContactorLockoutReset", 0, current_time, force=True)
+            return
+        self._clear_contactor_lockout_state(port._service)
+        self._publish_contactor_lockout_paths(port, current_time)
+        logging.info(
+            "DBus write /Auto/ContactorLockoutReset=1 cleared contactor lockout state %s",
+            port.state_summary(),
+        )
+
     def _handle_mode_value_write(self, value: Any) -> None:
         """Normalize and dispatch one /Mode write value."""
         self._handle_mode_write(int(value))
@@ -435,6 +471,7 @@ class DbusWriteController:
             "/Enable": self._handle_enable_value_write,
             "/PhaseSelection": self._handle_phase_selection_write,
             "/Auto/PhaseLockoutReset": self._handle_phase_lockout_reset_write,
+            "/Auto/ContactorLockoutReset": self._handle_contactor_lockout_reset_write,
         }
 
     def _execute_write(self, path: str, value: Any) -> None:

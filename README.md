@@ -331,10 +331,15 @@ The corresponding tuning knobs live in
 - `AutoPhaseMismatchLockoutCount`
 - `AutoPhaseMismatchLockoutSeconds`
 - `AutoPhasePreferLowestWhenIdle`
+- `AutoContactorFaultLatchCount`
+- `AutoContactorFaultLatchSeconds`
 
 Once the service starts observing phase transitions, the following diagnostics
 also help when a backend or topology does not switch as requested:
 
+- `/Auto/RecoveryActive`
+- `/Auto/FaultActive`
+- `/Auto/FaultReason`
 - `/Auto/PhaseObserved`
 - `/Auto/PhaseMismatchActive`
 - `/Auto/PhaseLockoutActive`
@@ -343,6 +348,11 @@ also help when a backend or topology does not switch as requested:
 - `/Auto/PhaseSupportedConfigured`
 - `/Auto/PhaseSupportedEffective`
 - `/Auto/PhaseDegradedActive`
+- `/Auto/ContactorFaultCount`
+- `/Auto/ContactorLockoutActive`
+- `/Auto/ContactorLockoutReason`
+- `/Auto/ContactorLockoutSource`
+- `/Auto/ContactorLockoutReset`
 - `/Auto/PhaseLockoutReset`
 
 `/Auto/PhaseSupportedConfigured` shows the configured phase layouts, while
@@ -354,6 +364,11 @@ Operators can acknowledge and clear the current mismatch/lockout state by
 writing `1` to `/Auto/PhaseLockoutReset`. That immediately removes the current
 phase lockout, restores the effective supported set to the configured one, and
 lets Auto try phase changes again.
+
+Latched contactor lockouts and explicit contactor-feedback mismatches now also
+drive the outward EV charger status into the fault state (`/Status = 0`) with a
+matching `/Auto/StatusSource`, so they are visible as real EVSE-side faults and
+not only as Auto-health diagnostics.
 
 ## Troubleshooting
 

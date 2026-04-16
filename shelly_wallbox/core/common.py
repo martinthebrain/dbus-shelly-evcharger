@@ -83,6 +83,8 @@ HEALTH_CODES: dict[str, int] = {
     "contactor-feedback-mismatch": 29,
     "contactor-suspected-open": 30,
     "contactor-suspected-welded": 31,
+    "contactor-lockout-open": 32,
+    "contactor-lockout-welded": 33,
 }
 
 AUTO_STATE_CODES: dict[str, int] = {
@@ -107,6 +109,8 @@ RECOVERY_AUTO_REASONS = {
     "contactor-feedback-mismatch",
     "contactor-suspected-open",
     "contactor-suspected-welded",
+    "contactor-lockout-open",
+    "contactor-lockout-welded",
 }
 BLOCKED_AUTO_REASONS = {
     "disabled",
@@ -123,6 +127,12 @@ BLOCKED_AUTO_REASONS = {
 }
 CHARGING_AUTO_REASONS = {"running", "auto-start", "auto-stop"}
 WAITING_AUTO_REASONS = {"waiting", "waiting-surplus", "averaging"}
+EVSE_FAULT_HEALTH_REASONS = {
+    "charger-fault",
+    "contactor-feedback-mismatch",
+    "contactor-lockout-open",
+    "contactor-lockout-welded",
+}
 
 
 def _health_code(reason: str) -> int:
@@ -146,6 +156,12 @@ def _auto_state_code(state: Any) -> int:
 def _base_auto_reason(reason: Any) -> str:
     """Return one normalized health reason without cached-input suffix."""
     return str(reason).replace("-cached", "") if reason is not None else "init"
+
+
+def _evse_fault_reason(reason: Any) -> str | None:
+    """Return one normalized EVSE-fault reason when the health state is fault-like."""
+    normalized = _base_auto_reason(reason)
+    return normalized if normalized in EVSE_FAULT_HEALTH_REASONS else None
 
 
 def _normalized_learning_hint(learned_charge_power_state: Any) -> str:
@@ -405,4 +421,5 @@ def month_window(
 auto_state_code = _auto_state_code
 confirmed_relay_state_max_age_seconds = _confirmed_relay_state_max_age_seconds
 derive_auto_state = _derive_auto_state
+evse_fault_reason = _evse_fault_reason
 fresh_confirmed_relay_output = _fresh_confirmed_relay_output

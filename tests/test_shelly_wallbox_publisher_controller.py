@@ -412,6 +412,11 @@ class TestDbusPublishController(unittest.TestCase):
             _last_switch_feedback_closed=False,
             _last_switch_interlock_ok=True,
             _last_switch_feedback_at=96.0,
+            _contactor_fault_counts={},
+            _contactor_lockout_reason="",
+            _contactor_lockout_source="",
+            _contactor_lockout_at=None,
+            _contactor_fault_active_reason=None,
             _phase_switch_mismatch_active=True,
             supported_phase_selections=("P1", "P1_P2_P3"),
             _phase_switch_lockout_selection="P1_P2",
@@ -447,7 +452,10 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(counter_values["/Auto/MeterBackend"], "template_meter")
         self.assertEqual(counter_values["/Auto/SwitchBackend"], "template_switch")
         self.assertEqual(counter_values["/Auto/ChargerBackend"], "template_charger")
+        self.assertEqual(counter_values["/Auto/RecoveryActive"], 0)
         self.assertEqual(counter_values["/Auto/StatusSource"], "charger-fault")
+        self.assertEqual(counter_values["/Auto/FaultActive"], 0)
+        self.assertEqual(counter_values["/Auto/FaultReason"], "")
         self.assertEqual(counter_values["/Auto/ChargerStatus"], "charging")
         self.assertEqual(counter_values["/Auto/ChargerFault"], "")
         self.assertEqual(counter_values["/Auto/ChargerFaultActive"], 1)
@@ -470,11 +478,16 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(counter_values["/Auto/SwitchFeedbackMismatch"], 0)
         self.assertEqual(counter_values["/Auto/ContactorSuspectedOpen"], 0)
         self.assertEqual(counter_values["/Auto/ContactorSuspectedWelded"], 0)
+        self.assertEqual(counter_values["/Auto/ContactorFaultCount"], 0)
+        self.assertEqual(counter_values["/Auto/ContactorLockoutActive"], 0)
+        self.assertEqual(counter_values["/Auto/ContactorLockoutReason"], "")
+        self.assertEqual(counter_values["/Auto/ContactorLockoutSource"], "")
         self.assertEqual(counter_values["/Auto/PhaseThresholdWatts"], 3010.0)
         self.assertEqual(counter_values["/Auto/PhaseCandidate"], "P1_P2")
         self.assertEqual(age_values["/Auto/ChargerCurrentTargetAge"], 4.0)
         self.assertEqual(age_values["/Auto/PhaseCandidateAge"], 8.0)
         self.assertEqual(age_values["/Auto/PhaseLockoutAge"], 9.0)
+        self.assertEqual(age_values["/Auto/ContactorLockoutAge"], -1.0)
         self.assertEqual(age_values["/Auto/LastSwitchFeedbackAge"], 4.0)
         self.assertEqual(age_values["/Auto/LastChargerReadAge"], 3.0)
 
@@ -487,3 +500,21 @@ class TestDbusPublishController(unittest.TestCase):
         open_counter_values = controller._diagnostic_counter_values(100.0)
         self.assertEqual(open_counter_values["/Auto/ContactorSuspectedOpen"], 1)
         self.assertEqual(open_counter_values["/Auto/ContactorSuspectedWelded"], 0)
+
+        service._last_health_reason = "contactor-lockout-open"
+        service._last_auto_state = "recovery"
+        service._last_auto_state_code = 5
+        service._contactor_fault_counts = {"contactor-suspected-open": 3}
+        service._contactor_lockout_reason = "contactor-suspected-open"
+        service._contactor_lockout_source = "count-threshold"
+        service._contactor_lockout_at = 94.0
+        lockout_counter_values = controller._diagnostic_counter_values(100.0)
+        lockout_age_values = controller._diagnostic_age_values(100.0)
+        self.assertEqual(lockout_counter_values["/Auto/RecoveryActive"], 1)
+        self.assertEqual(lockout_counter_values["/Auto/FaultActive"], 1)
+        self.assertEqual(lockout_counter_values["/Auto/FaultReason"], "contactor-lockout-open")
+        self.assertEqual(lockout_counter_values["/Auto/ContactorFaultCount"], 3)
+        self.assertEqual(lockout_counter_values["/Auto/ContactorLockoutActive"], 1)
+        self.assertEqual(lockout_counter_values["/Auto/ContactorLockoutReason"], "contactor-suspected-open")
+        self.assertEqual(lockout_counter_values["/Auto/ContactorLockoutSource"], "count-threshold")
+        self.assertEqual(lockout_age_values["/Auto/ContactorLockoutAge"], 6.0)

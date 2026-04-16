@@ -101,6 +101,7 @@ class ServiceBootstrapController(
         "/StartStop",
         "/Enable",
         "/Auto/PhaseLockoutReset",
+        "/Auto/ContactorLockoutReset",
     }
 
     def __init__(

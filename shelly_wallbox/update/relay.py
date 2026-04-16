@@ -19,7 +19,7 @@ from shelly_wallbox.backend.models import (
     normalize_phase_selection,
     switch_feedback_mismatch,
 )
-from shelly_wallbox.core.common import fresh_confirmed_relay_output
+from shelly_wallbox.core.common import evse_fault_reason, fresh_confirmed_relay_output
 from shelly_wallbox.core.contracts import (
     finite_float_or_none,
     normalize_learning_phase,
@@ -869,6 +869,16 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         return max(0.0, float(getattr(svc, "auto_shelly_soft_fail_seconds", 0.0)))
 
     @staticmethod
+    def _contactor_lockout_threshold(svc: Any) -> int:
+        """Return how many repeated contactor suspicion events latch one safety lockout."""
+        return max(0, int(getattr(svc, "auto_contactor_fault_latch_count", 3)))
+
+    @staticmethod
+    def _contactor_lockout_persistence_seconds(svc: Any) -> float:
+        """Return how long one continuous contactor suspicion may persist before latching."""
+        return max(0.0, float(getattr(svc, "auto_contactor_fault_latch_seconds", 60.0)))
+
+    @staticmethod
     def _contactor_power_threshold_w(svc: Any) -> float:
         """Return the minimum power considered a meaningful charging load."""
         configured = finite_float_or_none(getattr(svc, "charging_threshold_watts", None))
@@ -958,6 +968,113 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
                 return
             raise
 
+    @staticmethod
+    def _base_contactor_fault_reason(reason: object) -> str | None:
+        """Return one normalized heuristic contactor-fault reason when supported."""
+        normalized = str(reason).strip() if reason is not None else ""
+        if normalized in {"contactor-suspected-open", "contactor-suspected-welded"}:
+            return normalized
+        return None
+
+    @classmethod
+    def _contactor_lockout_health_reason(cls, base_reason: object) -> str | None:
+        """Return the latched health reason for one heuristic contactor-fault type."""
+        normalized = cls._base_contactor_fault_reason(base_reason)
+        if normalized == "contactor-suspected-open":
+            return "contactor-lockout-open"
+        if normalized == "contactor-suspected-welded":
+            return "contactor-lockout-welded"
+        return None
+
+    @staticmethod
+    def _contactor_fault_counts(svc: Any) -> dict[str, int]:
+        """Return the mutable contactor-fault counter mapping keyed by heuristic reason."""
+        counts = getattr(svc, "_contactor_fault_counts", None)
+        if isinstance(counts, dict):
+            return cast(dict[str, int], counts)
+        counts = {}
+        _UpdateCycleRelayMixin._set_runtime_attr(svc, "_contactor_fault_counts", counts)
+        return counts
+
+    @classmethod
+    def _contactor_fault_count(cls, svc: Any, reason: object) -> int:
+        """Return the remembered count for one heuristic contactor-fault reason."""
+        normalized = cls._base_contactor_fault_reason(reason)
+        if normalized is None:
+            return 0
+        return max(0, int(cls._contactor_fault_counts(svc).get(normalized, 0)))
+
+    @classmethod
+    def _clear_contactor_fault_active_state(cls, svc: Any) -> None:
+        """Clear the currently active heuristic-fault episode without dropping counters."""
+        cls._set_runtime_attr(svc, "_contactor_fault_active_reason", None)
+        cls._set_runtime_attr(svc, "_contactor_fault_active_since", None)
+
+    @classmethod
+    def _clear_contactor_lockout(cls, svc: Any) -> None:
+        """Clear one latched contactor-fault lockout."""
+        cls._set_runtime_attr(svc, "_contactor_lockout_reason", "")
+        cls._set_runtime_attr(svc, "_contactor_lockout_source", "")
+        cls._set_runtime_attr(svc, "_contactor_lockout_at", None)
+
+    @classmethod
+    def _clear_contactor_fault_tracking(cls, svc: Any) -> None:
+        """Clear all heuristic contactor-fault counters, active state, and lockout state."""
+        cls._set_runtime_attr(svc, "_contactor_fault_counts", {})
+        cls._clear_contactor_fault_active_state(svc)
+        cls._clear_contactor_lockout(svc)
+        cls._set_runtime_attr(svc, "_contactor_suspected_open_since", None)
+        cls._set_runtime_attr(svc, "_contactor_suspected_welded_since", None)
+
+    @classmethod
+    def _engage_contactor_lockout(
+        cls,
+        svc: Any,
+        base_reason: object,
+        now: float | None,
+        source: str,
+    ) -> None:
+        """Latch one safety lockout for a repeated or persistent heuristic contactor fault."""
+        normalized = cls._base_contactor_fault_reason(base_reason)
+        if normalized is None:
+            cls._clear_contactor_lockout(svc)
+            return
+        current = cls._charger_readback_now(svc, now)
+        cls._set_runtime_attr(svc, "_contactor_lockout_reason", normalized)
+        cls._set_runtime_attr(svc, "_contactor_lockout_source", str(source).strip() or "count-threshold")
+        cls._set_runtime_attr(svc, "_contactor_lockout_at", current)
+
+    @classmethod
+    def _active_contactor_lockout_health(cls, svc: Any) -> str | None:
+        """Return the latched contactor-fault health override when one safety lockout is active."""
+        return cls._contactor_lockout_health_reason(getattr(svc, "_contactor_lockout_reason", ""))
+
+    @classmethod
+    def _remember_contactor_fault(cls, svc: Any, reason: object, now: float | None) -> str | None:
+        """Persist one heuristic contactor-fault episode and latch it when thresholds are exceeded."""
+        normalized = cls._base_contactor_fault_reason(reason)
+        if normalized is None:
+            cls._clear_contactor_fault_active_state(svc)
+            return None
+        current = cls._charger_readback_now(svc, now)
+        active_reason = cls._base_contactor_fault_reason(getattr(svc, "_contactor_fault_active_reason", None))
+        active_since = finite_float_or_none(getattr(svc, "_contactor_fault_active_since", None))
+        if active_reason != normalized or active_since is None:
+            counts = cls._contactor_fault_counts(svc)
+            counts[normalized] = cls._contactor_fault_count(svc, normalized) + 1
+            cls._set_runtime_attr(svc, "_contactor_fault_active_reason", normalized)
+            cls._set_runtime_attr(svc, "_contactor_fault_active_since", current)
+            active_since = current
+        current_count = cls._contactor_fault_count(svc, normalized)
+        if cls._contactor_lockout_threshold(svc) > 0 and current_count >= cls._contactor_lockout_threshold(svc):
+            cls._engage_contactor_lockout(svc, normalized, current, "count-threshold")
+            return cls._active_contactor_lockout_health(svc)
+        persistence_seconds = cls._contactor_lockout_persistence_seconds(svc)
+        if persistence_seconds > 0.0 and (current - active_since) >= persistence_seconds:
+            cls._engage_contactor_lockout(svc, normalized, current, "persistent")
+            return cls._active_contactor_lockout_health(svc)
+        return normalized
+
     @classmethod
     def charger_health_override(cls, svc: Any, now: float | None = None) -> str | None:
         """Return one charger-derived health override when readback reports a hard fault."""
@@ -984,14 +1101,19 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         """Return one switch-feedback health override for contactor/interlock setups."""
         interlock_ok = cls._fresh_switch_interlock_ok(svc, now)
         if interlock_ok is False and (bool(desired_relay) or bool(relay_on)):
+            cls._clear_contactor_fault_active_state(svc)
             cls._set_runtime_attr(svc, "_contactor_suspected_open_since", None)
             cls._set_runtime_attr(svc, "_contactor_suspected_welded_since", None)
             return "contactor-interlock"
         feedback_closed = cls._fresh_switch_feedback_closed(svc, now)
         if switch_feedback_mismatch(relay_on, feedback_closed):
+            cls._clear_contactor_fault_active_state(svc)
             cls._set_runtime_attr(svc, "_contactor_suspected_open_since", None)
             cls._set_runtime_attr(svc, "_contactor_suspected_welded_since", None)
             return "contactor-feedback-mismatch"
+        latched_lockout = cls._active_contactor_lockout_health(svc)
+        if latched_lockout is not None:
+            return latched_lockout
         observed_load = cls._observed_load_active(svc, power, current, pm_confirmed, now)
         demand_active = cls._charger_requests_load(svc, now)
         suspected_open_age = cls._heuristic_condition_age(
@@ -1008,9 +1130,10 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         )
         delay_seconds = cls._contactor_heuristic_delay_seconds(svc)
         if suspected_welded_age is not None and suspected_welded_age >= delay_seconds:
-            return "contactor-suspected-welded"
+            return cls._remember_contactor_fault(svc, "contactor-suspected-welded", now)
         if suspected_open_age is not None and suspected_open_age >= delay_seconds:
-            return "contactor-suspected-open"
+            return cls._remember_contactor_fault(svc, "contactor-suspected-open", now)
+        cls._clear_contactor_fault_active_state(svc)
         return None
 
     @classmethod
@@ -1994,8 +2117,12 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         power: float,
         auto_mode_active: bool,
         now: float | None = None,
+        health_reason: str | None = None,
     ) -> int:
         """Translate relay/power state into the Venus EV charger status code."""
+        hard_fault_status = cls._hard_evse_fault_status_override(svc, health_reason)
+        if hard_fault_status is not None:
+            return hard_fault_status
         fault_status = cls._charger_fault_status_override(svc, now)
         if fault_status is not None:
             return fault_status
@@ -2014,6 +2141,34 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
             return None
         svc._last_status_source = "charger-fault"
         svc._last_charger_fault_active = 1
+        return 0
+
+    @staticmethod
+    def _evse_fault_status_source(reason: str) -> str:
+        """Return the outward status-source label for one EVSE-side hard fault."""
+        return {
+            "contactor-feedback-mismatch": "contactor-feedback-fault",
+            "contactor-lockout-open": "contactor-lockout-open",
+            "contactor-lockout-welded": "contactor-lockout-welded",
+        }.get(reason, "evse-fault")
+
+    @classmethod
+    def _hard_evse_fault_status_override(
+        cls,
+        svc: Any,
+        health_reason: object | None = None,
+    ) -> int | None:
+        """Return one fault status code for hard EVSE-side faults other than charger-native faults."""
+        fault_reason = evse_fault_reason(
+            getattr(svc, "_last_health_reason", None) if health_reason is None else health_reason
+        )
+        if fault_reason not in {
+            "contactor-feedback-mismatch",
+            "contactor-lockout-open",
+            "contactor-lockout-welded",
+        }:
+            return None
+        svc._last_status_source = cls._evse_fault_status_source(fault_reason)
         return 0
 
     @classmethod

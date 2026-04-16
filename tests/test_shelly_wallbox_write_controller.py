@@ -939,3 +939,59 @@ class TestDbusWriteController(unittest.TestCase):
         self.assertEqual(service._dbusservice["/Auto/PhaseSupportedEffective"], "P1,P1_P2,P1_P2_P3")
         self.assertEqual(service._dbusservice["/Auto/PhaseDegradedActive"], 0)
         self.assertEqual(service._dbusservice["/Auto/PhaseLockoutReset"], 0)
+
+    def test_handle_contactor_lockout_reset_write_clears_latched_fault_state(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_startstop=0,
+            virtual_enable=1,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1", "P1_P2"),
+            _contactor_fault_counts={"contactor-suspected-open": 3},
+            _contactor_fault_active_reason="contactor-suspected-open",
+            _contactor_fault_active_since=95.0,
+            _contactor_lockout_reason="contactor-suspected-open",
+            _contactor_lockout_source="count-threshold",
+            _contactor_lockout_at=96.0,
+            _contactor_suspected_open_since=94.0,
+            _contactor_suspected_welded_since=None,
+            auto_start_condition_since=None,
+            auto_stop_condition_since=None,
+            manual_override_until=0.0,
+            _auto_mode_cutover_pending=False,
+            _ignore_min_offtime_once=False,
+            _dbusservice={
+                "/Auto/ContactorFaultCount": 3,
+                "/Auto/ContactorLockoutActive": 1,
+                "/Auto/ContactorLockoutReason": "contactor-suspected-open",
+                "/Auto/ContactorLockoutSource": "count-threshold",
+                "/Auto/ContactorLockoutAge": 4,
+                "/Auto/ContactorLockoutReset": 0,
+            },
+            _time_now=MagicMock(return_value=100.0),
+            _normalize_mode=self._normalize_mode,
+            _mode_uses_auto_logic=self._mode_uses_auto_logic,
+            _publish_dbus_path=MagicMock(),
+            _state_summary=self._state_summary,
+            _save_runtime_state=MagicMock(),
+        )
+        service._publish_dbus_path.side_effect = self._publish_side_effect(service)
+
+        controller = DbusWriteController(WriteControllerPort(service))
+
+        self.assertTrue(controller.handle_write("/Auto/ContactorLockoutReset", 1))
+        self.assertEqual(service._contactor_fault_counts, {})
+        self.assertIsNone(service._contactor_fault_active_reason)
+        self.assertIsNone(service._contactor_fault_active_since)
+        self.assertEqual(service._contactor_lockout_reason, "")
+        self.assertEqual(service._contactor_lockout_source, "")
+        self.assertIsNone(service._contactor_lockout_at)
+        self.assertIsNone(service._contactor_suspected_open_since)
+        self.assertEqual(service._dbusservice["/Auto/ContactorFaultCount"], 0)
+        self.assertEqual(service._dbusservice["/Auto/ContactorLockoutActive"], 0)
+        self.assertEqual(service._dbusservice["/Auto/ContactorLockoutReason"], "")
+        self.assertEqual(service._dbusservice["/Auto/ContactorLockoutSource"], "")
+        self.assertEqual(service._dbusservice["/Auto/ContactorLockoutAge"], -1)
+        self.assertEqual(service._dbusservice["/Auto/ContactorLockoutReset"], 0)

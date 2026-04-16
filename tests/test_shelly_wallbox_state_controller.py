@@ -47,6 +47,10 @@ class TestServiceStateController(unittest.TestCase):
             _phase_switch_lockout_until=130.0,
             _last_switch_feedback_closed=False,
             _last_switch_interlock_ok=True,
+            _contactor_fault_counts={"contactor-suspected-open": 2},
+            _contactor_lockout_reason="contactor-suspected-open",
+            _contactor_lockout_source="count-threshold",
+            _contactor_lockout_at=90.0,
             _last_charger_state_status="charging",
             _last_charger_state_fault="none",
             _last_status_source="charger-fault",
@@ -82,8 +86,11 @@ class TestServiceStateController(unittest.TestCase):
         self.assertIn("switch_feedback=0", summary)
         self.assertIn("switch_interlock=1", summary)
         self.assertIn("switch_feedback_mismatch=1", summary)
+        self.assertIn("contactor_fault_count=2", summary)
         self.assertIn("contactor_suspected_open=0", summary)
         self.assertIn("contactor_suspected_welded=0", summary)
+        self.assertIn("contactor_lockout=1", summary)
+        self.assertIn("contactor_lockout_reason=contactor-suspected-open", summary)
         self.assertIn("backend=split", summary)
         self.assertIn("meter_backend=template_meter", summary)
         self.assertIn("switch_backend=template_switch", summary)
@@ -92,7 +99,10 @@ class TestServiceStateController(unittest.TestCase):
         self.assertIn("charger_status=charging", summary)
         self.assertIn("charger_fault=none", summary)
         self.assertIn("status_source=charger-fault", summary)
+        self.assertIn("fault=0", summary)
+        self.assertIn("fault_reason=na", summary)
         self.assertIn("auto_state=waiting", summary)
+        self.assertIn("recovery=0", summary)
         self.assertIn("health=running", summary)
 
     def test_state_summary_marks_contactor_suspicions_from_health_reason(self) -> None:
@@ -122,6 +132,8 @@ class TestServiceStateController(unittest.TestCase):
             _last_status_source="switch-feedback",
             _last_auto_state="waiting",
             _last_health_reason="contactor-suspected-open",
+            _contactor_fault_counts={},
+            _contactor_lockout_reason="",
         )
         controller = ServiceStateController(service, self._normalize_mode)
         with patch("shelly_wallbox.controllers.state.time.time", return_value=100.0):
@@ -129,6 +141,9 @@ class TestServiceStateController(unittest.TestCase):
 
         self.assertIn("contactor_suspected_open=1", open_summary)
         self.assertIn("contactor_suspected_welded=0", open_summary)
+        self.assertIn("contactor_lockout=0", open_summary)
+        self.assertIn("fault=0", open_summary)
+        self.assertIn("recovery=0", open_summary)
 
         service._last_health_reason = "contactor-suspected-welded"
         with patch("shelly_wallbox.controllers.state.time.time", return_value=100.0):
@@ -136,6 +151,15 @@ class TestServiceStateController(unittest.TestCase):
 
         self.assertIn("contactor_suspected_open=0", welded_summary)
         self.assertIn("contactor_suspected_welded=1", welded_summary)
+
+        service._last_health_reason = "contactor-lockout-open"
+        service._last_auto_state = "recovery"
+        with patch("shelly_wallbox.controllers.state.time.time", return_value=100.0):
+            lockout_summary = controller.state_summary()
+
+        self.assertIn("fault=1", lockout_summary)
+        self.assertIn("fault_reason=contactor-lockout-open", lockout_summary)
+        self.assertIn("recovery=1", lockout_summary)
 
     def test_load_runtime_state_missing_file_and_load_config_success(self) -> None:
         service = SimpleNamespace(runtime_state_path="/tmp/does-not-exist.json")
@@ -375,6 +399,12 @@ class TestServiceStateController(unittest.TestCase):
                 _phase_switch_lockout_reason="mismatch-threshold",
                 _phase_switch_lockout_at=120.0,
                 _phase_switch_lockout_until=180.0,
+                _contactor_fault_counts={"contactor-suspected-open": 3},
+                _contactor_fault_active_reason="contactor-suspected-open",
+                _contactor_fault_active_since=121.0,
+                _contactor_lockout_reason="contactor-suspected-open",
+                _contactor_lockout_source="count-threshold",
+                _contactor_lockout_at=122.0,
                 relay_last_changed_at=111.0,
                 relay_last_off_at=112.0,
                 _runtime_state_serialized=None,
@@ -414,6 +444,12 @@ class TestServiceStateController(unittest.TestCase):
             self.assertEqual(saved["phase_switch_lockout_reason"], "mismatch-threshold")
             self.assertEqual(saved["phase_switch_lockout_at"], 120.0)
             self.assertEqual(saved["phase_switch_lockout_until"], 180.0)
+            self.assertEqual(saved["contactor_fault_counts"], {"contactor-suspected-open": 3})
+            self.assertEqual(saved["contactor_fault_active_reason"], "contactor-suspected-open")
+            self.assertEqual(saved["contactor_fault_active_since"], 121.0)
+            self.assertEqual(saved["contactor_lockout_reason"], "contactor-suspected-open")
+            self.assertEqual(saved["contactor_lockout_source"], "count-threshold")
+            self.assertEqual(saved["contactor_lockout_at"], 122.0)
 
             service.virtual_mode = 0
             service.virtual_autostart = 1
@@ -446,6 +482,12 @@ class TestServiceStateController(unittest.TestCase):
             service._phase_switch_lockout_reason = ""
             service._phase_switch_lockout_at = None
             service._phase_switch_lockout_until = None
+            service._contactor_fault_counts = {}
+            service._contactor_fault_active_reason = None
+            service._contactor_fault_active_since = None
+            service._contactor_lockout_reason = ""
+            service._contactor_lockout_source = ""
+            service._contactor_lockout_at = None
             service.relay_last_changed_at = None
             service.relay_last_off_at = None
 
@@ -482,6 +524,12 @@ class TestServiceStateController(unittest.TestCase):
             self.assertEqual(service._phase_switch_lockout_reason, "mismatch-threshold")
             self.assertEqual(service._phase_switch_lockout_at, 120.0)
             self.assertEqual(service._phase_switch_lockout_until, 180.0)
+            self.assertEqual(service._contactor_fault_counts, {"contactor-suspected-open": 3})
+            self.assertEqual(service._contactor_fault_active_reason, "contactor-suspected-open")
+            self.assertEqual(service._contactor_fault_active_since, 121.0)
+            self.assertEqual(service._contactor_lockout_reason, "contactor-suspected-open")
+            self.assertEqual(service._contactor_lockout_source, "count-threshold")
+            self.assertEqual(service._contactor_lockout_at, 122.0)
             self.assertEqual(service.relay_last_changed_at, 111.0)
             self.assertEqual(service.relay_last_off_at, 112.0)
 

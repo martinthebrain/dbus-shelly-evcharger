@@ -135,37 +135,6 @@ class TestRuntimeSupportController(unittest.TestCase):
                 auto_audit_log_path=path,
                 auto_audit_log_max_age_hours=0.0,
                 auto_audit_log_repeat_seconds=0.0,
-                _last_auto_audit_key=(
-                    "waiting",
-                    None,
-                    0,
-                    0,
-                    1,
-                    1,
-                    1,
-                    "idle",
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    "combined",
-                    "shelly_combined",
-                    "shelly_combined",
-                    None,
-                    None,
-                    None,
-                    0,
-                    None,
-                    0,
-                    "P1",
-                    0,
-                    None,
-                    None,
-                    0,
-                ),
                 _last_auto_audit_event_at=995.0,
                 auto_watchdog_stale_seconds=0.0,
                 started_at=900.0,
@@ -199,6 +168,12 @@ class TestRuntimeSupportController(unittest.TestCase):
                 "switch_feedback_mismatch=0",
                 controller._format_auto_audit_line(service, "waiting", False, 1000.0),
             )
+            self.assertIn("contactor_fault_count=0", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn("contactor_lockout_reason=na", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn("contactor_lockout=0", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn("fault=0", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn("fault_reason=na", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
+            self.assertIn("recovery=0", controller._format_auto_audit_line(service, "waiting", False, 1000.0))
             self.assertEqual(
                 controller._prune_auto_audit_payload(["", "bad-line", "500\told\n", "1500\tnew\n"], 1000.0),
                 ["bad-line", "1500\tnew\n"],
@@ -209,6 +184,7 @@ class TestRuntimeSupportController(unittest.TestCase):
             controller.watchdog_recover(1000.0)
             service._reset_system_bus.assert_not_called()
 
+            service._last_auto_audit_key = controller._auto_audit_key(service, "waiting", False)
             controller.write_auto_audit_event("waiting", cached=False)
             self.assertFalse(os.path.exists(path))
 
@@ -675,3 +651,37 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertIn("phase_lockout=1", lines[1])
         self.assertIn("phase_lockout_target=P1_P2", lines[1])
         self.assertIn("phase_degraded=1", lines[1])
+
+    def test_write_auto_audit_event_repeats_same_reason_when_contactor_lockout_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = f"{temp_dir}/auto-reasons.log"
+            current_time = [1000.0]
+            service = make_runtime_support_service(
+                _time_now=lambda: current_time[0],
+                auto_audit_log_path=path,
+                _last_auto_metrics=make_auto_metrics(),
+            )
+
+            controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
+            controller.write_auto_audit_event("waiting-surplus", cached=False)
+            current_time[0] = 1005.0
+            service._last_health_reason = "contactor-lockout-open"
+            service._last_auto_state = "recovery"
+            service._last_auto_state_code = 5
+            service._contactor_fault_counts = {"contactor-suspected-open": 3}
+            service._contactor_lockout_reason = "contactor-suspected-open"
+            service._contactor_lockout_source = "count-threshold"
+            service._contactor_lockout_at = 1005.0
+            controller.write_auto_audit_event("waiting-surplus", cached=False)
+
+            with open(path, "r", encoding="utf-8") as handle:
+                lines = handle.readlines()
+
+        self.assertEqual(len(lines), 2)
+        self.assertIn("contactor_lockout=0", lines[0])
+        self.assertIn("contactor_lockout=1", lines[1])
+        self.assertIn("contactor_lockout_reason=contactor-suspected-open", lines[1])
+        self.assertIn("contactor_fault_count=3", lines[1])
+        self.assertIn("fault=1", lines[1])
+        self.assertIn("fault_reason=contactor-lockout-open", lines[1])
+        self.assertIn("recovery=1", lines[1])

@@ -716,6 +716,7 @@ class UpdateCycleController(
             relay_on,
             power,
             auto_mode_active,
+            charger_health,
             now,
         )
         self._apply_post_decision_health(relay_on, relay_confirmed, now, charger_health)
@@ -886,6 +887,24 @@ class UpdateCycleController(
                 float(current),
             )
             return switch_health
+        if switch_health == "contactor-lockout-open":
+            svc._warning_throttled(
+                "switch-lockout-open-blocking",
+                svc.auto_shelly_soft_fail_seconds,
+                "Latched contactor OPEN lockout blocks charging (count=%s source=%s)",
+                int(getattr(svc, "_contactor_fault_counts", {}).get("contactor-suspected-open", 0)),
+                getattr(svc, "_contactor_lockout_source", ""),
+            )
+            return switch_health
+        if switch_health == "contactor-lockout-welded":
+            svc._warning_throttled(
+                "switch-lockout-welded-blocking",
+                svc.auto_shelly_soft_fail_seconds,
+                "Latched contactor WELDED lockout blocks charging (count=%s source=%s)",
+                int(getattr(svc, "_contactor_fault_counts", {}).get("contactor-suspected-welded", 0)),
+                getattr(svc, "_contactor_lockout_source", ""),
+            )
+            return switch_health
         svc._warning_throttled(
             "switch-feedback-blocking",
             svc.auto_shelly_soft_fail_seconds,
@@ -900,6 +919,7 @@ class UpdateCycleController(
         relay_on: bool,
         power: float,
         auto_mode_active: bool,
+        health_reason: str | None,
         now: float,
     ) -> tuple[float, int]:
         """Return effective power and derived Venus status after relay application."""
@@ -907,7 +927,14 @@ class UpdateCycleController(
         effective_power = self._fresh_charger_power_readback(svc, now)
         if effective_power is None:
             effective_power = power
-        status = self.derive_status_code(svc, relay_on, effective_power, auto_mode_active, now)
+        status = self.derive_status_code(
+            svc,
+            relay_on,
+            effective_power,
+            auto_mode_active,
+            health_reason=health_reason,
+            now=now,
+        )
         return effective_power, status
 
     def _apply_post_decision_health(

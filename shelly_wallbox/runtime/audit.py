@@ -14,7 +14,7 @@ import os
 import time
 from typing import Any, cast
 
-from shelly_wallbox.core.common import _fresh_confirmed_relay_output
+from shelly_wallbox.core.common import _fresh_confirmed_relay_output, evse_fault_reason
 from shelly_wallbox.backend.models import effective_supported_phase_selections, switch_feedback_mismatch
 from shelly_wallbox.core.contracts import (
     finite_float_or_none,
@@ -130,6 +130,48 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
         return switch_feedback_mismatch(relay_on, feedback_closed)
 
     @staticmethod
+    def _contactor_lockout_reason_for_audit(svc: Any) -> str | None:
+        """Return the latched contactor-fault reason when present."""
+        reason = str(getattr(svc, "_contactor_lockout_reason", "") or "").strip()
+        return reason or None
+
+    @classmethod
+    def _contactor_lockout_active_for_audit(cls, svc: Any) -> bool:
+        """Return whether a contactor-fault lockout is currently latched."""
+        return cls._contactor_lockout_reason_for_audit(svc) is not None
+
+    @classmethod
+    def _contactor_fault_count_for_audit(cls, svc: Any) -> int:
+        """Return the current contactor-fault counter for the active or latched reason."""
+        counts = getattr(svc, "_contactor_fault_counts", None)
+        if not isinstance(counts, dict):
+            return 0
+        reason = cls._contactor_lockout_reason_for_audit(svc)
+        if reason is None:
+            active_reason = str(getattr(svc, "_contactor_fault_active_reason", "") or "").strip()
+            reason = active_reason or None
+        return 0 if reason is None else int(counts.get(reason, 0))
+
+    @staticmethod
+    def _evse_fault_reason_for_audit(svc: Any) -> str | None:
+        """Return the active hard EVSE-fault reason when present."""
+        return evse_fault_reason(getattr(svc, "_last_health_reason", ""))
+
+    @classmethod
+    def _evse_fault_active_for_audit(cls, svc: Any) -> bool:
+        """Return whether one hard EVSE fault is currently active."""
+        return cls._evse_fault_reason_for_audit(svc) is not None
+
+    @staticmethod
+    def _recovery_active_for_audit(svc: Any) -> bool:
+        """Return whether the broad Auto state is currently in recovery mode."""
+        state, _state_code = normalized_auto_state_pair(
+            getattr(svc, "_last_auto_state", "idle"),
+            getattr(svc, "_last_auto_state_code", 0),
+        )
+        return state == "recovery"
+
+    @staticmethod
     def _callable_time_or_none(time_func: Any) -> float | None:
         """Return one numeric current time when a service helper provides it."""
         if not callable(time_func):
@@ -243,6 +285,12 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
         int | None,
         int | None,
         int,
+        int,
+        str | None,
+        int,
+        int,
+        str | None,
+        int,
     ]:
         """Return a de-duplication key for audit entries."""
         metrics = cls._normalized_auto_audit_metrics(svc)
@@ -280,6 +328,12 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
             metrics.get("switch_feedback"),
             metrics.get("switch_interlock"),
             int(metrics.get("switch_feedback_mismatch", 0)),
+            int(metrics.get("contactor_fault_count", 0)),
+            cls._string_metric(metrics.get("contactor_lockout_reason")),
+            int(metrics.get("contactor_lockout", 0)),
+            int(metrics.get("fault", 0)),
+            cls._string_metric(metrics.get("fault_reason")),
+            int(metrics.get("recovery", 0)),
         )
 
     @staticmethod
@@ -327,6 +381,12 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
             f"switch_feedback={fields['switch_feedback']}\t"
             f"switch_interlock={fields['switch_interlock']}\t"
             f"switch_feedback_mismatch={fields['switch_feedback_mismatch']}\t"
+            f"contactor_fault_count={fields['contactor_fault_count']}\t"
+            f"contactor_lockout_reason={fields['contactor_lockout_reason']}\t"
+            f"contactor_lockout={fields['contactor_lockout']}\t"
+            f"fault={fields['fault']}\t"
+            f"fault_reason={fields['fault_reason']}\t"
+            f"recovery={fields['recovery']}\t"
             f"stop_alpha={fields['stop_alpha']}\t"
             f"stop_alpha_stage={fields['stop_alpha_stage']}\t"
             f"surplus_volatility={fields['surplus_volatility']}\t"
@@ -364,6 +424,12 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
             "switch_feedback": ("switch_feedback", None),
             "switch_interlock": ("switch_interlock", None),
             "switch_feedback_mismatch": ("switch_feedback_mismatch", None),
+            "contactor_fault_count": ("contactor_fault_count", None),
+            "contactor_lockout_reason": ("contactor_lockout_reason", None),
+            "contactor_lockout": ("contactor_lockout", None),
+            "fault": ("fault", None),
+            "fault_reason": ("fault_reason", None),
+            "recovery": ("recovery", None),
             "stop_alpha": ("stop_alpha", "{:.2f}"),
             "stop_alpha_stage": ("stop_alpha_stage", None),
             "surplus_volatility": ("surplus_volatility", "{:.0f}W"),
@@ -398,6 +464,12 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
         metrics["switch_feedback"] = None if switch_feedback is None else int(switch_feedback)
         metrics["switch_interlock"] = None if switch_interlock is None else int(switch_interlock)
         metrics["switch_feedback_mismatch"] = int(_RuntimeSupportAuditMixin._switch_feedback_mismatch_for_audit(svc))
+        metrics["contactor_fault_count"] = _RuntimeSupportAuditMixin._contactor_fault_count_for_audit(svc)
+        metrics["contactor_lockout_reason"] = _RuntimeSupportAuditMixin._contactor_lockout_reason_for_audit(svc)
+        metrics["contactor_lockout"] = int(_RuntimeSupportAuditMixin._contactor_lockout_active_for_audit(svc))
+        metrics["fault"] = int(_RuntimeSupportAuditMixin._evse_fault_active_for_audit(svc))
+        metrics["fault_reason"] = _RuntimeSupportAuditMixin._evse_fault_reason_for_audit(svc)
+        metrics["recovery"] = int(_RuntimeSupportAuditMixin._recovery_active_for_audit(svc))
         return metrics
 
     @staticmethod

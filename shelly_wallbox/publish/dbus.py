@@ -11,6 +11,7 @@ from shelly_wallbox.backend.models import (
     effective_supported_phase_selections,
     switch_feedback_mismatch,
 )
+from shelly_wallbox.core.common import evse_fault_reason
 from shelly_wallbox.core.contracts import (
     displayable_confirmed_read_timestamp,
     finite_float_or_none,
@@ -556,6 +557,26 @@ class DbusPublishController:
         """Return one stripped diagnostic text value or an empty string."""
         return "" if raw_value is None else str(raw_value).strip()
 
+    @staticmethod
+    def _fault_reason(service: Any) -> str:
+        """Return the active hard EVSE-fault reason or an empty string."""
+        reason = evse_fault_reason(getattr(service, "_last_health_reason", ""))
+        return "" if reason is None else reason
+
+    @classmethod
+    def _fault_active(cls, service: Any) -> int:
+        """Return whether a hard EVSE fault is currently active."""
+        return int(bool(cls._fault_reason(service)))
+
+    @staticmethod
+    def _recovery_active(service: Any) -> int:
+        """Return whether the broad Auto state is currently in recovery mode."""
+        auto_state, _auto_state_code = normalized_auto_state_pair(
+            getattr(service, "_last_auto_state", "idle"),
+            getattr(service, "_last_auto_state_code", 0),
+        )
+        return int(auto_state == "recovery")
+
     @classmethod
     def _observed_phase_value(cls, service: Any) -> str:
         """Return the latest observed phase selection from PM status or charger readback."""
@@ -650,6 +671,36 @@ class DbusPublishController:
         """Return whether runtime currently suspects a welded contactor without explicit feedback."""
         return int(str(getattr(service, "_last_health_reason", "")) == "contactor-suspected-welded")
 
+    @staticmethod
+    def _contactor_lockout_reason(service: Any) -> str:
+        """Return the active contactor-fault lockout reason or an empty string."""
+        reason = str(getattr(service, "_contactor_lockout_reason", "") or "").strip()
+        return reason
+
+    @classmethod
+    def _contactor_lockout_active(cls, service: Any) -> int:
+        """Return whether a contactor-fault lockout is currently latched."""
+        return int(bool(cls._contactor_lockout_reason(service)))
+
+    @staticmethod
+    def _contactor_lockout_source(service: Any) -> str:
+        """Return the active contactor-fault lockout source or an empty string."""
+        source = str(getattr(service, "_contactor_lockout_source", "") or "").strip()
+        return source
+
+    @classmethod
+    def _contactor_fault_count(cls, service: Any) -> int:
+        """Return the current contactor-fault counter for the active or latched reason."""
+        counts = getattr(service, "_contactor_fault_counts", None)
+        if not isinstance(counts, dict):
+            return 0
+        reason = cls._contactor_lockout_reason(service)
+        if not reason:
+            reason = str(getattr(service, "_contactor_fault_active_reason", "") or "").strip()
+        if not reason:
+            return 0
+        return int(counts.get(reason, 0))
+
     @classmethod
     def _auto_phase_metric_float(cls, service: Any, field_name: str) -> float:
         """Return one outward-safe Auto phase metric float value or -1 when absent."""
@@ -682,7 +733,10 @@ class DbusPublishController:
             "/Auto/HealthCode": int(self.service._last_health_code),
             "/Auto/State": auto_state,
             "/Auto/StateCode": auto_state_code,
+            "/Auto/RecoveryActive": self._recovery_active(self.service),
             "/Auto/StatusSource": str(getattr(self.service, "_last_status_source", "unknown")),
+            "/Auto/FaultActive": self._fault_active(self.service),
+            "/Auto/FaultReason": self._fault_reason(self.service),
             "/Auto/BackendMode": self._backend_mode_value(self.service),
             "/Auto/MeterBackend": self._backend_type_value(self.service, "meter_backend_type", "shelly_combined"),
             "/Auto/SwitchBackend": self._backend_type_value(self.service, "switch_backend_type", "shelly_combined"),
@@ -715,6 +769,10 @@ class DbusPublishController:
             "/Auto/SwitchFeedbackMismatch": self._switch_feedback_mismatch(self.service),
             "/Auto/ContactorSuspectedOpen": self._contactor_suspected_open(self.service),
             "/Auto/ContactorSuspectedWelded": self._contactor_suspected_welded(self.service),
+            "/Auto/ContactorFaultCount": self._contactor_fault_count(self.service),
+            "/Auto/ContactorLockoutActive": self._contactor_lockout_active(self.service),
+            "/Auto/ContactorLockoutReason": self._contactor_lockout_reason(self.service),
+            "/Auto/ContactorLockoutSource": self._contactor_lockout_source(self.service),
             "/Auto/PhaseThresholdWatts": self._auto_phase_metric_float(self.service, "phase_threshold_watts"),
             "/Auto/PhaseCandidate": self._auto_phase_metric_text(self.service, "phase_candidate"),
             "/Auto/Stale": 1 if self.service._is_update_stale(now) else 0,
@@ -749,6 +807,10 @@ class DbusPublishController:
             ),
             "/Auto/PhaseLockoutAge": self._age_seconds(
                 getattr(svc, "_phase_switch_lockout_at", None) if self._phase_switch_lockout_active(svc, now) else None,
+                now,
+            ),
+            "/Auto/ContactorLockoutAge": self._age_seconds(
+                getattr(svc, "_contactor_lockout_at", None) if self._contactor_lockout_active(svc) else None,
                 now,
             ),
             "/Auto/LastSwitchFeedbackAge": self._age_seconds(

@@ -16,6 +16,7 @@ from shelly_wallbox.backend.models import (
     normalize_phase_selection_tuple,
     switch_feedback_mismatch,
 )
+from shelly_wallbox.core.common import evse_fault_reason
 from shelly_wallbox.core.contracts import (
     finite_float_or_none,
     non_negative_float_or_none,
@@ -169,6 +170,19 @@ class ServiceStateController:
         return str(int(switch_feedback_mismatch(relay_on, feedback_closed)))
 
     @staticmethod
+    def _summary_contactor_fault_count(svc: Any) -> str:
+        """Return the current latched or active contactor-fault counter for debug summaries."""
+        counts = getattr(svc, "_contactor_fault_counts", None)
+        if not isinstance(counts, dict):
+            return "0"
+        reason = str(getattr(svc, "_contactor_lockout_reason", "") or "")
+        if not reason:
+            reason = str(getattr(svc, "_contactor_fault_active_reason", "") or "")
+        if not reason:
+            return "0"
+        return str(int(counts.get(reason, 0)))
+
+    @staticmethod
     def _summary_contactor_suspected_open(svc: Any) -> str:
         """Return whether runtime currently suspects an open contactor without explicit feedback."""
         return "1" if str(getattr(svc, "_last_health_reason", "")) == "contactor-suspected-open" else "0"
@@ -177,6 +191,34 @@ class ServiceStateController:
     def _summary_contactor_suspected_welded(svc: Any) -> str:
         """Return whether runtime currently suspects a welded contactor without explicit feedback."""
         return "1" if str(getattr(svc, "_last_health_reason", "")) == "contactor-suspected-welded" else "0"
+
+    @staticmethod
+    def _summary_contactor_lockout_active(svc: Any) -> str:
+        """Return whether a contactor-fault lockout is currently latched."""
+        return "1" if str(getattr(svc, "_contactor_lockout_reason", "") or "") else "0"
+
+    @classmethod
+    def _summary_contactor_lockout_reason(cls, svc: Any) -> str:
+        """Return the active contactor-fault lockout reason for debug summaries."""
+        if cls._summary_contactor_lockout_active(svc) != "1":
+            return "na"
+        return cls._summary_text(getattr(svc, "_contactor_lockout_reason", None), "na")
+
+    @staticmethod
+    def _summary_fault_active(svc: Any) -> str:
+        """Return whether a hard EVSE fault is currently active."""
+        return "1" if evse_fault_reason(getattr(svc, "_last_health_reason", "")) is not None else "0"
+
+    @staticmethod
+    def _summary_fault_reason(svc: Any) -> str:
+        """Return the active hard EVSE-fault reason for debug summaries."""
+        reason = evse_fault_reason(getattr(svc, "_last_health_reason", ""))
+        return "na" if reason is None else reason
+
+    @staticmethod
+    def _summary_recovery_active(svc: Any) -> str:
+        """Return whether the broad Auto state currently represents recovery."""
+        return "1" if str(getattr(svc, "_last_auto_state", "idle")) == "recovery" else "0"
 
     def state_summary(self) -> str:
         """Return a compact runtime state summary for debug logging."""
@@ -200,8 +242,11 @@ class ServiceStateController:
             f"switch_feedback={self._summary_switch_feedback_closed(svc)}",
             f"switch_interlock={self._summary_switch_interlock_ok(svc)}",
             f"switch_feedback_mismatch={self._summary_switch_feedback_mismatch(svc)}",
+            f"contactor_fault_count={self._summary_contactor_fault_count(svc)}",
             f"contactor_suspected_open={self._summary_contactor_suspected_open(svc)}",
             f"contactor_suspected_welded={self._summary_contactor_suspected_welded(svc)}",
+            f"contactor_lockout={self._summary_contactor_lockout_active(svc)}",
+            f"contactor_lockout_reason={self._summary_contactor_lockout_reason(svc)}",
             f"backend={getattr(svc, 'backend_mode', 'combined')}",
             f"meter_backend={getattr(svc, 'meter_backend_type', 'shelly_combined')}",
             f"switch_backend={getattr(svc, 'switch_backend_type', 'shelly_combined')}",
@@ -210,7 +255,10 @@ class ServiceStateController:
             f"charger_status={self._summary_text(getattr(svc, '_last_charger_state_status', ''), 'na')}",
             f"charger_fault={self._summary_text(getattr(svc, '_last_charger_state_fault', ''), 'na')}",
             f"status_source={self._summary_text(getattr(svc, '_last_status_source', ''), 'unknown')}",
+            f"fault={self._summary_fault_active(svc)}",
+            f"fault_reason={self._summary_fault_reason(svc)}",
             f"auto_state={getattr(svc, '_last_auto_state', 'na')}",
+            f"recovery={self._summary_recovery_active(svc)}",
             f"health={getattr(svc, '_last_health_reason', 'na')}",
         )
         return " ".join(parts)
@@ -307,6 +355,16 @@ class ServiceStateController:
             ),
             "phase_switch_lockout_until": self._coerce_optional_runtime_float(
                 getattr(svc, "_phase_switch_lockout_until", None)
+            ),
+            "contactor_fault_counts": dict(getattr(svc, "_contactor_fault_counts", {}) or {}),
+            "contactor_fault_active_reason": str(getattr(svc, "_contactor_fault_active_reason", "") or "") or None,
+            "contactor_fault_active_since": self._coerce_optional_runtime_past_time(
+                getattr(svc, "_contactor_fault_active_since", None)
+            ),
+            "contactor_lockout_reason": str(getattr(svc, "_contactor_lockout_reason", "") or ""),
+            "contactor_lockout_source": str(getattr(svc, "_contactor_lockout_source", "") or ""),
+            "contactor_lockout_at": self._coerce_optional_runtime_past_time(
+                getattr(svc, "_contactor_lockout_at", None)
             ),
             "relay_last_changed_at": svc.relay_last_changed_at,
             "relay_last_off_at": svc.relay_last_off_at,
@@ -579,6 +637,44 @@ class ServiceStateController:
         svc.relay_last_changed_at = self._coerce_optional_runtime_past_time(relay_last_changed_at, current_time)
         svc.relay_last_off_at = self._coerce_optional_runtime_past_time(relay_last_off_at, current_time)
 
+    def _restore_contactor_runtime_state(
+        self,
+        svc: Any,
+        state: dict[str, object],
+        current_time: float,
+    ) -> None:
+        """Restore contactor-fault counters, active suspicion, and latched lockout state."""
+        raw_fault_counts = state.get("contactor_fault_counts", getattr(svc, "_contactor_fault_counts", {}))
+        svc._contactor_fault_counts = {}
+        if isinstance(raw_fault_counts, dict):
+            for raw_reason, raw_count in raw_fault_counts.items():
+                reason = str(raw_reason).strip()
+                if reason not in {"contactor-suspected-open", "contactor-suspected-welded"}:
+                    continue
+                svc._contactor_fault_counts[reason] = non_negative_int(raw_count, 0)
+        active_reason = str(
+            state.get("contactor_fault_active_reason", getattr(svc, "_contactor_fault_active_reason", "")) or ""
+        ).strip()
+        if active_reason not in {"contactor-suspected-open", "contactor-suspected-welded"}:
+            active_reason = ""
+        svc._contactor_fault_active_reason = active_reason or None
+        svc._contactor_fault_active_since = self._coerce_optional_runtime_past_time(
+            state.get("contactor_fault_active_since", getattr(svc, "_contactor_fault_active_since", None)),
+            current_time,
+        )
+        svc._contactor_lockout_reason = str(
+            state.get("contactor_lockout_reason", getattr(svc, "_contactor_lockout_reason", "")) or ""
+        )
+        if svc._contactor_lockout_reason not in {"contactor-suspected-open", "contactor-suspected-welded"}:
+            svc._contactor_lockout_reason = ""
+        svc._contactor_lockout_source = str(
+            state.get("contactor_lockout_source", getattr(svc, "_contactor_lockout_source", "")) or ""
+        )
+        svc._contactor_lockout_at = self._coerce_optional_runtime_past_time(
+            state.get("contactor_lockout_at", getattr(svc, "_contactor_lockout_at", None)),
+            current_time,
+        )
+
     def load_runtime_state(self) -> None:
         """Restore volatile runtime state from a RAM-backed file if present."""
         svc = self.service
@@ -592,6 +688,7 @@ class ServiceStateController:
         self._restore_basic_runtime_state(svc, state)
         self._restore_learned_charge_power_state(svc, state, current_time)
         self._restore_phase_switch_runtime_state(svc, state, current_time)
+        self._restore_contactor_runtime_state(svc, state, current_time)
         self._restore_relay_runtime_state(svc, state, current_time)
         svc._runtime_state_serialized = self._serialized_runtime_state()
         logging.info("Restored runtime state from %s: %s", path, self.state_summary())
@@ -798,6 +895,11 @@ class ServiceStateController:
             "auto_phase_mismatch_lockout_count",
             "AutoPhaseMismatchLockoutCount",
         )
+        self._validate_optional_non_negative_int(
+            svc,
+            "auto_contactor_fault_latch_count",
+            "AutoContactorFaultLatchCount",
+        )
 
     def _clamp_legacy_non_negative_auto_values(self, svc: Any) -> None:
         """Clamp non-negative legacy Auto settings."""
@@ -814,6 +916,7 @@ class ServiceStateController:
             "auto_learn_charge_power_max_age_seconds",
             "auto_phase_mismatch_retry_seconds",
             "auto_phase_mismatch_lockout_seconds",
+            "auto_contactor_fault_latch_seconds",
         ):
             if hasattr(svc, attr_name):
                 self._clamp_non_negative_float(svc, attr_name)

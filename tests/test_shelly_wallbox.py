@@ -1916,7 +1916,10 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         self.assertEqual(service._dbusservice["/Auto/MeterBackend"], "template_meter")
         self.assertEqual(service._dbusservice["/Auto/SwitchBackend"], "template_switch")
         self.assertEqual(service._dbusservice["/Auto/ChargerBackend"], "template_charger")
+        self.assertEqual(service._dbusservice["/Auto/RecoveryActive"], 0)
         self.assertEqual(service._dbusservice["/Auto/StatusSource"], "unknown")
+        self.assertEqual(service._dbusservice["/Auto/FaultActive"], 0)
+        self.assertEqual(service._dbusservice["/Auto/FaultReason"], "")
         self.assertEqual(service._dbusservice["/Auto/ChargerFaultActive"], 0)
         self.assertEqual(service._dbusservice["/Auto/ChargerWriteErrors"], 2)
         self.assertEqual(service._dbusservice["/Auto/ChargerCurrentTarget"], 13.0)
@@ -1931,10 +1934,24 @@ class TestShellyWallboxHelpers(unittest.TestCase):
         self.assertEqual(service._dbusservice["/Auto/SwitchFeedbackClosed"], -1)
         self.assertEqual(service._dbusservice["/Auto/SwitchInterlockOk"], -1)
         self.assertEqual(service._dbusservice["/Auto/SwitchFeedbackMismatch"], 0)
+        self.assertEqual(service._dbusservice["/Auto/ContactorFaultCount"], 0)
+        self.assertEqual(service._dbusservice["/Auto/ContactorLockoutActive"], 0)
+        self.assertEqual(service._dbusservice["/Auto/ContactorLockoutReason"], "")
+        self.assertEqual(service._dbusservice["/Auto/ContactorLockoutSource"], "")
         self.assertEqual(service._dbusservice["/Auto/PhaseLockoutAge"], 9)
+        self.assertEqual(service._dbusservice["/Auto/ContactorLockoutAge"], -1)
         self.assertEqual(service._dbusservice["/Auto/LastSwitchFeedbackAge"], -1)
         self.assertEqual(service._dbusservice["/Auto/ChargerCurrentTargetAge"], 4)
         self.assertEqual(service._dbusservice["/Auto/ErrorCount"], 2)
+
+        service._last_health_reason = "contactor-lockout-open"
+        service._last_auto_state = "recovery"
+        service._last_auto_state_code = 5
+        service._publish_diagnostic_paths(100.0)
+
+        self.assertEqual(service._dbusservice["/Auto/RecoveryActive"], 1)
+        self.assertEqual(service._dbusservice["/Auto/FaultActive"], 1)
+        self.assertEqual(service._dbusservice["/Auto/FaultReason"], "contactor-lockout-open")
 
     def test_stale_helper_snapshot_prevents_auto_start_and_marks_grid_missing(self):
         service = self._make_update_service()
