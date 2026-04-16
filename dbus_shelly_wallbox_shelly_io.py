@@ -17,7 +17,7 @@ from shelly_wallbox.backend.models import (
     normalize_phase_selection,
     normalize_phase_selection_tuple,
 )
-from dbus_shelly_wallbox_contracts import finite_float_or_none
+from shelly_wallbox.core.contracts import finite_float_or_none
 
 
 JsonObject = dict[str, object]

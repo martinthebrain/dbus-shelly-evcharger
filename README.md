@@ -90,9 +90,9 @@ groups:
 - `service_shelly_wallbox/`: runit service scripts for Venus OS
 - `boot_shelly_wallbox.sh`, `install_shelly_wallbox.sh`, `restart_shelly_wallbox.sh`, `uninstall_shelly_wallbox.sh`: deployment helpers
 
-Many `dbus_shelly_wallbox_*.py` modules still exist as compatibility wrappers so
-older imports and test patch points remain stable while the packaged structure
-becomes the primary source layout.
+The temporary compatibility-wrapper layer is gone. The remaining flat
+`dbus_shelly_wallbox_*.py` modules are now deliberate entry points, workflow
+anchors, or test-friendly integration seams around the packaged source layout.
 
 Files under `tests/` are for local verification on development systems and are
 not required on the Cerbo.
@@ -321,21 +321,16 @@ flat anchors:
 - `shelly_wallbox/backend/`: first package slice for normalized meter/switch/charger backends
 - `shelly_wallbox/auto/`: package slice for Auto policy and split workflow helpers
 - `shelly_wallbox/bootstrap/`: package slice for bootstrap config, runtime wiring, and DBus path registration mixins
+- `shelly_wallbox/core/`: package slice for shared helpers, contracts, and composition mixins
 - `shelly_wallbox/controllers/`: package slice for reusable service controllers while patch-sensitive state remains a facade
 - `shelly_wallbox/ports/`: package slice for typed controller-to-service forwarding ports
 - `shelly_wallbox/service/`: package slice for service mixins and lazy controller factories
-- `shelly_wallbox/runtime/`: package facade for runtime/watchdog helpers while legacy patch-compatible modules stay stable
+- `shelly_wallbox/runtime/`: package slice for runtime/watchdog setup, health, and audit helpers
 - `shelly_wallbox/update/`: package slice for learned-power, relay, and session update helpers
-- `dbus_shelly_wallbox_auto_*.py`: compatibility wrappers that keep the old flat Auto helper import names stable during the migration
-- `dbus_shelly_wallbox_backend_*.py`: compatibility wrappers that keep the old flat import names stable during the migration
-- `dbus_shelly_wallbox_bootstrap_*.py`: compatibility wrappers that keep the old flat bootstrap mixin names stable during the migration
-- `shelly_wallbox/inputs/`: packaged DBus input discovery/read helpers and helper-supervision modules
-- `shelly_wallbox/ports/`: packaged controller-port definitions used by the runtime and tests
-- `dbus_shelly_wallbox_service_*.py`: compatibility wrappers that keep the old flat service mixin names stable during the migration
-- `dbus_shelly_wallbox_update_cycle_*.py`: compatibility wrappers that keep the old flat update helper import names stable during the migration
-- `shelly_wallbox/controllers/auto.py`: packaged auto-controller implementation
-- `dbus_shelly_wallbox_*controller.py`: remaining controller anchors and compatibility entry points for a single responsibility
-- `dbus_shelly_wallbox_common.py`, `dbus_shelly_wallbox_shared.py`, `dbus_shelly_wallbox_contracts.py`, and `dbus_shelly_wallbox_split_mixins.py`: stable flat helper modules that remain available for legacy imports
+- `dbus_shelly_wallbox_shelly_io.py`: flat I/O worker seam that still cleanly isolates Shelly/network interaction from the main service loop
+- `shelly_wallbox_auto_input_helper.py`: helper-process entry anchor; its internals now live under `shelly_wallbox/inputs/helper/`
+- `disable_generic_shelly_once.py`: standalone one-shot helper for installations that also run a generic `dbus-shelly` service
+- `dbus_shelly_wallbox_write_snapshot.py`: one remaining flat helper seam around write-state rollback snapshots
 
 This structure keeps the service easier to read and test than a single large
 monolithic script.

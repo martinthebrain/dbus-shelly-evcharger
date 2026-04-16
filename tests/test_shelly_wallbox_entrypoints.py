@@ -26,7 +26,7 @@ class TestShellyWallboxEntrypoints(unittest.TestCase):
             },
         )
 
-        common_module = ModuleType("dbus_shelly_wallbox_common")
+        common_module = ModuleType("shelly_wallbox.core.common")
         for name in (
             "_a",
             "_age_seconds",
@@ -82,7 +82,7 @@ class TestShellyWallboxEntrypoints(unittest.TestCase):
 
         return {
             "dbus_shelly_wallbox_bootstrap": bootstrap_module,
-            "dbus_shelly_wallbox_common": common_module,
+            "shelly_wallbox.core.common": common_module,
             "shelly_wallbox.service.bindings": bindings_module,
             "dbus_shelly_wallbox_state": state_module,
             "dbus": MagicMock(),

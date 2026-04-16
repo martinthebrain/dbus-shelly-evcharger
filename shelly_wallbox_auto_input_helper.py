@@ -16,8 +16,12 @@ import time
 from typing import Any
 
 import dbus
-from dbus_shelly_wallbox_shared import AUTO_INPUT_SNAPSHOT_SCHEMA_VERSION, compact_json, write_text_atomically
 from gi.repository import GLib
+from shelly_wallbox.core.shared import (
+    AUTO_INPUT_SNAPSHOT_SCHEMA_VERSION,
+    compact_json,
+    write_text_atomically,
+)
 
 try:
     import dbus.mainloop.glib as dbus_glib_mainloop

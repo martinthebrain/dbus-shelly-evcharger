@@ -203,7 +203,7 @@ class TestRuntimeSupportController(unittest.TestCase):
             service._last_auto_audit_cleanup_at = 0.0
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write("1\told\n")
-            with patch("dbus_shelly_wallbox_runtime_audit.write_text_atomically", side_effect=RuntimeError("boom")):
+            with patch("shelly_wallbox.runtime.audit.write_text_atomically", side_effect=RuntimeError("boom")):
                 controller._cleanup_auto_audit_log(10000.0)
 
             service.auto_watchdog_stale_seconds = 10.0

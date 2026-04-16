@@ -18,7 +18,7 @@ from typing import Any
 import dbus
 import requests
 
-from dbus_shelly_wallbox_shared import write_text_atomically
+from shelly_wallbox.core.shared import write_text_atomically
 from shelly_wallbox.backend.models import normalize_phase_selection, normalize_phase_selection_tuple
 
 WorkerSnapshot = dict[str, Any]

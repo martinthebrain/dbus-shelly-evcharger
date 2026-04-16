@@ -3,7 +3,7 @@ import configparser
 import unittest
 from unittest.mock import mock_open, patch
 
-from dbus_shelly_wallbox_contracts import (
+from shelly_wallbox.core.contracts import (
     cutover_confirmed_off,
     displayable_confirmed_read_timestamp,
     finite_float_or_none,
@@ -22,7 +22,7 @@ from dbus_shelly_wallbox_contracts import (
     valid_battery_soc,
     write_failure_is_reversible,
 )
-from dbus_shelly_wallbox_common import (
+from shelly_wallbox.core.common import (
     _a,
     _age_seconds,
     _auto_state_code,

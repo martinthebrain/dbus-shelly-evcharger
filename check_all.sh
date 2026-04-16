@@ -10,7 +10,7 @@ echo "[1/3] Syntax check"
 python3 -m py_compile \
     dbus_shelly_wallbox.py \
     dbus_shelly_wallbox_bootstrap.py \
-    dbus_shelly_wallbox_common.py \
+    shelly_wallbox/core/common.py \
     shelly_wallbox/ports/__init__.py \
     shelly_wallbox/controllers/auto.py \
     dbus_shelly_wallbox_auto_logic.py \

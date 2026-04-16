@@ -14,7 +14,7 @@ import math
 from typing import Any
 
 
-from dbus_shelly_wallbox_contracts import (
+from shelly_wallbox.core.contracts import (
     normalize_learning_phase,
     normalize_learning_state,
     normalized_worker_snapshot,

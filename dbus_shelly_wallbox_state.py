@@ -14,14 +14,14 @@ from shelly_wallbox.backend.models import (
     normalize_phase_selection,
     normalize_phase_selection_tuple,
 )
-from dbus_shelly_wallbox_contracts import (
+from shelly_wallbox.core.contracts import (
     finite_float_or_none,
     non_negative_float_or_none,
     non_negative_int,
     normalize_learning_phase,
     normalize_learning_state,
 )
-from dbus_shelly_wallbox_shared import compact_json, write_text_atomically
+from shelly_wallbox.core.shared import compact_json, write_text_atomically
 
 
 class ServiceStateController:

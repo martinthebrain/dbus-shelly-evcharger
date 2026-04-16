@@ -34,7 +34,7 @@ sys.path.insert(
 )
 
 from dbus_shelly_wallbox_bootstrap import ServiceBootstrapController, run_service_main
-from dbus_shelly_wallbox_common import (
+from shelly_wallbox.core.common import (
     _a,
     _age_seconds,
     _health_code,

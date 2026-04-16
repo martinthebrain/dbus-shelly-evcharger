@@ -11,7 +11,7 @@ from shelly_wallbox.controllers.auto import AutoDecisionController
 from shelly_wallbox.auto.policy import AutoStopEwmaPolicy, AutoThresholdProfile, AutoPolicy, validate_auto_policy
 from shelly_wallbox.inputs.supervisor import AutoInputSupervisor
 from dbus_shelly_wallbox_runtime_support import RuntimeSupportController
-from dbus_shelly_wallbox_shared import write_text_atomically
+from shelly_wallbox.core.shared import write_text_atomically
 from dbus_shelly_wallbox_shelly_io import ShellyIoController
 from tests.wallbox_test_fixtures import make_auto_controller_service
 
