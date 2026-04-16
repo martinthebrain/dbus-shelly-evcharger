@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from dbus_shelly_wallbox_publisher import DbusPublishController
+from shelly_wallbox.publish.dbus import DbusPublishController
 
 
 class TestDbusPublishController(unittest.TestCase):

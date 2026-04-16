@@ -7,9 +7,9 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
-from dbus_shelly_wallbox_ports import WriteControllerPort
-from dbus_shelly_wallbox_write_controller import DbusWriteController
+from shelly_wallbox.ports import WriteControllerPort
 from dbus_shelly_wallbox_write_snapshot import _snapshot_dbus_paths
+from shelly_wallbox.controllers.write import DbusWriteController
 
 
 class TestDbusWriteController(unittest.TestCase):

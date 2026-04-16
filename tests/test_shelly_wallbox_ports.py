@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
 
-from dbus_shelly_wallbox_ports import AutoDecisionPort, DbusInputPort, UpdateCyclePort, WriteControllerPort
+from shelly_wallbox.ports import AutoDecisionPort, DbusInputPort, UpdateCyclePort, WriteControllerPort
 
 
 class TestWallboxPorts(unittest.TestCase):

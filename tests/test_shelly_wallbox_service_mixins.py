@@ -5,10 +5,10 @@ from unittest.mock import MagicMock
 
 sys.modules["vedbus"] = MagicMock()
 
-from dbus_shelly_wallbox_service_auto import DbusAutoLogicMixin
-from dbus_shelly_wallbox_service_runtime import RuntimeHelperMixin
-from dbus_shelly_wallbox_service_state_publish import StatePublishMixin
-from dbus_shelly_wallbox_service_update import UpdateCycleMixin
+from shelly_wallbox.service.auto import DbusAutoLogicMixin
+from shelly_wallbox.service.runtime import RuntimeHelperMixin
+from shelly_wallbox.service.state_publish import StatePublishMixin
+from shelly_wallbox.service.update import UpdateCycleMixin
 
 
 class _RuntimeService(RuntimeHelperMixin):

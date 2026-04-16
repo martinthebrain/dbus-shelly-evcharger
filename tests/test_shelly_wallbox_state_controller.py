@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from dbus_shelly_wallbox_auto_policy import (
+from shelly_wallbox.auto.policy import (
     AutoLearnChargePowerPolicy,
     AutoPolicy,
     AutoStopEwmaPolicy,

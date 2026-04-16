@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from dbus_shelly_wallbox_backend_template_meter import TemplateMeterBackend
+from shelly_wallbox.backend.template_meter import TemplateMeterBackend
 
 
 class _FakeResponse:

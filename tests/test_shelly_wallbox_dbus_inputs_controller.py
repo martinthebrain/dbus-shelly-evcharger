@@ -4,8 +4,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import dbus_shelly_wallbox_dbus_inputs
-from dbus_shelly_wallbox_dbus_inputs import DbusInputController
+import shelly_wallbox.inputs.dbus as wallbox_dbus_inputs
+from shelly_wallbox.inputs.dbus import DbusInputController
 
 
 class TestDbusInputController(unittest.TestCase):
@@ -52,7 +52,7 @@ class TestDbusInputController(unittest.TestCase):
     def test_get_dbus_value_and_list_services_cover_retry_and_failure_paths(self) -> None:
         service = self._make_service()
         controller = DbusInputController(service)
-        module: Any = dbus_shelly_wallbox_dbus_inputs
+        module: Any = wallbox_dbus_inputs
 
         service._get_system_bus.return_value = MagicMock(get_object=MagicMock(return_value=object()))
         failing_interface = MagicMock()
@@ -67,7 +67,7 @@ class TestDbusInputController(unittest.TestCase):
 
         self.assertEqual(service._reset_system_bus.call_count, 2)
 
-        with patch("dbus_shelly_wallbox_dbus_inputs.time.time", return_value=10.0):
+        with patch("shelly_wallbox.inputs.dbus.time.time", return_value=10.0):
             service._dbus_list_backoff_until = 20.0
             with self.assertRaises(RuntimeError):
                 controller.list_dbus_services()
@@ -78,7 +78,7 @@ class TestDbusInputController(unittest.TestCase):
         failing_interface.ListNames.side_effect = RuntimeError("dbus down")
         module.dbus.Interface = MagicMock(return_value=failing_interface)
         try:
-            with patch("dbus_shelly_wallbox_dbus_inputs.time.time", return_value=100.0):
+            with patch("shelly_wallbox.inputs.dbus.time.time", return_value=100.0):
                 with self.assertRaises(RuntimeError):
                     controller.list_dbus_services()
         finally:
@@ -97,12 +97,12 @@ class TestDbusInputController(unittest.TestCase):
         service.auto_pv_service = ""
         service._resolved_auto_pv_services = ["cached-pv"]
         service._auto_pv_last_scan = 100.0
-        with patch("dbus_shelly_wallbox_dbus_inputs.time.time", return_value=120.0):
+        with patch("shelly_wallbox.inputs.dbus.time.time", return_value=120.0):
             self.assertEqual(controller.resolve_auto_pv_services(), ["cached-pv"])
 
         service._resolved_auto_pv_services = []
         service._list_dbus_services = MagicMock(return_value=["com.victronenergy.system"])
-        with patch("dbus_shelly_wallbox_dbus_inputs.time.time", return_value=200.0):
+        with patch("shelly_wallbox.inputs.dbus.time.time", return_value=200.0):
             with self.assertRaises(ValueError):
                 controller.resolve_auto_pv_services()
 
@@ -134,7 +134,7 @@ class TestDbusInputController(unittest.TestCase):
 
         service._resolved_auto_battery_service = "cached-battery"
         service._auto_battery_last_scan = 100.0
-        with patch("dbus_shelly_wallbox_dbus_inputs.time.time", return_value=120.0):
+        with patch("shelly_wallbox.inputs.dbus.time.time", return_value=120.0):
             self.assertEqual(controller._cached_auto_battery_service(120.0), "cached-battery")
 
         service._list_dbus_services = MagicMock(return_value=["com.victronenergy.system"])

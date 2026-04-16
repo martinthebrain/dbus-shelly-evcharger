@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from dbus_shelly_wallbox_auto_input_supervisor import AutoInputSupervisor
+from shelly_wallbox.inputs.supervisor import AutoInputSupervisor
 
 
 class TestAutoInputSupervisor(unittest.TestCase):
@@ -444,7 +444,7 @@ class TestAutoInputSupervisor(unittest.TestCase):
         broken_process.terminate.side_effect = RuntimeError("stuck")
         service._auto_input_helper_process = broken_process
         controller = AutoInputSupervisor(service)
-        with patch("dbus_shelly_wallbox_auto_input_supervisor.logging.debug") as debug_mock:
+        with patch("shelly_wallbox.inputs.supervisor.logging.debug") as debug_mock:
             controller.stop_helper()
         debug_mock.assert_called_once()
 
@@ -467,7 +467,7 @@ class TestAutoInputSupervisor(unittest.TestCase):
         )
 
         controller = AutoInputSupervisor(service)
-        with patch("dbus_shelly_wallbox_auto_input_supervisor.logging.warning") as warning_mock:
+        with patch("shelly_wallbox.inputs.supervisor.logging.warning") as warning_mock:
             controller.ensure_helper_process()
 
         warning_mock.assert_called_once()
@@ -504,8 +504,8 @@ class TestAutoInputSupervisor(unittest.TestCase):
         )
         process = MagicMock(pid=5555)
         controller = AutoInputSupervisor(service)
-        with patch("dbus_shelly_wallbox_auto_input_supervisor.os.getpid", return_value=1234):
-            with patch("dbus_shelly_wallbox_auto_input_supervisor.subprocess.Popen", return_value=process) as popen:
+        with patch("shelly_wallbox.inputs.supervisor.os.getpid", return_value=1234):
+            with patch("shelly_wallbox.inputs.supervisor.subprocess.Popen", return_value=process) as popen:
                 controller.spawn_helper()
 
         popen.assert_called_once()

@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 
 from requests.auth import HTTPDigestAuth
 
-from dbus_shelly_wallbox_backend_types import (
+from shelly_wallbox.backend.models import (
     ChargerState,
     MeterReading,
     PhaseSelection,

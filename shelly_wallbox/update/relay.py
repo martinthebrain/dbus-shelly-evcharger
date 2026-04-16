@@ -13,7 +13,8 @@ import logging
 import math
 import time
 from typing import Any, cast
-from dbus_shelly_wallbox_backend_types import PhaseSelection, normalize_phase_selection
+
+from shelly_wallbox.backend.models import PhaseSelection, normalize_phase_selection
 from shelly_wallbox.core.contracts import (
     finite_float_or_none,
     normalize_learning_phase,

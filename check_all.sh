@@ -11,12 +11,12 @@ python3 -m py_compile \
     dbus_shelly_wallbox.py \
     dbus_shelly_wallbox_bootstrap.py \
     dbus_shelly_wallbox_common.py \
-    dbus_shelly_wallbox_ports.py \
-    dbus_shelly_wallbox_auto_controller.py \
+    shelly_wallbox/ports/__init__.py \
+    shelly_wallbox/controllers/auto.py \
     dbus_shelly_wallbox_auto_logic.py \
-    dbus_shelly_wallbox_dbus_inputs.py \
+    shelly_wallbox/inputs/dbus.py \
     dbus_shelly_wallbox_runtime_support.py \
-    dbus_shelly_wallbox_write_controller.py \
+    shelly_wallbox/controllers/write.py \
     dbus_shelly_wallbox_update_cycle.py
 
 echo "[2/3] Unit tests"

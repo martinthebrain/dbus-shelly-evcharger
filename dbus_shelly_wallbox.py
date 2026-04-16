@@ -51,7 +51,7 @@ from dbus_shelly_wallbox_common import (
     phase_values,
     read_version,
 )
-from dbus_shelly_wallbox_service_bindings import (
+from shelly_wallbox.service.bindings import (
     DbusAutoLogicMixin,
     RuntimeHelperMixin,
     StatePublishMixin,

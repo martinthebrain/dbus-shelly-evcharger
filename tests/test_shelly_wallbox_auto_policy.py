@@ -3,7 +3,7 @@ import configparser
 import unittest
 from unittest.mock import patch
 
-from dbus_shelly_wallbox_auto_policy import (
+from shelly_wallbox.auto.policy import (
     AutoLearnChargePowerPolicy,
     AutoPolicy,
     AutoStopEwmaPolicy,
@@ -87,7 +87,7 @@ class TestAutoPolicy(unittest.TestCase):
             max_age_seconds=20.0,
         )
 
-        with patch("dbus_shelly_wallbox_auto_policy.logging.warning") as warning_mock:
+        with patch("shelly_wallbox.auto.policy.logging.warning") as warning_mock:
             policy.clamp()
 
         warning_messages = [call.args[0] for call in warning_mock.call_args_list]
@@ -115,7 +115,7 @@ class TestAutoPolicy(unittest.TestCase):
             max_age_seconds=20.0,
         )
 
-        with patch("dbus_shelly_wallbox_auto_policy.logging.warning") as warning_mock:
+        with patch("shelly_wallbox.auto.policy.logging.warning") as warning_mock:
             policy.clamp()
 
         warning_mock.assert_not_called()
@@ -132,7 +132,7 @@ class TestAutoPolicy(unittest.TestCase):
             stop_grid_import_watts=100.0,
         )
 
-        with patch("dbus_shelly_wallbox_auto_policy.logging.warning") as warning_mock:
+        with patch("shelly_wallbox.auto.policy.logging.warning") as warning_mock:
             policy.clamp()
 
         warning_messages = [call.args[0] for call in warning_mock.call_args_list]

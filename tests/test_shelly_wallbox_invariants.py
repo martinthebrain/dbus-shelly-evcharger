@@ -3,8 +3,8 @@ import random
 import unittest
 from unittest.mock import patch
 
-from dbus_shelly_wallbox_auto_controller import AutoDecisionController
-from dbus_shelly_wallbox_auto_policy import (
+from shelly_wallbox.controllers.auto import AutoDecisionController
+from shelly_wallbox.auto.policy import (
     AutoLearnChargePowerPolicy,
     AutoPolicy,
     AutoStopEwmaPolicy,

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
-from dbus_shelly_wallbox_auto_policy import AutoPolicy, AutoStopEwmaPolicy, AutoThresholdProfile
+from shelly_wallbox.auto.policy import AutoPolicy, AutoStopEwmaPolicy, AutoThresholdProfile
 
 
 def make_auto_metrics(**overrides: object) -> dict[str, object]:

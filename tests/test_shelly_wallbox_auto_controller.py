@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
-from dbus_shelly_wallbox_auto_controller import AutoDecisionController
+from shelly_wallbox.controllers.auto import AutoDecisionController
 from tests.wallbox_test_fixtures import make_auto_controller_service
 
 

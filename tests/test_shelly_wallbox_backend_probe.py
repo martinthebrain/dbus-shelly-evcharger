@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from dbus_shelly_wallbox_backend_probe import main, validate_backend_config
+from shelly_wallbox.backend.probe import main, validate_backend_config
 
 
 class _FakeResponse:
@@ -121,7 +121,7 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             )
 
             stdout = io.StringIO()
-            with patch("dbus_shelly_wallbox_backend_probe.requests.Session", return_value=session):
+            with patch("shelly_wallbox.backend.probe.requests.Session", return_value=session):
                 with redirect_stdout(stdout):
                     rc = main(["probe-meter", meter_path])
 
@@ -157,7 +157,7 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             )
 
             stdout = io.StringIO()
-            with patch("dbus_shelly_wallbox_backend_probe.requests.Session", return_value=session):
+            with patch("shelly_wallbox.backend.probe.requests.Session", return_value=session):
                 with redirect_stdout(stdout):
                     rc = main(["probe-meter", meter_path])
 
@@ -185,7 +185,7 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             ]
 
             stdout = io.StringIO()
-            with patch("dbus_shelly_wallbox_backend_probe.requests.Session", return_value=session):
+            with patch("shelly_wallbox.backend.probe.requests.Session", return_value=session):
                 with redirect_stdout(stdout):
                     rc = main(["probe-switch", switch_path])
 
@@ -208,7 +208,7 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             session.get.return_value = _FakeResponse({"output": False})
 
             stdout = io.StringIO()
-            with patch("dbus_shelly_wallbox_backend_probe.requests.Session", return_value=session):
+            with patch("shelly_wallbox.backend.probe.requests.Session", return_value=session):
                 with redirect_stdout(stdout):
                     rc = main(["probe-switch", switch_path])
 
@@ -236,7 +236,7 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             )
 
             stdout = io.StringIO()
-            with patch("dbus_shelly_wallbox_backend_probe.requests.Session", return_value=session):
+            with patch("shelly_wallbox.backend.probe.requests.Session", return_value=session):
                 with redirect_stdout(stdout):
                     rc = main(["probe-switch", switch_path])
 

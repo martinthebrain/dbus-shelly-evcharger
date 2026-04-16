@@ -5,8 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from dbus_shelly_wallbox_backend_shelly_contactor_switch import ShellyContactorSwitchBackend
-from dbus_shelly_wallbox_backend_shelly_switch import ShellySwitchBackend
+from shelly_wallbox.backend.shelly_contactor_switch import ShellyContactorSwitchBackend
+from shelly_wallbox.backend.shelly_switch import ShellySwitchBackend
 
 
 class _FakeResponse:

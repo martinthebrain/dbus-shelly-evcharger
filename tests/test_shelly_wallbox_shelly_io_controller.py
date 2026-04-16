@@ -4,8 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from dbus_shelly_wallbox_backend_types import MeterReading
 from dbus_shelly_wallbox_shelly_io import ShellyIoController
+from shelly_wallbox.backend.models import MeterReading
 
 
 class TestShellyIoController(unittest.TestCase):

@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from dbus_shelly_wallbox_auto_logic import AutoDecisionWorkflowMixin
-from dbus_shelly_wallbox_auto_logic_types import NO_RELAY_DECISION
+from shelly_wallbox.auto.logic_types import NO_RELAY_DECISION
 
 
 class AutoDecisionController(AutoDecisionWorkflowMixin):

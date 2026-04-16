@@ -8,8 +8,8 @@ import os
 import time
 from typing import Any, Callable
 
-from dbus_shelly_wallbox_auto_policy import validate_auto_policy
-from dbus_shelly_wallbox_backend_types import (
+from shelly_wallbox.auto.policy import validate_auto_policy
+from shelly_wallbox.backend.models import (
     PhaseSelection,
     normalize_phase_selection,
     normalize_phase_selection_tuple,

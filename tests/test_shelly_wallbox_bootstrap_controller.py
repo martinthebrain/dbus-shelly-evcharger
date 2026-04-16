@@ -21,7 +21,7 @@ from dbus_shelly_wallbox_bootstrap import (
     _seasonal_month_windows,
     run_service_main,
 )
-from dbus_shelly_wallbox_ports import AutoDecisionPort, UpdateCyclePort, WriteControllerPort
+from shelly_wallbox.ports import AutoDecisionPort, UpdateCyclePort, WriteControllerPort
 
 
 class _FakeDbusService:

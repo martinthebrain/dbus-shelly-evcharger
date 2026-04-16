@@ -46,7 +46,7 @@ class TestShellyWallboxEntrypoints(unittest.TestCase):
         ):
             setattr(common_module, name, lambda *args, **kwargs: args[0] if args else None)
 
-        bindings_module = ModuleType("dbus_shelly_wallbox_service_bindings")
+        bindings_module = ModuleType("shelly_wallbox.service.bindings")
 
         class StatePublishMixin:
             @staticmethod
@@ -83,7 +83,7 @@ class TestShellyWallboxEntrypoints(unittest.TestCase):
         return {
             "dbus_shelly_wallbox_bootstrap": bootstrap_module,
             "dbus_shelly_wallbox_common": common_module,
-            "dbus_shelly_wallbox_service_bindings": bindings_module,
+            "shelly_wallbox.service.bindings": bindings_module,
             "dbus_shelly_wallbox_state": state_module,
             "dbus": MagicMock(),
             "vedbus": MagicMock(),
