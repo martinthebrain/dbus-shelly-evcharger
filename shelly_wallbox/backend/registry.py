@@ -6,10 +6,14 @@ from __future__ import annotations
 from typing import Any
 
 from .base import BackendConstructor
+from .goe_charger import GoEChargerBackend
+from .modbus_charger import ModbusChargerBackend
 from .shelly_combined import ShellyCombinedBackend
 from .shelly_contactor_switch import ShellyContactorSwitchBackend
 from .shelly_meter import ShellyMeterBackend
+from .simpleevse_charger import SimpleEvseChargerBackend
 from .shelly_switch import ShellySwitchBackend
+from .switch_group import SwitchGroupBackend
 from .template_charger import TemplateChargerBackend
 from .template_meter import TemplateMeterBackend
 from .template_switch import TemplateSwitchBackend
@@ -25,10 +29,14 @@ SWITCH_BACKENDS: dict[str, BackendConstructor] = {
     "shelly_combined": ShellyCombinedBackend,
     "shelly_switch": ShellySwitchBackend,
     "shelly_contactor_switch": ShellyContactorSwitchBackend,
+    "switch_group": SwitchGroupBackend,
     "template_switch": TemplateSwitchBackend,
 }
 
 CHARGER_BACKENDS: dict[str, BackendConstructor] = {
+    "goe_charger": GoEChargerBackend,
+    "modbus_charger": ModbusChargerBackend,
+    "simpleevse_charger": SimpleEvseChargerBackend,
     "template_charger": TemplateChargerBackend,
 }
 

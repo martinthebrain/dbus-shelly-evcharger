@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from shelly_wallbox.backend.template_switch import TemplateSwitchBackend
 
@@ -82,6 +82,34 @@ class TestShellyWallboxBackendTemplateSwitch(unittest.TestCase):
             self.assertEqual(state.phase_selection, "P1")
             self.assertFalse(state.feedback_closed)
             self.assertTrue(state.interlock_ok)
+
+    def test_read_switch_state_supports_digest_auth_and_custom_header(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=template_switch\nBaseUrl=http://adapter.local\n"
+                "Username=user\nPassword=secret\nDigestAuth=1\n"
+                "AuthHeaderName=Authorization\nAuthHeaderValue=Bearer token\n"
+                "[Capabilities]\nSupportedPhaseSelections=P1\n"
+                "[StateRequest]\nMethod=GET\nUrl=/switch/state\n"
+                "[StateResponse]\nEnabledPath=data.enabled\n"
+                "[CommandRequest]\nMethod=POST\nUrl=/switch/control\n",
+            )
+            session = MagicMock()
+            session.get.return_value = _FakeResponse({"data": {"enabled": True}})
+            with patch("shelly_wallbox.backend.template_support.HTTPDigestAuth", return_value="digest-auth") as digest_auth:
+                backend = TemplateSwitchBackend(self._service(session), config_path=config_path)
+
+                state = backend.read_switch_state()
+
+            self.assertTrue(state.enabled)
+            digest_auth.assert_called_once_with("user", "secret")
+            session.get.assert_called_once_with(
+                url="http://adapter.local/switch/state",
+                timeout=2.0,
+                auth="digest-auth",
+                headers={"Authorization": "Bearer token"},
+            )
 
     def test_set_enabled_posts_rendered_json_template(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

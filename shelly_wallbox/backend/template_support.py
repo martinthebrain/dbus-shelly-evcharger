@@ -1,15 +1,73 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Shared HTTP/JSON helpers for template-backed meter and switch backends."""
+"""Shared HTTP/JSON helpers for template-backed meter, switch, and charger backends."""
 
 from __future__ import annotations
 
 import configparser
+from dataclasses import dataclass
 import json
 from string import Template
 from typing import Any, cast
 from urllib.parse import urljoin
 
 import requests
+from requests.auth import HTTPDigestAuth
+
+from shelly_wallbox.core.contracts import normalize_binary_flag
+
+
+@dataclass(frozen=True)
+class TemplateAuthSettings:
+    """Optional per-request auth settings for template-backed HTTP adapters."""
+
+    username: str
+    password: str
+    use_digest_auth: bool
+    auth_header_name: str | None
+    auth_header_value: str | None
+
+
+def load_template_auth_settings(adapter: configparser.SectionProxy) -> TemplateAuthSettings:
+    """Return normalized auth settings shared by all template backends."""
+    username = str(adapter.get("Username", "")).strip()
+    password = str(adapter.get("Password", ""))
+    use_digest_auth = bool(normalize_binary_flag(adapter.get("DigestAuth", 0)))
+    auth_header_name = _optional_text(adapter.get("AuthHeaderName", ""))
+    auth_header_value = _optional_text(adapter.get("AuthHeaderValue", ""))
+    _validate_template_auth_settings(
+        username=username,
+        use_digest_auth=use_digest_auth,
+        auth_header_name=auth_header_name,
+        auth_header_value=auth_header_value,
+    )
+    return TemplateAuthSettings(
+        username=username,
+        password=password,
+        use_digest_auth=use_digest_auth,
+        auth_header_name=auth_header_name,
+        auth_header_value=auth_header_value,
+    )
+
+
+def _optional_text(value: object) -> str | None:
+    """Return a trimmed optional string."""
+    return str(value).strip() or None
+
+
+def _validate_template_auth_settings(
+    *,
+    username: str,
+    use_digest_auth: bool,
+    auth_header_name: str | None,
+    auth_header_value: str | None,
+) -> None:
+    """Raise when one template auth combination is incomplete or invalid."""
+    if use_digest_auth and not username:
+        raise ValueError("Template backend DigestAuth requires Adapter.Username")
+    if (auth_header_name is None) != (auth_header_value is None):
+        raise ValueError(
+            "Template backend auth header requires both Adapter.AuthHeaderName and Adapter.AuthHeaderValue"
+        )
 
 
 def load_template_config(config_path: str) -> configparser.ConfigParser:
@@ -67,7 +125,12 @@ def render_json_payload(template_text: str | None, context: dict[str, str]) -> o
     return cast(object, json.loads(rendered))
 
 
-def _request_kwargs(url: str, timeout_seconds: float, payload: object | None) -> dict[str, object]:
+def _request_kwargs(
+    url: str,
+    timeout_seconds: float,
+    payload: object | None,
+    auth_settings: TemplateAuthSettings,
+) -> dict[str, object]:
     """Return requests kwargs for one template backend HTTP call."""
     kwargs: dict[str, object] = {
         "url": str(url),
@@ -75,7 +138,31 @@ def _request_kwargs(url: str, timeout_seconds: float, payload: object | None) ->
     }
     if payload is not None:
         kwargs["json"] = payload
+    auth = _request_auth(auth_settings)
+    if auth is not None:
+        kwargs["auth"] = auth
+    headers = _request_headers(auth_settings)
+    if headers is not None:
+        kwargs["headers"] = headers
     return kwargs
+
+
+def _request_auth(auth_settings: TemplateAuthSettings) -> object | None:
+    """Return one optional requests-compatible auth object."""
+    if not auth_settings.username:
+        return None
+    if auth_settings.use_digest_auth:
+        return cast(object, HTTPDigestAuth(auth_settings.username, auth_settings.password))
+    return (auth_settings.username, auth_settings.password)
+
+
+def _request_headers(auth_settings: TemplateAuthSettings) -> dict[str, str] | None:
+    """Return optional extra headers injected into every template-backend request."""
+    if auth_settings.auth_header_name is None or auth_settings.auth_header_value is None:
+        return None
+    return {
+        auth_settings.auth_header_name: auth_settings.auth_header_value,
+    }
 
 
 def _request_method_callable(session: Any, method: str) -> Any:
@@ -101,9 +188,22 @@ def _response_payload_dict(response: Any) -> dict[str, object]:
 class TemplateHttpBackendBase:
     """Small shared HTTP client helper for template backends."""
 
-    def __init__(self, service: object, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        service: object,
+        timeout_seconds: float,
+        *,
+        auth_settings: TemplateAuthSettings | None = None,
+    ) -> None:
         self.service = service
         self.timeout_seconds = float(timeout_seconds)
+        self.auth_settings = auth_settings or TemplateAuthSettings(
+            username="",
+            password="",
+            use_digest_auth=False,
+            auth_header_name=None,
+            auth_header_value=None,
+        )
         session = getattr(service, "session", None)
         self._session = cast(Any, session if session is not None else requests.Session())
 
@@ -119,7 +219,7 @@ class TemplateHttpBackendBase:
         template_context = context or {}
         rendered_url = str(Template(url).safe_substitute(template_context))
         payload = render_json_payload(json_template, template_context)
-        kwargs = _request_kwargs(rendered_url, self.timeout_seconds, payload)
+        kwargs = _request_kwargs(rendered_url, self.timeout_seconds, payload, self.auth_settings)
         response = _request_method_callable(self._session, method)(**kwargs)
         response.raise_for_status()
         return _response_payload_dict(response)

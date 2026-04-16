@@ -100,6 +100,28 @@ class TestShellyWallboxBackendTemplateMeter(unittest.TestCase):
             self.assertEqual(reading.phase_powers_w, (0.0, 2300.0, 0.0))
             self.assertEqual(reading.phase_currents_a, (0.0, 10.0, 0.0))
 
+    def test_read_meter_supports_basic_auth_from_adapter_section(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=template_meter\nBaseUrl=http://adapter.local\n"
+                "Username=user\nPassword=secret\n"
+                "[MeterRequest]\nMethod=GET\nUrl=/meter/state\n"
+                "[MeterResponse]\nPowerPath=power_w\n",
+            )
+            session = MagicMock()
+            session.get.return_value = _FakeResponse({"power_w": 1234.0})
+            backend = TemplateMeterBackend(self._service(session), config_path=config_path)
+
+            reading = backend.read_meter()
+
+            self.assertEqual(reading.power_w, 1234.0)
+            session.get.assert_called_once_with(
+                url="http://adapter.local/meter/state",
+                timeout=2.0,
+                auth=("user", "secret"),
+            )
+
     def test_template_meter_requires_request_url_and_power_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = self._write_config(
@@ -107,6 +129,19 @@ class TestShellyWallboxBackendTemplateMeter(unittest.TestCase):
                 "[Adapter]\nType=template_meter\nBaseUrl=http://adapter.local\n"
                 "[MeterRequest]\nMethod=GET\n"
                 "[MeterResponse]\nPowerPath=\n",
+            )
+
+            with self.assertRaises(ValueError):
+                TemplateMeterBackend(self._service(MagicMock()), config_path=config_path)
+
+    def test_template_meter_requires_complete_auth_header_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=template_meter\nBaseUrl=http://adapter.local\n"
+                "AuthHeaderName=Authorization\n"
+                "[MeterRequest]\nMethod=GET\nUrl=/meter/state\n"
+                "[MeterResponse]\nPowerPath=power_w\n",
             )
 
             with self.assertRaises(ValueError):

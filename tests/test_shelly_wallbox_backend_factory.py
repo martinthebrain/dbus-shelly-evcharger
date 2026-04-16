@@ -7,10 +7,14 @@ from typing import cast
 from unittest.mock import MagicMock
 
 from shelly_wallbox.backend.factory import build_service_backends
+from shelly_wallbox.backend.goe_charger import GoEChargerBackend
+from shelly_wallbox.backend.modbus_charger import ModbusChargerBackend
 from shelly_wallbox.backend.shelly_combined import ShellyCombinedBackend
 from shelly_wallbox.backend.shelly_contactor_switch import ShellyContactorSwitchBackend
 from shelly_wallbox.backend.shelly_meter import ShellyMeterBackend
+from shelly_wallbox.backend.simpleevse_charger import SimpleEvseChargerBackend
 from shelly_wallbox.backend.shelly_switch import ShellySwitchBackend
+from shelly_wallbox.backend.switch_group import SwitchGroupBackend
 from shelly_wallbox.backend.template_charger import TemplateChargerBackend
 from shelly_wallbox.backend.template_meter import TemplateMeterBackend
 from shelly_wallbox.backend.template_switch import TemplateSwitchBackend
@@ -33,6 +37,20 @@ class TestShellyWallboxBackendFactory(unittest.TestCase):
         self.assertIsInstance(resolved.meter, ShellyCombinedBackend)
         self.assertIsInstance(resolved.switch, ShellyCombinedBackend)
         self.assertIsNone(resolved.charger)
+
+    def test_default_combined_selection_uses_distinct_instances_per_role(self) -> None:
+        service = SimpleNamespace(
+            phase="L1",
+            pm_component="Switch",
+            pm_id=0,
+            max_current=16.0,
+        )
+
+        resolved = build_service_backends(service)
+
+        self.assertIsInstance(resolved.meter, ShellyCombinedBackend)
+        self.assertIsInstance(resolved.switch, ShellyCombinedBackend)
+        self.assertIsNot(resolved.meter, resolved.switch)
 
     def test_combined_backend_reads_normalized_meter_and_switch_state(self) -> None:
         service = SimpleNamespace(
@@ -208,6 +226,64 @@ class TestShellyWallboxBackendFactory(unittest.TestCase):
                 ("P1", "P1_P2_P3"),
             )
 
+    def test_build_service_backends_supports_switch_group_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            p1_path = Path(temp_dir) / "phase1-switch.ini"
+            p2_path = Path(temp_dir) / "phase2-switch.ini"
+            switch_path = Path(temp_dir) / "switch.ini"
+            p1_path.write_text(
+                "[Adapter]\nType=template_switch\nBaseUrl=http://phase1.local\n"
+                "[StateRequest]\nUrl=/state\n"
+                "[StateResponse]\nEnabledPath=enabled\n"
+                "[CommandRequest]\nMethod=POST\nUrl=/control\n",
+                encoding="utf-8",
+            )
+            p2_path.write_text(
+                "[Adapter]\nType=shelly_switch\nHost=192.168.1.21\n",
+                encoding="utf-8",
+            )
+            switch_path.write_text(
+                "[Adapter]\nType=switch_group\n"
+                "[Members]\nP1=phase1-switch.ini\nP2=phase2-switch.ini\n",
+                encoding="utf-8",
+            )
+            service = SimpleNamespace(
+                backend_mode="split",
+                meter_backend_type="shelly_combined",
+                switch_backend_type="switch_group",
+                charger_backend_type=None,
+                meter_backend_config_path="",
+                switch_backend_config_path=str(switch_path),
+                charger_backend_config_path="",
+                phase="L1",
+                host="192.168.1.20",
+                pm_component="Switch",
+                pm_id=0,
+                max_current=16.0,
+                session=MagicMock(),
+            )
+
+            resolved = build_service_backends(service)
+
+            self.assertIsInstance(resolved.switch, SwitchGroupBackend)
+            self.assertEqual(resolved.selection.switch_type, "switch_group")
+            resolved_switch = cast(SwitchGroupBackend, resolved.switch)
+            self.assertEqual(
+                resolved_switch.settings.phase_switch_targets,
+                {
+                    "P1": ("P1",),
+                    "P1_P2": ("P1", "P2"),
+                },
+            )
+            self.assertEqual(
+                resolved_switch.settings.phase_members["P1"].backend_type,
+                "template_switch",
+            )
+            self.assertEqual(
+                resolved_switch.settings.phase_members["P2"].backend_type,
+                "shelly_switch",
+            )
+
     def test_build_service_backends_supports_template_meter_backend(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             meter_path = Path(temp_dir) / "meter.ini"
@@ -278,6 +354,109 @@ class TestShellyWallboxBackendFactory(unittest.TestCase):
                 resolved_charger.settings.supported_phase_selections,
                 ("P1", "P1_P2_P3"),
             )
+
+    def test_build_service_backends_supports_goe_charger_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            charger_path = Path(temp_dir) / "charger.ini"
+            charger_path.write_text(
+                "[Adapter]\nType=goe_charger\nBaseUrl=http://goe.local\n",
+                encoding="utf-8",
+            )
+            service = SimpleNamespace(
+                backend_mode="split",
+                meter_backend_type="none",
+                switch_backend_type="none",
+                charger_backend_type="goe_charger",
+                meter_backend_config_path="",
+                switch_backend_config_path="",
+                charger_backend_config_path=str(charger_path),
+                phase="L1",
+                host="192.168.1.20",
+                pm_component="Switch",
+                pm_id=0,
+                max_current=16.0,
+                session=MagicMock(),
+            )
+
+            resolved = build_service_backends(service)
+
+            self.assertIsNone(resolved.meter)
+            self.assertIsNone(resolved.switch)
+            self.assertIsInstance(resolved.charger, GoEChargerBackend)
+            resolved_charger = cast(GoEChargerBackend, resolved.charger)
+            self.assertEqual(resolved.selection.charger_type, "goe_charger")
+            self.assertEqual(resolved_charger.config_path, str(charger_path))
+            self.assertEqual(resolved_charger.settings.supported_phase_selections, ("P1",))
+
+    def test_build_service_backends_supports_modbus_charger_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            charger_path = Path(temp_dir) / "charger.ini"
+            charger_path.write_text(
+                "[Adapter]\nType=modbus_charger\nProfile=generic\nTransport=tcp\n"
+                "[Transport]\nHost=192.168.1.40\nPort=502\nUnitId=7\n"
+                "[EnableWrite]\nRegisterType=coil\nAddress=20\nTrueValue=1\nFalseValue=0\n"
+                "[CurrentWrite]\nRegisterType=holding\nAddress=30\nDataType=uint16\nScale=10\n",
+                encoding="utf-8",
+            )
+            service = SimpleNamespace(
+                backend_mode="split",
+                meter_backend_type="none",
+                switch_backend_type="none",
+                charger_backend_type="modbus_charger",
+                meter_backend_config_path="",
+                switch_backend_config_path="",
+                charger_backend_config_path=str(charger_path),
+                phase="L1",
+                host="192.168.1.20",
+                pm_component="Switch",
+                pm_id=0,
+                max_current=16.0,
+                session=MagicMock(),
+            )
+
+            resolved = build_service_backends(service)
+
+            self.assertIsNone(resolved.meter)
+            self.assertIsNone(resolved.switch)
+            self.assertIsInstance(resolved.charger, ModbusChargerBackend)
+            resolved_charger = cast(ModbusChargerBackend, resolved.charger)
+            self.assertEqual(resolved.selection.charger_type, "modbus_charger")
+            self.assertEqual(resolved_charger.config_path, str(charger_path))
+            self.assertEqual(resolved_charger.settings.transport_settings.transport_kind, "tcp")
+
+    def test_build_service_backends_supports_simpleevse_charger_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            charger_path = Path(temp_dir) / "charger.ini"
+            charger_path.write_text(
+                "[Adapter]\nType=simpleevse_charger\nTransport=tcp\n"
+                "[Transport]\nHost=192.168.1.50\nPort=502\nUnitId=1\n",
+                encoding="utf-8",
+            )
+            service = SimpleNamespace(
+                backend_mode="split",
+                meter_backend_type="none",
+                switch_backend_type="none",
+                charger_backend_type="simpleevse_charger",
+                meter_backend_config_path="",
+                switch_backend_config_path="",
+                charger_backend_config_path=str(charger_path),
+                phase="L1",
+                host="192.168.1.20",
+                pm_component="Switch",
+                pm_id=0,
+                max_current=16.0,
+                session=MagicMock(),
+            )
+
+            resolved = build_service_backends(service)
+
+            self.assertIsNone(resolved.meter)
+            self.assertIsNone(resolved.switch)
+            self.assertIsInstance(resolved.charger, SimpleEvseChargerBackend)
+            resolved_charger = cast(SimpleEvseChargerBackend, resolved.charger)
+            self.assertEqual(resolved.selection.charger_type, "simpleevse_charger")
+            self.assertEqual(resolved_charger.config_path, str(charger_path))
+            self.assertEqual(resolved_charger.settings.transport_settings.transport_kind, "tcp")
 
     def test_build_service_backends_supports_split_charger_without_meter_backend(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

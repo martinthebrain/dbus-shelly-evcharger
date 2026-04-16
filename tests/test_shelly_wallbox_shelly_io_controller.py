@@ -490,6 +490,38 @@ class TestShellyIoController(unittest.TestCase):
         self.assertEqual(service.requested_phase_selection, "P1_P2")
         self.assertEqual(service.active_phase_selection, "P1_P2")
 
+    def test_set_phase_selection_skips_single_phase_charger_when_switch_handles_external_multi_phase(self):
+        switch_backend = SimpleNamespace(
+            set_phase_selection=MagicMock(),
+            capabilities=MagicMock(
+                return_value=SimpleNamespace(
+                    supported_phase_selections=("P1", "P1_P2_P3"),
+                    requires_charge_pause_for_phase_change=True,
+                )
+            ),
+        )
+        charger_backend = SimpleNamespace(
+            set_phase_selection=MagicMock(),
+            settings=SimpleNamespace(supported_phase_selections=("P1",)),
+        )
+        service = SimpleNamespace(
+            _switch_backend=switch_backend,
+            _charger_backend=charger_backend,
+            supported_phase_selections=("P1",),
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+        )
+
+        controller = ShellyIoController(service)
+        applied = controller.set_phase_selection("P1_P2_P3")
+
+        self.assertEqual(applied, "P1_P2_P3")
+        switch_backend.set_phase_selection.assert_called_once_with("P1_P2_P3")
+        charger_backend.set_phase_selection.assert_not_called()
+        self.assertEqual(service.supported_phase_selections, ("P1", "P1_P2_P3"))
+        self.assertEqual(service.requested_phase_selection, "P1_P2_P3")
+        self.assertEqual(service.active_phase_selection, "P1_P2_P3")
+
     def test_fetch_pm_status_syncs_native_charger_readback_into_runtime_state(self):
         charger_backend = SimpleNamespace(
             read_charger_state=MagicMock(

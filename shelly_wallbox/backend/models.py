@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 import time
 from typing import Literal, cast
 
@@ -159,6 +160,6 @@ class BackendSelection:
     meter_type: str
     switch_type: str
     charger_type: str | None
-    meter_config_path: str
-    switch_config_path: str
-    charger_config_path: str
+    meter_config_path: Path | None
+    switch_config_path: Path | None
+    charger_config_path: Path | None

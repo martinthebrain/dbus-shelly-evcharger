@@ -8,9 +8,11 @@ from typing import cast
 
 from .template_support import (
     TemplateHttpBackendBase,
+    TemplateAuthSettings,
     config_section,
     json_path_value,
     load_template_config,
+    load_template_auth_settings,
     normalize_http_method,
     resolved_url,
 )
@@ -28,6 +30,7 @@ class TemplateChargerSettings:
     """Normalized template-charger config loaded from one adapter file."""
 
     base_url: str
+    auth_settings: TemplateAuthSettings
     timeout_seconds: float
     supported_phase_selections: tuple[PhaseSelection, ...]
     state_method: str
@@ -198,6 +201,7 @@ def load_template_charger_settings(service: object, config_path: str) -> Templat
 
     return TemplateChargerSettings(
         base_url=base_url,
+        auth_settings=load_template_auth_settings(adapter),
         timeout_seconds=_template_charger_timeout_seconds(adapter, service),
         supported_phase_selections=supported_phase_selections,
         state_method=normalize_http_method(state_request.get("Method", "GET"), "GET"),
@@ -229,7 +233,7 @@ class TemplateChargerBackend(TemplateHttpBackendBase):
         self.service = service
         self.config_path = str(config_path).strip()
         self.settings = load_template_charger_settings(service, self.config_path)
-        super().__init__(service, self.settings.timeout_seconds)
+        super().__init__(service, self.settings.timeout_seconds, auth_settings=self.settings.auth_settings)
         default_phase_selection = self.settings.supported_phase_selections[0]
         self._enabled_state_cache: bool | None = None
         self._current_amps_cache: float | None = None

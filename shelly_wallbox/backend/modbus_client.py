@@ -1,0 +1,181 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Small Modbus client helpers built on top of the transport layer."""
+
+from __future__ import annotations
+
+import struct
+from typing import Iterable
+
+from .modbus_transport import ModbusRequest, ModbusTransport
+
+
+_READ_BITS_FUNCTIONS = {"coil": 0x01, "discrete": 0x02}
+_READ_REGISTERS_FUNCTIONS = {"holding": 0x03, "input": 0x04}
+_WRITE_SINGLE_COIL = 0x05
+_WRITE_SINGLE_REGISTER = 0x06
+_WRITE_MULTIPLE_REGISTERS = 0x10
+
+
+class ModbusProtocolError(ValueError):
+    """Raised when one Modbus response is malformed."""
+
+
+class ModbusDeviceError(RuntimeError):
+    """Raised when one Modbus device responds with an exception frame."""
+
+
+def register_count(data_type: str) -> int:
+    """Return how many 16-bit registers are needed for one normalized data type."""
+    normalized = str(data_type).strip().lower()
+    if normalized in {"uint32", "int32", "float32"}:
+        return 2
+    return 1
+
+
+def decode_register_value(registers: tuple[int, ...], data_type: str, word_order: str = "big") -> float | int | bool:
+    """Decode one register tuple into the configured scalar type."""
+    normalized_type = str(data_type).strip().lower()
+    ordered = registers if word_order != "little" or len(registers) < 2 else tuple(reversed(registers))
+    if not ordered:
+        raise ValueError("Modbus register decode requires at least one register")
+    payload = b"".join(int(register).to_bytes(2, "big") for register in ordered)
+    if normalized_type == "bool":
+        return bool(ordered[0])
+    if normalized_type == "uint16":
+        return ordered[0]
+    if normalized_type == "int16":
+        value = ordered[0]
+        return value - 0x10000 if value & 0x8000 else value
+    if normalized_type == "uint32":
+        return int.from_bytes(payload, "big", signed=False)
+    if normalized_type == "int32":
+        return int.from_bytes(payload, "big", signed=True)
+    if normalized_type == "float32":
+        return float(struct.unpack(">f", payload)[0])
+    raise ValueError(f"Unsupported Modbus data type '{data_type}'")
+
+
+def encode_register_value(value: float | int | bool, data_type: str, word_order: str = "big") -> tuple[int, ...]:
+    """Encode one scalar value into Modbus register words."""
+    normalized_type = str(data_type).strip().lower()
+    registers: tuple[int, ...]
+    if normalized_type == "bool":
+        registers = (1 if bool(value) else 0,)
+    elif normalized_type == "uint16":
+        registers = (int(value) & 0xFFFF,)
+    elif normalized_type == "int16":
+        registers = (int(value) & 0xFFFF,)
+    elif normalized_type == "uint32":
+        payload = int(value).to_bytes(4, "big", signed=False)
+        registers = (int.from_bytes(payload[:2], "big"), int.from_bytes(payload[2:], "big"))
+    elif normalized_type == "int32":
+        payload = int(value).to_bytes(4, "big", signed=True)
+        registers = (int.from_bytes(payload[:2], "big"), int.from_bytes(payload[2:], "big"))
+    elif normalized_type == "float32":
+        payload = struct.pack(">f", float(value))
+        registers = (int.from_bytes(payload[:2], "big"), int.from_bytes(payload[2:], "big"))
+    else:
+        raise ValueError(f"Unsupported Modbus data type '{data_type}'")
+    if word_order == "little" and len(registers) > 1:
+        return tuple(reversed(registers))
+    return registers
+
+
+class ModbusClient:
+    """Minimal Modbus client that reads/writes coils and registers through one transport."""
+
+    def __init__(self, transport: ModbusTransport, unit_id: int, timeout_seconds: float) -> None:
+        self.transport = transport
+        self.unit_id = int(unit_id)
+        self.timeout_seconds = float(timeout_seconds)
+
+    def _response_pdu(self, function_code: int, payload: bytes) -> bytes:
+        """Perform one Modbus transaction and validate the returned function code."""
+        response = self.transport.exchange(
+            ModbusRequest(unit_id=self.unit_id, function_code=function_code, payload=payload),
+            timeout_seconds=self.timeout_seconds,
+        )
+        if not response:
+            raise ModbusProtocolError("Empty Modbus response")
+        response_function = response[0]
+        if response_function == (function_code | 0x80):
+            code = response[1] if len(response) > 1 else -1
+            raise ModbusDeviceError(f"Modbus exception response 0x{code:02x}")
+        if response_function != function_code:
+            raise ModbusProtocolError(
+                f"Unexpected Modbus response function 0x{response_function:02x} for request 0x{function_code:02x}"
+            )
+        return response[1:]
+
+    def _read_bits(self, register_type: str, address: int, count: int) -> tuple[bool, ...]:
+        """Read one coil/discrete bit range."""
+        function_code = _READ_BITS_FUNCTIONS[register_type]
+        payload = int(address).to_bytes(2, "big") + int(count).to_bytes(2, "big")
+        response_data = self._response_pdu(function_code, payload)
+        if not response_data:
+            raise ModbusProtocolError("Missing Modbus bit byte-count")
+        byte_count = response_data[0]
+        raw_bytes = response_data[1 : 1 + byte_count]
+        if len(raw_bytes) != byte_count:
+            raise ModbusProtocolError("Incomplete Modbus bit response")
+        values: list[bool] = []
+        for index in range(count):
+            byte_index = index // 8
+            bit_index = index % 8
+            values.append(bool((raw_bytes[byte_index] >> bit_index) & 0x01))
+        return tuple(values)
+
+    def _read_registers(self, register_type: str, address: int, count: int) -> tuple[int, ...]:
+        """Read one holding/input register range."""
+        function_code = _READ_REGISTERS_FUNCTIONS[register_type]
+        payload = int(address).to_bytes(2, "big") + int(count).to_bytes(2, "big")
+        response_data = self._response_pdu(function_code, payload)
+        if not response_data:
+            raise ModbusProtocolError("Missing Modbus register byte-count")
+        byte_count = response_data[0]
+        register_bytes = response_data[1 : 1 + byte_count]
+        if len(register_bytes) != byte_count or byte_count != count * 2:
+            raise ModbusProtocolError("Incomplete Modbus register response")
+        return tuple(
+            int.from_bytes(register_bytes[index : index + 2], "big")
+            for index in range(0, byte_count, 2)
+        )
+
+    def read_scalar(self, register_type: str, address: int, data_type: str, word_order: str = "big") -> float | int | bool:
+        """Read one scalar coil/discrete/register value."""
+        normalized_type = str(data_type).strip().lower()
+        normalized_register_type = str(register_type).strip().lower()
+        if normalized_register_type in _READ_BITS_FUNCTIONS:
+            value = self._read_bits(normalized_register_type, address, 1)[0]
+            return bool(value) if normalized_type == "bool" else int(value)
+        registers = self._read_registers(normalized_register_type, address, register_count(normalized_type))
+        return decode_register_value(registers, normalized_type, word_order)
+
+    def write_single_coil(self, address: int, value: bool) -> None:
+        """Write one Modbus coil."""
+        encoded = 0xFF00 if bool(value) else 0x0000
+        payload = int(address).to_bytes(2, "big") + encoded.to_bytes(2, "big")
+        response_data = self._response_pdu(_WRITE_SINGLE_COIL, payload)
+        if len(response_data) != 4:
+            raise ModbusProtocolError("Unexpected Modbus coil write response length")
+
+    def write_single_register(self, address: int, value: int) -> None:
+        """Write one Modbus holding register."""
+        payload = int(address).to_bytes(2, "big") + (int(value) & 0xFFFF).to_bytes(2, "big")
+        response_data = self._response_pdu(_WRITE_SINGLE_REGISTER, payload)
+        if len(response_data) != 4:
+            raise ModbusProtocolError("Unexpected Modbus register write response length")
+
+    def write_multiple_registers(self, address: int, values: Iterable[int]) -> None:
+        """Write one contiguous Modbus holding register range."""
+        registers = tuple(int(value) & 0xFFFF for value in values)
+        payload_bytes = b"".join(register.to_bytes(2, "big") for register in registers)
+        payload = (
+            int(address).to_bytes(2, "big")
+            + len(registers).to_bytes(2, "big")
+            + bytes((len(payload_bytes),))
+            + payload_bytes
+        )
+        response_data = self._response_pdu(_WRITE_MULTIPLE_REGISTERS, payload)
+        if len(response_data) != 4:
+            raise ModbusProtocolError("Unexpected Modbus multi-register write response length")

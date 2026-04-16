@@ -26,6 +26,11 @@ class ResolvedBackends:
     charger: ChargerBackend | None
 
 
+def _config_path_arg(config_path: object) -> str:
+    """Return one backend-constructor argument from an optional normalized path."""
+    return "" if config_path is None else str(config_path)
+
+
 def _resolved_meter_backend(selection: BackendSelection, service: Any) -> MeterBackend | None:
     """Return the configured meter backend or validate that meterless mode is allowed."""
     if selection.meter_type == "none":
@@ -34,7 +39,7 @@ def _resolved_meter_backend(selection: BackendSelection, service: Any) -> MeterB
         return None
     return cast(
         MeterBackend,
-        create_meter_backend(selection.meter_type, service, selection.meter_config_path),
+        create_meter_backend(selection.meter_type, service, _config_path_arg(selection.meter_config_path)),
     )
 
 
@@ -46,7 +51,7 @@ def _resolved_switch_backend(selection: BackendSelection, service: Any) -> Switc
         return None
     return cast(
         SwitchBackend,
-        create_switch_backend(selection.switch_type, service, selection.switch_config_path),
+        create_switch_backend(selection.switch_type, service, _config_path_arg(selection.switch_config_path)),
     )
 
 
@@ -56,28 +61,22 @@ def _resolved_charger_backend(selection: BackendSelection, service: Any) -> Char
         return None
     return cast(
         ChargerBackend,
-        create_charger_backend(selection.charger_type, service, selection.charger_config_path),
+        create_charger_backend(selection.charger_type, service, _config_path_arg(selection.charger_config_path)),
     )
 
 
-def _validate_optional_split_backends(
-    selection: BackendSelection,
-    charger: ChargerBackend | None,
-) -> None:
-    """Ensure meterless or switchless split setups only run with a charger backend."""
-    if selection.meter_type == "none" and charger is None:
-        raise ValueError("MeterType=none requires a configured charger backend")
-    if selection.switch_type == "none" and charger is None:
-        raise ValueError("SwitchType=none requires a configured charger backend")
-
-
 def build_service_backends(service: Any) -> ResolvedBackends:
-    """Instantiate one normalized backend bundle from service config attrs."""
+    """Instantiate one normalized backend bundle from service config attrs.
+
+    Combined backends are resolved independently per role on purpose. Even when
+    both roles use ``shelly_combined``, the meter and switch slots receive
+    separate backend instances bound to the same service object instead of one
+    shared backend singleton.
+    """
     selection = selection_from_service(service)
     meter = _resolved_meter_backend(selection, service)
     switch = _resolved_switch_backend(selection, service)
     charger = _resolved_charger_backend(selection, service)
-    _validate_optional_split_backends(selection, charger)
     return ResolvedBackends(
         selection=selection,
         meter=meter,

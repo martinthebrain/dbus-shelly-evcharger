@@ -655,9 +655,9 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service.meter_backend_type, "shelly_combined")
         self.assertEqual(service.switch_backend_type, "shelly_combined")
         self.assertIsNone(service.charger_backend_type)
-        self.assertEqual(service.meter_backend_config_path, "")
-        self.assertEqual(service.switch_backend_config_path, "")
-        self.assertEqual(service.charger_backend_config_path, "")
+        self.assertIsNone(service.meter_backend_config_path)
+        self.assertIsNone(service.switch_backend_config_path)
+        self.assertIsNone(service.charger_backend_config_path)
         self.assertEqual(service.auto_pv_service, "com.example.pv")
         self.assertEqual(service.auto_pv_service_prefix, "com.example.pvprefix")
         self.assertEqual(service.auto_pv_path, "/Pv/Power")
@@ -723,9 +723,30 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service.meter_backend_type, "shelly_combined")
         self.assertEqual(service.switch_backend_type, "shelly_combined")
         self.assertIsNone(service.charger_backend_type)
-        self.assertEqual(service.meter_backend_config_path, "/data/meter.ini")
-        self.assertEqual(service.switch_backend_config_path, "/data/switch.ini")
-        self.assertEqual(service.charger_backend_config_path, "")
+        self.assertEqual(service.meter_backend_config_path, Path("/data/meter.ini"))
+        self.assertEqual(service.switch_backend_config_path, Path("/data/switch.ini"))
+        self.assertIsNone(service.charger_backend_config_path)
+
+    def test_load_runtime_configuration_rejects_invalid_meterless_backend_combo_early(self):
+        parser = configparser.ConfigParser()
+        parser.read_dict(
+            {
+                "DEFAULT": {"Host": "192.168.1.20"},
+                "Backends": {
+                    "Mode": "split",
+                    "MeterType": "none",
+                    "SwitchType": "shelly_combined",
+                    "ChargerType": "",
+                },
+            }
+        )
+        service = SimpleNamespace(_load_config=MagicMock(return_value=parser), _validate_runtime_config=MagicMock())
+        controller = self._controller(service)
+
+        with self.assertRaisesRegex(ValueError, "MeterType=none requires a configured charger backend"):
+            controller.load_runtime_configuration()
+
+        service._validate_runtime_config.assert_not_called()
 
     def test_logging_level_and_seasonal_windows_helpers(self):
         parser = configparser.ConfigParser()

@@ -291,6 +291,20 @@ class ShellyIoController:
         backend = getattr(self.service, "_charger_backend", None)
         return backend if hasattr(backend, "set_phase_selection") else None
 
+    def _charger_supports_phase_selection(self, selection: PhaseSelection) -> bool:
+        """Return whether the configured charger backend should receive this phase selection."""
+        backend = self._phase_selection_charger_backend()
+        if backend is None:
+            return False
+        settings = getattr(backend, "settings", None)
+        if settings is None or not hasattr(settings, "supported_phase_selections"):
+            return True
+        supported = normalize_phase_selection_tuple(
+            getattr(settings, "supported_phase_selections", ("P1",)),
+            ("P1",),
+        )
+        return selection in supported
+
     def _charger_state_backend(self) -> object | None:
         """Return the configured charger backend when it exposes normalized state."""
         backend = getattr(self.service, "_charger_backend", None)
@@ -548,7 +562,7 @@ class ShellyIoController:
             cast(Any, switch_backend).set_phase_selection(normalized_selection)
 
         charger_backend = self._phase_selection_charger_backend()
-        if charger_backend is not None:
+        if charger_backend is not None and self._charger_supports_phase_selection(normalized_selection):
             cast(Any, charger_backend).set_phase_selection(normalized_selection)
 
         self._remember_phase_selection_state(

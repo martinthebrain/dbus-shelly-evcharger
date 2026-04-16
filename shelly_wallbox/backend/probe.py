@@ -7,11 +7,14 @@ import argparse
 import configparser
 import json
 from dataclasses import asdict, is_dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import requests
 
+from .factory import build_service_backends
+from .config import load_backend_selection
 from .registry import CHARGER_BACKENDS, METER_BACKENDS, SWITCH_BACKENDS
 
 
@@ -49,10 +52,38 @@ def _probe_service() -> Any:
     )
 
 
+def _probe_service_from_wallbox_config(config: configparser.ConfigParser) -> Any:
+    """Return one small service stub seeded from a full wallbox config file."""
+    defaults = config["DEFAULT"]
+    selection = load_backend_selection(config)
+    return SimpleNamespace(
+        session=requests.Session(),
+        host=defaults.get("Host", "").strip(),
+        username=defaults.get("Username", "").strip(),
+        password=defaults.get("Password", "").strip(),
+        use_digest_auth=defaults.get("DigestAuth", "0").strip().lower() in ("1", "true", "yes", "on"),
+        shelly_request_timeout_seconds=float(defaults.get("ShellyRequestTimeoutSeconds", "2.0") or 2.0),
+        pm_component=defaults.get("ShellyComponent", "Switch").strip(),
+        pm_id=int(defaults.get("ShellyId", "0") or 0),
+        phase=defaults.get("Phase", "L1").strip(),
+        max_current=float(defaults.get("MaxCurrent", "16.0") or 16.0),
+        _last_voltage=None,
+        backend_mode=selection.mode,
+        meter_backend_type=selection.meter_type,
+        switch_backend_type=selection.switch_type,
+        charger_backend_type=selection.charger_type,
+        meter_backend_config_path=selection.meter_config_path,
+        switch_backend_config_path=selection.switch_config_path,
+        charger_backend_config_path=selection.charger_config_path,
+    )
+
+
 def _json_ready(value: Any) -> Any:
     """Convert dataclasses recursively to JSON-friendly structures."""
     if is_dataclass(value):
-        return asdict(cast(Any, value))
+        return _json_ready(asdict(cast(Any, value)))
+    if isinstance(value, Path):
+        return str(value)
     if isinstance(value, dict):
         return _json_ready_mapping(value)
     if isinstance(value, (list, tuple)):
@@ -92,6 +123,22 @@ def validate_backend_config(path: str) -> dict[str, object]:
     }
 
 
+def validate_wallbox_config(path: str) -> dict[str, object]:
+    """Validate one full wallbox config including backend selection compatibility."""
+    config = _config(path)
+    service = _probe_service_from_wallbox_config(config)
+    resolved = build_service_backends(service)
+    return {
+        "path": path,
+        "selection": _json_ready(resolved.selection),
+        "resolved_roles": {
+            "meter": resolved.meter is not None,
+            "switch": resolved.switch is not None,
+            "charger": resolved.charger is not None,
+        },
+    }
+
+
 def probe_meter_backend(path: str) -> dict[str, object]:
     """Read one sample meter result from the configured backend."""
     adapter_type = _adapter_type(path)
@@ -119,6 +166,7 @@ def probe_switch_backend(path: str) -> dict[str, object]:
         "type": adapter_type,
         "capabilities": _json_ready(backend.capabilities()),
         "phase_switch_targets": _json_ready(getattr(settings, "phase_switch_targets", {})),
+        "phase_members": _json_ready(getattr(settings, "phase_members", {})),
         "feedback_readback": _json_ready(getattr(settings, "feedback_readback", None)),
         "interlock_readback": _json_ready(getattr(settings, "interlock_readback", None)),
         "switch_state": _json_ready(backend.read_switch_state()),
@@ -136,6 +184,20 @@ def probe_charger_backend(path: str) -> dict[str, object]:
     return {
         "path": path,
         "type": adapter_type,
+        "profile_name": getattr(settings, "profile_name", None),
+        "transport_kind": getattr(getattr(settings, "transport_settings", None), "transport_kind", None),
+        "transport_unit_id": getattr(getattr(settings, "transport_settings", None), "unit_id", None),
+        "transport_device": getattr(getattr(settings, "transport_settings", None), "device", None),
+        "transport_timeout_seconds": getattr(getattr(settings, "transport_settings", None), "timeout_seconds", None),
+        "transport_serial_port_owner": getattr(
+            getattr(settings, "transport_settings", None), "serial_port_owner", None
+        ),
+        "transport_serial_retry_count": getattr(
+            getattr(settings, "transport_settings", None), "serial_retry_count", None
+        ),
+        "transport_serial_retry_delay_seconds": getattr(
+            getattr(settings, "transport_settings", None), "serial_retry_delay_seconds", None
+        ),
         "supported_phase_selections": _json_ready(
             getattr(settings, "supported_phase_selections", ("P1",))
         ),
@@ -151,19 +213,38 @@ def probe_charger_backend(path: str) -> dict[str, object]:
     }
 
 
+def read_charger_backend(path: str) -> dict[str, object]:
+    """Read one live charger-state sample through the configured backend."""
+    payload = probe_charger_backend(path)
+    adapter_type = _adapter_type(path)
+    constructor = CHARGER_BACKENDS.get(adapter_type)
+    if constructor is None:
+        raise ValueError(f"Backend type '{adapter_type}' is not a charger backend")
+    backend = constructor(_probe_service(), config_path=path)
+    payload["charger_state"] = _json_ready(backend.read_charger_state())
+    return payload
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the backend probe CLI."""
     parser = argparse.ArgumentParser(description="Validate or probe wallbox backend configs")
-    parser.add_argument("command", choices=("validate", "probe-meter", "probe-switch", "probe-charger"))
+    parser.add_argument(
+        "command",
+        choices=("validate", "validate-wallbox", "probe-meter", "probe-switch", "probe-charger", "read-charger"),
+    )
     parser.add_argument("config_path")
     args = parser.parse_args(argv)
 
     if args.command == "validate":
         payload = validate_backend_config(args.config_path)
+    elif args.command == "validate-wallbox":
+        payload = validate_wallbox_config(args.config_path)
     elif args.command == "probe-meter":
         payload = probe_meter_backend(args.config_path)
     elif args.command == "probe-switch":
         payload = probe_switch_backend(args.config_path)
+    elif args.command == "read-charger":
+        payload = read_charger_backend(args.config_path)
     else:
         payload = probe_charger_backend(args.config_path)
 

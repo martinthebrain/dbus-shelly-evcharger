@@ -268,10 +268,81 @@ These values show which backend combination is actually active, whether charger
 writes are failing, and which current target was last pushed to a native
 charger backend.
 
-If you configure a native charger backend such as `template_charger`, the GUI
+If you configure a native charger backend such as `template_charger` or
+`goe_charger`, the GUI
 field `/SetCurrent` keeps showing the real configured/current charger target.
 The learned-current display overlay is only used for relay-only setups where no
 native current control exists.
+
+The first concrete native charger backend is now `goe_charger`. It talks to the
+documented local go-e HTTP API and supports native enable/disable, current
+setpoints, and charger-state readback including power, energy, and high-level
+status/fault signals. Its current implementation intentionally leaves native
+phase writes disabled until go-e publishes a stable public API key for direct
+phase switching.
+
+There is now also a generic `modbus_charger` foundation for EVSEs that speak
+Modbus over RS485 or Ethernet. It is intentionally layered into:
+
+- transport in [modbus_transport.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/dbus-shelly-evcharger/shelly_wallbox/backend/modbus_transport.py)
+- raw register reads/writes in [modbus_client.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/dbus-shelly-evcharger/shelly_wallbox/backend/modbus_client.py)
+- EVSE register schema in [modbus_profiles.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/dbus-shelly-evcharger/shelly_wallbox/backend/modbus_profiles.py)
+- normal charger backend surface in [modbus_charger.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/dbus-shelly-evcharger/shelly_wallbox/backend/modbus_charger.py)
+
+The first profile is `Profile=generic`, configured directly from Modbus
+register sections. Transport can be `serial_rtu`, `tcp`, or `udp`. A USB-RS485
+stick and a VE.Direct/TTL-to-RS485 path both fit under the same
+`serial_rtu` transport by pointing `Transport.Device` at the exposed serial
+character device.
+
+Minimal example:
+
+```ini
+[Adapter]
+Type=modbus_charger
+Profile=generic
+Transport=tcp
+
+[Transport]
+Host=192.168.1.40
+Port=502
+UnitId=7
+
+[EnableWrite]
+RegisterType=coil
+Address=20
+TrueValue=1
+FalseValue=0
+
+[CurrentWrite]
+RegisterType=holding
+Address=30
+DataType=uint16
+Scale=10
+```
+
+The first concrete Modbus EVSE backend on top of that foundation is now
+`simpleevse_charger`. It targets the documented SimpleEVSE WB/DIN register map
+directly and assumes the published defaults: register `1000` for configured
+amps, `1001` for actual amps, `1004` for runtime enable/disable, `1006` for
+EVSE state, and `1007` for status/fault flags. Native phase switching is not
+exposed there, so `simpleevse_charger` stays single-phase on the charger side
+and relies on a separate switch backend if you want external phase switching.
+
+Minimal example:
+
+```ini
+[Adapter]
+Type=simpleevse_charger
+Transport=serial_rtu
+
+[Transport]
+Device=/dev/ttyUSB0
+Baudrate=9600
+Parity=N
+StopBits=1
+UnitId=1
+```
 
 For charger-native split setups, `MeterType=none` is now supported as long as a
 `ChargerType` is configured. In that mode the service can synthesize its online
@@ -281,6 +352,13 @@ backend.
 `SwitchType=none` is also supported for charger-native split setups. In that
 case enable/disable control is routed directly through the charger backend, so
 no separate relay/switch adapter is required.
+
+To validate the full backend combination from the main wallbox config before a
+real service start, use:
+
+```bash
+python3 -m shelly_wallbox.backend.probe validate-wallbox deploy/venus/config.shelly_wallbox.ini
+```
 
 For `template_switch` adapters, `[StateResponse]` can now optionally expose
 two additional booleans:
@@ -297,6 +375,23 @@ service publishes the extra diagnostics:
 - `/Auto/SwitchFeedbackMismatch`
 - `/Auto/LastSwitchFeedbackAge`
 
+All template backends (`template_meter`, `template_switch`, `template_charger`)
+also support optional HTTP auth fields in `[Adapter]`:
+
+- `Username`
+- `Password`
+- `DigestAuth`
+- `AuthHeaderName`
+- `AuthHeaderValue`
+
+This covers the most common cases without teaching the wallbox core any
+vendor-specific protocol details:
+
+- Basic auth via `Username` + `Password`
+- Digest auth via `Username` + `Password` + `DigestAuth=1`
+- bearer/token headers via `AuthHeaderName=Authorization` and
+  `AuthHeaderValue=Bearer ...`
+
 For native `shelly_contactor_switch` setups you can now model the same signals
 without a template adapter by adding optional `[Feedback]` and `[Interlock]`
 sections to the switch backend config. Each section supports:
@@ -309,6 +404,53 @@ sections to the switch backend config. Each section supports:
 Typical example: an auxiliary contact on `Input` channel `7` with `ValuePath=state`.
 The service reads these Shelly RPC states directly and feeds them into the same
 health, DBus, summary, and audit diagnostics.
+
+If each switched phase is handled by its own dedicated child adapter, use
+`switch_group`. It acts as a pure coordinator and maps concrete child switch
+configs to logical phases:
+
+```ini
+[Adapter]
+Type=switch_group
+
+[Members]
+P1=phase1-switch.ini
+P2=phase2-switch.ini
+P3=phase3-switch.ini
+```
+
+Each child config is just a normal standalone switch backend, so you can mix
+different implementations freely, for example:
+
+- `template_switch` for one Shelly generation or external adapter
+- `shelly_switch` for a direct native Shelly RPC relay
+- `shelly_contactor_switch` when one phase is driven through a contactor path
+
+The group backend keeps phase ownership explicit and testable:
+
+- `P1` always means the child assigned to phase 1
+- `P1_P2` enables the `P1` and `P2` children together
+- `P1_P2_P3` enables all three children together
+
+Optional `[Capabilities] SupportedPhaseSelections=...` can restrict the exposed
+logical layouts to a subset of the configured members.
+
+Example child config:
+
+```ini
+[Adapter]
+Type=template_switch
+BaseUrl=http://phase1.local
+
+[StateRequest]
+Url=/state
+
+[StateResponse]
+EnabledPath=enabled
+
+[CommandRequest]
+Url=/control
+```
 
 Auto mode can now also switch between supported phase selections
 conservatively. The first implementation is intentionally simple:

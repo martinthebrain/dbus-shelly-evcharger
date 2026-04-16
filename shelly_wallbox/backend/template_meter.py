@@ -12,9 +12,11 @@ from .shelly_support import (
 )
 from .template_support import (
     TemplateHttpBackendBase,
+    TemplateAuthSettings,
     config_section,
     json_path_value,
     load_template_config,
+    load_template_auth_settings,
     normalize_http_method,
     resolved_url,
 )
@@ -27,6 +29,7 @@ class TemplateMeterSettings:
     """Normalized template-meter config loaded from one adapter file."""
 
     base_url: str
+    auth_settings: TemplateAuthSettings
     timeout_seconds: float
     meter_method: str
     meter_url: str
@@ -190,6 +193,7 @@ def load_template_meter_settings(service: object, config_path: str) -> TemplateM
     )
     return TemplateMeterSettings(
         base_url=base_url,
+        auth_settings=load_template_auth_settings(adapter),
         timeout_seconds=2.0 if timeout_seconds is None or timeout_seconds <= 0.0 else float(timeout_seconds),
         meter_method=normalize_http_method(meter_request.get("Method", "GET"), "GET"),
         meter_url=meter_url,
@@ -213,7 +217,7 @@ class TemplateMeterBackend(TemplateHttpBackendBase):
         self.service = service
         self.config_path = str(config_path).strip()
         self.settings = load_template_meter_settings(service, self.config_path)
-        super().__init__(service, self.settings.timeout_seconds)
+        super().__init__(service, self.settings.timeout_seconds, auth_settings=self.settings.auth_settings)
 
     @staticmethod
     def _enabled_state(value: object) -> bool | None:

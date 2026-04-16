@@ -7,9 +7,11 @@ from dataclasses import dataclass
 
 from .template_support import (
     TemplateHttpBackendBase,
+    TemplateAuthSettings,
     config_section,
     json_path_value,
     load_template_config,
+    load_template_auth_settings,
     normalize_http_method,
     resolved_url,
 )
@@ -29,6 +31,7 @@ class TemplateSwitchSettings:
     """Normalized template-switch config loaded from one adapter file."""
 
     base_url: str
+    auth_settings: TemplateAuthSettings
     timeout_seconds: float
     state_method: str
     state_url: str
@@ -196,6 +199,7 @@ def load_template_switch_settings(service: object, config_path: str) -> Template
 
     return TemplateSwitchSettings(
         base_url=base_url,
+        auth_settings=load_template_auth_settings(adapter),
         timeout_seconds=_template_switch_timeout_seconds(adapter, service),
         state_method=normalize_http_method(state_request.get("Method", "GET"), "GET"),
         state_url=urls.state_url,
@@ -225,7 +229,7 @@ class TemplateSwitchBackend(TemplateHttpBackendBase):
         self.service = service
         self.config_path = str(config_path).strip()
         self.settings = load_template_switch_settings(service, self.config_path)
-        super().__init__(service, self.settings.timeout_seconds)
+        super().__init__(service, self.settings.timeout_seconds, auth_settings=self.settings.auth_settings)
         default_selection = self.settings.supported_phase_selections[0]
         requested_selection: PhaseSelection = normalize_phase_selection(
             getattr(service, "requested_phase_selection", default_selection),
