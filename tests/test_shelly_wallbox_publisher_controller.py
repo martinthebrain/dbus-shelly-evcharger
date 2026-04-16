@@ -132,7 +132,28 @@ class TestDbusPublishController(unittest.TestCase):
             auto_resume_soc=50.0,
             auto_start_delay_seconds=10.0,
             auto_stop_delay_seconds=30.0,
+            auto_dbus_backoff_base_seconds=5.0,
+            auto_dbus_backoff_max_seconds=60.0,
+            auto_grid_recovery_start_seconds=14.0,
+            auto_stop_surplus_delay_seconds=45.0,
+            auto_stop_surplus_volatility_low_watts=80.0,
+            auto_stop_surplus_volatility_high_watts=240.0,
+            auto_reference_charge_power_watts=2100.0,
+            auto_learn_charge_power_enabled=True,
+            auto_learn_charge_power_min_watts=1400.0,
+            auto_learn_charge_power_alpha=0.25,
+            auto_learn_charge_power_start_delay_seconds=12.0,
+            auto_learn_charge_power_window_seconds=180.0,
+            auto_learn_charge_power_max_age_seconds=21600.0,
             auto_phase_switching_enabled=True,
+            auto_phase_prefer_lowest_when_idle=False,
+            auto_phase_upshift_delay_seconds=120.0,
+            auto_phase_downshift_delay_seconds=30.0,
+            auto_phase_upshift_headroom_watts=250.0,
+            auto_phase_downshift_margin_watts=150.0,
+            auto_phase_mismatch_retry_seconds=300.0,
+            auto_phase_mismatch_lockout_count=3,
+            auto_phase_mismatch_lockout_seconds=1800.0,
             learned_charge_power_state="stable",
             learned_charge_power_watts=2990.0,
             learned_charge_power_updated_at=95.0,
@@ -140,7 +161,6 @@ class TestDbusPublishController(unittest.TestCase):
             learned_charge_power_voltage=230.0,
             phase="L1",
             voltage_mode="phase",
-            auto_learn_charge_power_max_age_seconds=21600.0,
         )
         controller = DbusPublishController(service, self._age_seconds)
 
@@ -156,7 +176,28 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(values["/Auto/ResumeSoc"], 50.0)
         self.assertEqual(values["/Auto/StartDelaySeconds"], 10.0)
         self.assertEqual(values["/Auto/StopDelaySeconds"], 30.0)
+        self.assertEqual(values["/Auto/DbusBackoffBaseSeconds"], 5.0)
+        self.assertEqual(values["/Auto/DbusBackoffMaxSeconds"], 60.0)
+        self.assertEqual(values["/Auto/GridRecoveryStartSeconds"], 14.0)
+        self.assertEqual(values["/Auto/StopSurplusDelaySeconds"], 45.0)
+        self.assertEqual(values["/Auto/StopSurplusVolatilityLowWatts"], 80.0)
+        self.assertEqual(values["/Auto/StopSurplusVolatilityHighWatts"], 240.0)
+        self.assertEqual(values["/Auto/ReferenceChargePowerWatts"], 2100.0)
+        self.assertEqual(values["/Auto/LearnChargePowerEnabled"], 1)
+        self.assertEqual(values["/Auto/LearnChargePowerMinWatts"], 1400.0)
+        self.assertEqual(values["/Auto/LearnChargePowerAlpha"], 0.25)
+        self.assertEqual(values["/Auto/LearnChargePowerStartDelaySeconds"], 12.0)
+        self.assertEqual(values["/Auto/LearnChargePowerWindowSeconds"], 180.0)
+        self.assertEqual(values["/Auto/LearnChargePowerMaxAgeSeconds"], 21600.0)
         self.assertEqual(values["/Auto/PhaseSwitching"], 1)
+        self.assertEqual(values["/Auto/PhasePreferLowestWhenIdle"], 0)
+        self.assertEqual(values["/Auto/PhaseUpshiftDelaySeconds"], 120.0)
+        self.assertEqual(values["/Auto/PhaseDownshiftDelaySeconds"], 30.0)
+        self.assertEqual(values["/Auto/PhaseUpshiftHeadroomWatts"], 250.0)
+        self.assertEqual(values["/Auto/PhaseDownshiftMarginWatts"], 150.0)
+        self.assertEqual(values["/Auto/PhaseMismatchRetrySeconds"], 300.0)
+        self.assertEqual(values["/Auto/PhaseMismatchLockoutCount"], 3)
+        self.assertEqual(values["/Auto/PhaseMismatchLockoutSeconds"], 1800.0)
 
     def test_config_values_can_disable_learned_current_display(self) -> None:
         service = SimpleNamespace(

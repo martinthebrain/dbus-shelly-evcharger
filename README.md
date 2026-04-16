@@ -247,7 +247,28 @@ Current persistent runtime-override paths include:
 - `/Auto/ResumeSoc`
 - `/Auto/StartDelaySeconds`
 - `/Auto/StopDelaySeconds`
+- `/Auto/DbusBackoffBaseSeconds`
+- `/Auto/DbusBackoffMaxSeconds`
+- `/Auto/GridRecoveryStartSeconds`
+- `/Auto/StopSurplusDelaySeconds`
+- `/Auto/StopSurplusVolatilityLowWatts`
+- `/Auto/StopSurplusVolatilityHighWatts`
+- `/Auto/ReferenceChargePowerWatts`
+- `/Auto/LearnChargePowerEnabled`
+- `/Auto/LearnChargePowerMinWatts`
+- `/Auto/LearnChargePowerAlpha`
+- `/Auto/LearnChargePowerStartDelaySeconds`
+- `/Auto/LearnChargePowerWindowSeconds`
+- `/Auto/LearnChargePowerMaxAgeSeconds`
 - `/Auto/PhaseSwitching`
+- `/Auto/PhasePreferLowestWhenIdle`
+- `/Auto/PhaseUpshiftDelaySeconds`
+- `/Auto/PhaseDownshiftDelaySeconds`
+- `/Auto/PhaseUpshiftHeadroomWatts`
+- `/Auto/PhaseDownshiftMarginWatts`
+- `/Auto/PhaseMismatchRetrySeconds`
+- `/Auto/PhaseMismatchLockoutCount`
+- `/Auto/PhaseMismatchLockoutSeconds`
 
 The active override state is visible on DBus via:
 

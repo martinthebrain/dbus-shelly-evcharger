@@ -41,7 +41,28 @@ class DbusWriteController:
         "/Auto/ResumeSoc",
         "/Auto/StartDelaySeconds",
         "/Auto/StopDelaySeconds",
+        "/Auto/DbusBackoffBaseSeconds",
+        "/Auto/DbusBackoffMaxSeconds",
+        "/Auto/GridRecoveryStartSeconds",
+        "/Auto/StopSurplusDelaySeconds",
+        "/Auto/StopSurplusVolatilityLowWatts",
+        "/Auto/StopSurplusVolatilityHighWatts",
+        "/Auto/ReferenceChargePowerWatts",
+        "/Auto/LearnChargePowerEnabled",
+        "/Auto/LearnChargePowerMinWatts",
+        "/Auto/LearnChargePowerAlpha",
+        "/Auto/LearnChargePowerStartDelaySeconds",
+        "/Auto/LearnChargePowerWindowSeconds",
+        "/Auto/LearnChargePowerMaxAgeSeconds",
         "/Auto/PhaseSwitching",
+        "/Auto/PhasePreferLowestWhenIdle",
+        "/Auto/PhaseUpshiftDelaySeconds",
+        "/Auto/PhaseDownshiftDelaySeconds",
+        "/Auto/PhaseUpshiftHeadroomWatts",
+        "/Auto/PhaseDownshiftMarginWatts",
+        "/Auto/PhaseMismatchRetrySeconds",
+        "/Auto/PhaseMismatchLockoutCount",
+        "/Auto/PhaseMismatchLockoutSeconds",
     }
 
     def __init__(self, port: Any) -> None:
@@ -430,10 +451,95 @@ class DbusWriteController:
             port.auto_stop_delay_seconds = float(value)
             port.validate_runtime_config()
             target_value = float(port.auto_stop_delay_seconds)
-        else:
-            port.auto_phase_switching_enabled = int(value)
+        elif path == "/Auto/DbusBackoffBaseSeconds":
+            port.auto_dbus_backoff_base_seconds = float(value)
+            port.validate_runtime_config()
+            target_value = float(port.auto_dbus_backoff_base_seconds)
+        elif path == "/Auto/DbusBackoffMaxSeconds":
+            port.auto_dbus_backoff_max_seconds = float(value)
+            port.validate_runtime_config()
+            target_value = float(port.auto_dbus_backoff_max_seconds)
+        elif path == "/Auto/GridRecoveryStartSeconds":
+            port.auto_grid_recovery_start_seconds = float(value)
             self._sync_auto_policy_runtime(port)
-            target_value = int(port.auto_phase_switching_enabled)
+            target_value = float(port.auto_grid_recovery_start_seconds)
+        elif path == "/Auto/StopSurplusDelaySeconds":
+            port.auto_stop_surplus_delay_seconds = float(value)
+            self._sync_auto_policy_runtime(port)
+            target_value = float(port.auto_stop_surplus_delay_seconds)
+        elif path == "/Auto/StopSurplusVolatilityLowWatts":
+            port.auto_stop_surplus_volatility_low_watts = float(value)
+            self._sync_auto_policy_runtime(port)
+            target_value = float(port.auto_stop_surplus_volatility_low_watts)
+        elif path == "/Auto/StopSurplusVolatilityHighWatts":
+            port.auto_stop_surplus_volatility_high_watts = float(value)
+            self._sync_auto_policy_runtime(port)
+            target_value = float(port.auto_stop_surplus_volatility_high_watts)
+        elif path == "/Auto/ReferenceChargePowerWatts":
+            port.auto_reference_charge_power_watts = float(value)
+            self._sync_auto_policy_runtime(port)
+            target_value = float(port.auto_reference_charge_power_watts)
+        elif path == "/Auto/LearnChargePowerEnabled":
+            port.auto_learn_charge_power_enabled = int(value)
+            self._sync_auto_policy_runtime(port)
+            target_value = int(port.auto_learn_charge_power_enabled)
+        elif path == "/Auto/LearnChargePowerMinWatts":
+            port.auto_learn_charge_power_min_watts = float(value)
+            self._sync_auto_policy_runtime(port)
+            target_value = float(port.auto_learn_charge_power_min_watts)
+        elif path == "/Auto/LearnChargePowerAlpha":
+            port.auto_learn_charge_power_alpha = float(value)
+            self._sync_auto_policy_runtime(port)
+            target_value = float(port.auto_learn_charge_power_alpha)
+        elif path == "/Auto/LearnChargePowerStartDelaySeconds":
+            port.auto_learn_charge_power_start_delay_seconds = float(value)
+            self._sync_auto_policy_runtime(port)
+            target_value = float(port.auto_learn_charge_power_start_delay_seconds)
+        elif path == "/Auto/LearnChargePowerWindowSeconds":
+            port.auto_learn_charge_power_window_seconds = float(value)
+            self._sync_auto_policy_runtime(port)
+            target_value = float(port.auto_learn_charge_power_window_seconds)
+        elif path == "/Auto/LearnChargePowerMaxAgeSeconds":
+            port.auto_learn_charge_power_max_age_seconds = float(value)
+            self._sync_auto_policy_runtime(port)
+            target_value = float(port.auto_learn_charge_power_max_age_seconds)
+        else:
+            if path == "/Auto/PhaseSwitching":
+                port.auto_phase_switching_enabled = int(value)
+                self._sync_auto_policy_runtime(port)
+                target_value = int(port.auto_phase_switching_enabled)
+            elif path == "/Auto/PhasePreferLowestWhenIdle":
+                port.auto_phase_prefer_lowest_when_idle = int(value)
+                self._sync_auto_policy_runtime(port)
+                target_value = int(port.auto_phase_prefer_lowest_when_idle)
+            elif path == "/Auto/PhaseUpshiftDelaySeconds":
+                port.auto_phase_upshift_delay_seconds = float(value)
+                self._sync_auto_policy_runtime(port)
+                target_value = float(port.auto_phase_upshift_delay_seconds)
+            elif path == "/Auto/PhaseDownshiftDelaySeconds":
+                port.auto_phase_downshift_delay_seconds = float(value)
+                self._sync_auto_policy_runtime(port)
+                target_value = float(port.auto_phase_downshift_delay_seconds)
+            elif path == "/Auto/PhaseUpshiftHeadroomWatts":
+                port.auto_phase_upshift_headroom_watts = float(value)
+                self._sync_auto_policy_runtime(port)
+                target_value = float(port.auto_phase_upshift_headroom_watts)
+            elif path == "/Auto/PhaseDownshiftMarginWatts":
+                port.auto_phase_downshift_margin_watts = float(value)
+                self._sync_auto_policy_runtime(port)
+                target_value = float(port.auto_phase_downshift_margin_watts)
+            elif path == "/Auto/PhaseMismatchRetrySeconds":
+                port.auto_phase_mismatch_retry_seconds = float(value)
+                self._sync_auto_policy_runtime(port)
+                target_value = float(port.auto_phase_mismatch_retry_seconds)
+            elif path == "/Auto/PhaseMismatchLockoutCount":
+                port.auto_phase_mismatch_lockout_count = int(value)
+                self._sync_auto_policy_runtime(port)
+                target_value = int(port.auto_phase_mismatch_lockout_count)
+            else:
+                port.auto_phase_mismatch_lockout_seconds = float(value)
+                self._sync_auto_policy_runtime(port)
+                target_value = float(port.auto_phase_mismatch_lockout_seconds)
         port.publish_dbus_path(path, target_value, current_time, force=True)
 
     def _handle_phase_selection_write(self, value: Any) -> None:

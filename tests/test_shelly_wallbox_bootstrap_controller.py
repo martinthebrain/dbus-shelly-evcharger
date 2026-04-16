@@ -120,7 +120,28 @@ class TestServiceBootstrapController(unittest.TestCase):
             auto_resume_soc=50.0,
             auto_start_delay_seconds=10.0,
             auto_stop_delay_seconds=30.0,
+            auto_dbus_backoff_base_seconds=5.0,
+            auto_dbus_backoff_max_seconds=60.0,
+            auto_grid_recovery_start_seconds=14.0,
+            auto_stop_surplus_delay_seconds=45.0,
+            auto_stop_surplus_volatility_low_watts=80.0,
+            auto_stop_surplus_volatility_high_watts=240.0,
+            auto_reference_charge_power_watts=2100.0,
+            auto_learn_charge_power_enabled=True,
+            auto_learn_charge_power_min_watts=1400.0,
+            auto_learn_charge_power_alpha=0.25,
+            auto_learn_charge_power_start_delay_seconds=12.0,
+            auto_learn_charge_power_window_seconds=180.0,
+            auto_learn_charge_power_max_age_seconds=21600.0,
             auto_phase_switching_enabled=True,
+            auto_phase_prefer_lowest_when_idle=False,
+            auto_phase_upshift_delay_seconds=120.0,
+            auto_phase_downshift_delay_seconds=30.0,
+            auto_phase_upshift_headroom_watts=250.0,
+            auto_phase_downshift_margin_watts=150.0,
+            auto_phase_mismatch_retry_seconds=300.0,
+            auto_phase_mismatch_lockout_count=3,
+            auto_phase_mismatch_lockout_seconds=1800.0,
             runtime_overrides_path="/data/etc/wallbox-overrides.ini",
             _runtime_overrides_active=True,
             backend_mode="split",
@@ -141,7 +162,16 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service._dbusservice.paths["/Mode"]["value"], 0)
         self.assertEqual(service._dbusservice.paths["/PhaseSelection"]["value"], "P1")
         self.assertEqual(service._dbusservice.paths["/Auto/StartSurplusWatts"]["value"], 1850.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/DbusBackoffBaseSeconds"]["value"], 5.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/GridRecoveryStartSeconds"]["value"], 14.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/StopSurplusVolatilityLowWatts"]["value"], 80.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ReferenceChargePowerWatts"]["value"], 2100.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/LearnChargePowerEnabled"]["value"], 1)
+        self.assertEqual(service._dbusservice.paths["/Auto/LearnChargePowerWindowSeconds"]["value"], 180.0)
         self.assertEqual(service._dbusservice.paths["/Auto/PhaseSwitching"]["value"], 1)
+        self.assertEqual(service._dbusservice.paths["/Auto/PhasePreferLowestWhenIdle"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseUpshiftDelaySeconds"]["value"], 120.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseMismatchLockoutCount"]["value"], 3)
         self.assertEqual(service._dbusservice.paths["/Auto/State"]["value"], "idle")
         self.assertEqual(service._dbusservice.paths["/Auto/StateCode"]["value"], 0)
         self.assertEqual(service._dbusservice.paths["/Auto/RecoveryActive"]["value"], 0)
@@ -196,7 +226,11 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertTrue(service._dbusservice.paths["/Mode"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/PhaseSelection"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/Auto/StartSurplusWatts"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/DbusBackoffBaseSeconds"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/LearnChargePowerEnabled"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/PhasePreferLowestWhenIdle"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/Auto/PhaseSwitching"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/PhaseMismatchLockoutCount"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/Auto/PhaseLockoutReset"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/Auto/ContactorLockoutReset"]["writeable"])
         self.assertTrue(service._dbusservice.register_called)

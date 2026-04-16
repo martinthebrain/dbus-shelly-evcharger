@@ -570,7 +570,50 @@ class DbusPublishController:
             "/Auto/ResumeSoc": getattr(self.service, "auto_resume_soc", 0.0),
             "/Auto/StartDelaySeconds": getattr(self.service, "auto_start_delay_seconds", 0.0),
             "/Auto/StopDelaySeconds": getattr(self.service, "auto_stop_delay_seconds", 0.0),
+            "/Auto/DbusBackoffBaseSeconds": getattr(self.service, "auto_dbus_backoff_base_seconds", 0.0),
+            "/Auto/DbusBackoffMaxSeconds": getattr(self.service, "auto_dbus_backoff_max_seconds", 0.0),
+            "/Auto/GridRecoveryStartSeconds": getattr(self.service, "auto_grid_recovery_start_seconds", 0.0),
+            "/Auto/StopSurplusDelaySeconds": getattr(self.service, "auto_stop_surplus_delay_seconds", 0.0),
+            "/Auto/StopSurplusVolatilityLowWatts": getattr(
+                self.service,
+                "auto_stop_surplus_volatility_low_watts",
+                0.0,
+            ),
+            "/Auto/StopSurplusVolatilityHighWatts": getattr(
+                self.service,
+                "auto_stop_surplus_volatility_high_watts",
+                0.0,
+            ),
+            "/Auto/ReferenceChargePowerWatts": getattr(self.service, "auto_reference_charge_power_watts", 0.0),
+            "/Auto/LearnChargePowerEnabled": int(bool(getattr(self.service, "auto_learn_charge_power_enabled", True))),
+            "/Auto/LearnChargePowerMinWatts": getattr(self.service, "auto_learn_charge_power_min_watts", 0.0),
+            "/Auto/LearnChargePowerAlpha": getattr(self.service, "auto_learn_charge_power_alpha", 0.0),
+            "/Auto/LearnChargePowerStartDelaySeconds": getattr(
+                self.service,
+                "auto_learn_charge_power_start_delay_seconds",
+                0.0,
+            ),
+            "/Auto/LearnChargePowerWindowSeconds": getattr(
+                self.service,
+                "auto_learn_charge_power_window_seconds",
+                0.0,
+            ),
+            "/Auto/LearnChargePowerMaxAgeSeconds": getattr(
+                self.service,
+                "auto_learn_charge_power_max_age_seconds",
+                0.0,
+            ),
             "/Auto/PhaseSwitching": int(bool(getattr(self.service, "auto_phase_switching_enabled", True))),
+            "/Auto/PhasePreferLowestWhenIdle": int(
+                bool(getattr(self.service, "auto_phase_prefer_lowest_when_idle", True))
+            ),
+            "/Auto/PhaseUpshiftDelaySeconds": getattr(self.service, "auto_phase_upshift_delay_seconds", 0.0),
+            "/Auto/PhaseDownshiftDelaySeconds": getattr(self.service, "auto_phase_downshift_delay_seconds", 0.0),
+            "/Auto/PhaseUpshiftHeadroomWatts": getattr(self.service, "auto_phase_upshift_headroom_watts", 0.0),
+            "/Auto/PhaseDownshiftMarginWatts": getattr(self.service, "auto_phase_downshift_margin_watts", 0.0),
+            "/Auto/PhaseMismatchRetrySeconds": getattr(self.service, "auto_phase_mismatch_retry_seconds", 0.0),
+            "/Auto/PhaseMismatchLockoutCount": getattr(self.service, "auto_phase_mismatch_lockout_count", 0),
+            "/Auto/PhaseMismatchLockoutSeconds": getattr(self.service, "auto_phase_mismatch_lockout_seconds", 0.0),
         }
 
     @staticmethod

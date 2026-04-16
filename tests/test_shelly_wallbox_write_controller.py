@@ -653,6 +653,65 @@ class TestDbusWriteController(unittest.TestCase):
         service._save_runtime_state.assert_called_once()
         service._save_runtime_overrides.assert_called_once()
 
+    def test_auto_runtime_setting_write_updates_dbus_backoff_without_policy_rebuild(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_startstop=0,
+            virtual_enable=1,
+            auto_dbus_backoff_base_seconds=5.0,
+            _dbusservice={"/Auto/DbusBackoffBaseSeconds": 5.0},
+            _time_now=MagicMock(return_value=42.0),
+            _publish_dbus_path=MagicMock(),
+            _state_summary=self._state_summary,
+            _save_runtime_state=MagicMock(),
+            _save_runtime_overrides=MagicMock(),
+            _validate_runtime_config=MagicMock(),
+        )
+        service._publish_dbus_path.side_effect = self._publish_side_effect(service)
+        controller = DbusWriteController(WriteControllerPort(service))
+
+        with patch("shelly_wallbox.controllers.write.validate_auto_policy") as validate_policy:
+            self.assertTrue(controller.handle_write("/Auto/DbusBackoffBaseSeconds", 7.5))
+
+        self.assertEqual(service.auto_dbus_backoff_base_seconds, 7.5)
+        self.assertEqual(service._dbusservice["/Auto/DbusBackoffBaseSeconds"], 7.5)
+        validate_policy.assert_not_called()
+        service._validate_runtime_config.assert_called_once()
+        service._save_runtime_state.assert_called_once()
+        service._save_runtime_overrides.assert_called_once()
+
+    def test_auto_runtime_setting_write_updates_learn_charge_flag_with_policy_rebuild(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_startstop=0,
+            virtual_enable=1,
+            auto_learn_charge_power_enabled=True,
+            auto_policy=SimpleNamespace(),
+            _dbusservice={"/Auto/LearnChargePowerEnabled": 1},
+            _time_now=MagicMock(return_value=42.0),
+            _publish_dbus_path=MagicMock(),
+            _state_summary=self._state_summary,
+            _save_runtime_state=MagicMock(),
+            _save_runtime_overrides=MagicMock(),
+            _validate_runtime_config=MagicMock(),
+        )
+        service._publish_dbus_path.side_effect = self._publish_side_effect(service)
+        controller = DbusWriteController(WriteControllerPort(service))
+
+        with patch("shelly_wallbox.controllers.write.AutoPolicy.from_service", return_value=service.auto_policy), patch(
+            "shelly_wallbox.controllers.write.validate_auto_policy"
+        ) as validate_policy:
+            self.assertTrue(controller.handle_write("/Auto/LearnChargePowerEnabled", 0))
+
+        self.assertFalse(service.auto_learn_charge_power_enabled)
+        self.assertEqual(service._dbusservice["/Auto/LearnChargePowerEnabled"], 0)
+        validate_policy.assert_called_once_with(service.auto_policy, service)
+        service._validate_runtime_config.assert_called_once()
+        service._save_runtime_state.assert_called_once()
+        service._save_runtime_overrides.assert_called_once()
+
     def test_manual_startstop_and_setcurrent_use_charger_backend_when_available(self) -> None:
         charger_backend = SimpleNamespace(
             set_enabled=MagicMock(),

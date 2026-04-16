@@ -41,6 +41,27 @@ class WriteControllerPort(_BaseServicePort):
         "auto_resume_soc",
         "auto_start_delay_seconds",
         "auto_stop_delay_seconds",
+        "auto_dbus_backoff_base_seconds",
+        "auto_dbus_backoff_max_seconds",
+        "auto_grid_recovery_start_seconds",
+        "auto_stop_surplus_delay_seconds",
+        "auto_stop_surplus_volatility_low_watts",
+        "auto_stop_surplus_volatility_high_watts",
+        "auto_reference_charge_power_watts",
+        "auto_learn_charge_power_enabled",
+        "auto_learn_charge_power_min_watts",
+        "auto_learn_charge_power_alpha",
+        "auto_learn_charge_power_start_delay_seconds",
+        "auto_learn_charge_power_window_seconds",
+        "auto_learn_charge_power_max_age_seconds",
+        "auto_phase_upshift_delay_seconds",
+        "auto_phase_downshift_delay_seconds",
+        "auto_phase_upshift_headroom_watts",
+        "auto_phase_downshift_margin_watts",
+        "auto_phase_prefer_lowest_when_idle",
+        "auto_phase_mismatch_retry_seconds",
+        "auto_phase_mismatch_lockout_count",
+        "auto_phase_mismatch_lockout_seconds",
         "auto_start_condition_since",
         "auto_stop_condition_since",
         "manual_override_until",
@@ -162,12 +183,194 @@ class WriteControllerPort(_BaseServicePort):
         self._service.auto_stop_delay_seconds = float(finite_float_or_none(value) or 0.0)
 
     @property
+    def auto_dbus_backoff_base_seconds(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_dbus_backoff_base_seconds", 0.0)) or 0.0)
+
+    @auto_dbus_backoff_base_seconds.setter
+    def auto_dbus_backoff_base_seconds(self, value: Any) -> None:
+        self._service.auto_dbus_backoff_base_seconds = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_dbus_backoff_max_seconds(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_dbus_backoff_max_seconds", 0.0)) or 0.0)
+
+    @auto_dbus_backoff_max_seconds.setter
+    def auto_dbus_backoff_max_seconds(self, value: Any) -> None:
+        self._service.auto_dbus_backoff_max_seconds = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_grid_recovery_start_seconds(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_grid_recovery_start_seconds", 0.0)) or 0.0)
+
+    @auto_grid_recovery_start_seconds.setter
+    def auto_grid_recovery_start_seconds(self, value: Any) -> None:
+        self._service.auto_grid_recovery_start_seconds = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_stop_surplus_delay_seconds(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_stop_surplus_delay_seconds", 0.0)) or 0.0)
+
+    @auto_stop_surplus_delay_seconds.setter
+    def auto_stop_surplus_delay_seconds(self, value: Any) -> None:
+        self._service.auto_stop_surplus_delay_seconds = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_stop_surplus_volatility_low_watts(self) -> float:
+        return float(
+            finite_float_or_none(getattr(self._service, "auto_stop_surplus_volatility_low_watts", 0.0)) or 0.0
+        )
+
+    @auto_stop_surplus_volatility_low_watts.setter
+    def auto_stop_surplus_volatility_low_watts(self, value: Any) -> None:
+        self._service.auto_stop_surplus_volatility_low_watts = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_stop_surplus_volatility_high_watts(self) -> float:
+        return float(
+            finite_float_or_none(getattr(self._service, "auto_stop_surplus_volatility_high_watts", 0.0)) or 0.0
+        )
+
+    @auto_stop_surplus_volatility_high_watts.setter
+    def auto_stop_surplus_volatility_high_watts(self, value: Any) -> None:
+        self._service.auto_stop_surplus_volatility_high_watts = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_reference_charge_power_watts(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_reference_charge_power_watts", 0.0)) or 0.0)
+
+    @auto_reference_charge_power_watts.setter
+    def auto_reference_charge_power_watts(self, value: Any) -> None:
+        self._service.auto_reference_charge_power_watts = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_learn_charge_power_enabled(self) -> int:
+        return normalize_binary_flag(getattr(self._service, "auto_learn_charge_power_enabled", 1), default=1)
+
+    @auto_learn_charge_power_enabled.setter
+    def auto_learn_charge_power_enabled(self, value: Any) -> None:
+        self._service.auto_learn_charge_power_enabled = bool(normalize_binary_flag(value))
+
+    @property
+    def auto_learn_charge_power_min_watts(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_learn_charge_power_min_watts", 0.0)) or 0.0)
+
+    @auto_learn_charge_power_min_watts.setter
+    def auto_learn_charge_power_min_watts(self, value: Any) -> None:
+        self._service.auto_learn_charge_power_min_watts = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_learn_charge_power_alpha(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_learn_charge_power_alpha", 0.0)) or 0.0)
+
+    @auto_learn_charge_power_alpha.setter
+    def auto_learn_charge_power_alpha(self, value: Any) -> None:
+        self._service.auto_learn_charge_power_alpha = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_learn_charge_power_start_delay_seconds(self) -> float:
+        return float(
+            finite_float_or_none(getattr(self._service, "auto_learn_charge_power_start_delay_seconds", 0.0)) or 0.0
+        )
+
+    @auto_learn_charge_power_start_delay_seconds.setter
+    def auto_learn_charge_power_start_delay_seconds(self, value: Any) -> None:
+        self._service.auto_learn_charge_power_start_delay_seconds = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_learn_charge_power_window_seconds(self) -> float:
+        return float(
+            finite_float_or_none(getattr(self._service, "auto_learn_charge_power_window_seconds", 0.0)) or 0.0
+        )
+
+    @auto_learn_charge_power_window_seconds.setter
+    def auto_learn_charge_power_window_seconds(self, value: Any) -> None:
+        self._service.auto_learn_charge_power_window_seconds = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_learn_charge_power_max_age_seconds(self) -> float:
+        return float(
+            finite_float_or_none(getattr(self._service, "auto_learn_charge_power_max_age_seconds", 0.0)) or 0.0
+        )
+
+    @auto_learn_charge_power_max_age_seconds.setter
+    def auto_learn_charge_power_max_age_seconds(self, value: Any) -> None:
+        self._service.auto_learn_charge_power_max_age_seconds = float(finite_float_or_none(value) or 0.0)
+
+    @property
     def auto_phase_switching_enabled(self) -> int:
         return normalize_binary_flag(getattr(self._service, "auto_phase_switching_enabled", 1), default=1)
 
     @auto_phase_switching_enabled.setter
     def auto_phase_switching_enabled(self, value: Any) -> None:
         self._service.auto_phase_switching_enabled = bool(normalize_binary_flag(value))
+
+    @property
+    def auto_phase_prefer_lowest_when_idle(self) -> int:
+        return normalize_binary_flag(getattr(self._service, "auto_phase_prefer_lowest_when_idle", 1), default=1)
+
+    @auto_phase_prefer_lowest_when_idle.setter
+    def auto_phase_prefer_lowest_when_idle(self, value: Any) -> None:
+        self._service.auto_phase_prefer_lowest_when_idle = bool(normalize_binary_flag(value))
+
+    @property
+    def auto_phase_upshift_delay_seconds(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_phase_upshift_delay_seconds", 0.0)) or 0.0)
+
+    @auto_phase_upshift_delay_seconds.setter
+    def auto_phase_upshift_delay_seconds(self, value: Any) -> None:
+        self._service.auto_phase_upshift_delay_seconds = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_phase_downshift_delay_seconds(self) -> float:
+        return float(
+            finite_float_or_none(getattr(self._service, "auto_phase_downshift_delay_seconds", 0.0)) or 0.0
+        )
+
+    @auto_phase_downshift_delay_seconds.setter
+    def auto_phase_downshift_delay_seconds(self, value: Any) -> None:
+        self._service.auto_phase_downshift_delay_seconds = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_phase_upshift_headroom_watts(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_phase_upshift_headroom_watts", 0.0)) or 0.0)
+
+    @auto_phase_upshift_headroom_watts.setter
+    def auto_phase_upshift_headroom_watts(self, value: Any) -> None:
+        self._service.auto_phase_upshift_headroom_watts = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_phase_downshift_margin_watts(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_phase_downshift_margin_watts", 0.0)) or 0.0)
+
+    @auto_phase_downshift_margin_watts.setter
+    def auto_phase_downshift_margin_watts(self, value: Any) -> None:
+        self._service.auto_phase_downshift_margin_watts = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_phase_mismatch_retry_seconds(self) -> float:
+        return float(finite_float_or_none(getattr(self._service, "auto_phase_mismatch_retry_seconds", 0.0)) or 0.0)
+
+    @auto_phase_mismatch_retry_seconds.setter
+    def auto_phase_mismatch_retry_seconds(self, value: Any) -> None:
+        self._service.auto_phase_mismatch_retry_seconds = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def auto_phase_mismatch_lockout_count(self) -> int:
+        return non_negative_int(getattr(self._service, "auto_phase_mismatch_lockout_count", 0))
+
+    @auto_phase_mismatch_lockout_count.setter
+    def auto_phase_mismatch_lockout_count(self, value: Any) -> None:
+        self._service.auto_phase_mismatch_lockout_count = non_negative_int(value)
+
+    @property
+    def auto_phase_mismatch_lockout_seconds(self) -> float:
+        return float(
+            finite_float_or_none(getattr(self._service, "auto_phase_mismatch_lockout_seconds", 0.0)) or 0.0
+        )
+
+    @auto_phase_mismatch_lockout_seconds.setter
+    def auto_phase_mismatch_lockout_seconds(self, value: Any) -> None:
+        self._service.auto_phase_mismatch_lockout_seconds = float(finite_float_or_none(value) or 0.0)
 
     @property
     def supported_phase_selections(self) -> tuple[str, ...]:

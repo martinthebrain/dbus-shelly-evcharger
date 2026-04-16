@@ -215,6 +215,9 @@ class TestServiceStateController(unittest.TestCase):
                     "AutoStart=0\n"
                     "AutoStartSurplusWatts=1850\n"
                     "PhaseSelection=P1_P2\n"
+                    "AutoPhaseMismatchLockoutCount=4\n"
+                    "AutoLearnChargePower=0\n"
+                    "AutoReferenceChargePowerWatts=2050\n"
                 )
 
             with patch.object(ServiceStateController, "config_path", return_value=config_path):
@@ -224,6 +227,9 @@ class TestServiceStateController(unittest.TestCase):
         self.assertEqual(config["DEFAULT"]["AutoStart"], "0")
         self.assertEqual(config["DEFAULT"]["AutoStartSurplusWatts"], "1850")
         self.assertEqual(config["DEFAULT"]["PhaseSelection"], "P1_P2")
+        self.assertEqual(config["DEFAULT"]["AutoPhaseMismatchLockoutCount"], "4")
+        self.assertEqual(config["DEFAULT"]["AutoLearnChargePower"], "0")
+        self.assertEqual(config["DEFAULT"]["AutoReferenceChargePowerWatts"], "2050")
         self.assertTrue(service._runtime_overrides_active)
         self.assertEqual(service.runtime_overrides_path, overrides_path)
         self.assertEqual(
@@ -233,6 +239,9 @@ class TestServiceStateController(unittest.TestCase):
                 "AutoStart": "0",
                 "AutoStartSurplusWatts": "1850",
                 "PhaseSelection": "P1_P2",
+                "AutoPhaseMismatchLockoutCount": "4",
+                "AutoLearnChargePower": "0",
+                "AutoReferenceChargePowerWatts": "2050",
             },
         )
 
@@ -253,7 +262,28 @@ class TestServiceStateController(unittest.TestCase):
                 auto_resume_soc=50.0,
                 auto_start_delay_seconds=10.0,
                 auto_stop_delay_seconds=30.0,
+                auto_dbus_backoff_base_seconds=5.0,
+                auto_dbus_backoff_max_seconds=60.0,
+                auto_grid_recovery_start_seconds=14.0,
+                auto_stop_surplus_delay_seconds=45.0,
+                auto_stop_surplus_volatility_low_watts=80.0,
+                auto_stop_surplus_volatility_high_watts=240.0,
+                auto_reference_charge_power_watts=2100.0,
+                auto_learn_charge_power_enabled=False,
+                auto_learn_charge_power_min_watts=1400.0,
+                auto_learn_charge_power_alpha=0.25,
+                auto_learn_charge_power_start_delay_seconds=12.0,
+                auto_learn_charge_power_window_seconds=180.0,
+                auto_learn_charge_power_max_age_seconds=21600.0,
                 auto_phase_switching_enabled=True,
+                auto_phase_prefer_lowest_when_idle=False,
+                auto_phase_upshift_delay_seconds=120.0,
+                auto_phase_downshift_delay_seconds=30.0,
+                auto_phase_upshift_headroom_watts=250.0,
+                auto_phase_downshift_margin_watts=150.0,
+                auto_phase_mismatch_retry_seconds=300.0,
+                auto_phase_mismatch_lockout_count=3,
+                auto_phase_mismatch_lockout_seconds=1800.0,
                 _runtime_overrides_serialized=None,
                 _runtime_overrides_active=False,
                 _runtime_overrides_values={},
@@ -269,6 +299,11 @@ class TestServiceStateController(unittest.TestCase):
             self.assertIn("Mode = 1", payload)
             self.assertIn("PhaseSelection = P1_P2", payload)
             self.assertIn("AutoStartSurplusWatts = 1850.0", payload)
+            self.assertIn("AutoDbusBackoffBaseSeconds = 5.0", payload)
+            self.assertIn("AutoLearnChargePower = 0", payload)
+            self.assertIn("AutoReferenceChargePowerWatts = 2100.0", payload)
+            self.assertIn("AutoPhasePreferLowestWhenIdle = 0", payload)
+            self.assertIn("AutoPhaseMismatchLockoutCount = 3", payload)
             self.assertTrue(service._runtime_overrides_active)
             self.assertEqual(service._runtime_overrides_values["AutoPhaseSwitching"], "1")
 
