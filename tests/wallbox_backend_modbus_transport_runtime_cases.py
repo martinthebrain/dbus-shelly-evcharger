@@ -16,7 +16,11 @@ from shelly_wallbox.backend.modbus_transport import (
     ModbusTransportError,
     ModbusTransportSettings,
     ModbusUdpTransport,
+    _VenusSerialPortOwner,
+    _configured_serial_attrs,
+    _serial_port_owner,
     _crc_frame,
+    _expected_rtu_response_length,
     create_modbus_transport,
 )
 
@@ -110,3 +114,81 @@ class TestShellyWallboxBackendModbusTransportRuntime(unittest.TestCase):
             transport._recover_after_failure(ModbusTimeoutError("timeout"))
         transport._port_owner.recover.assert_called()
         sleep_mock.assert_called_once_with(0.1)
+
+    def test_modbus_transport_runtime_helpers_cover_remaining_error_paths(self) -> None:
+        self.assertEqual(_expected_rtu_response_length(0x03, b"\x01\x83\x02"), 5)
+        with self.assertRaisesRegex(ValueError, "Incomplete"):
+            _expected_rtu_response_length(0x03, b"\x01\x03")
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            _expected_rtu_response_length(0x07, b"\x01\x07\x02")
+
+        tcp_settings = ModbusTransportSettings(transport_kind="tcp", unit_id=1, timeout_seconds=1.0, host="127.0.0.1", port=502, device=None, baudrate=9600, bytesize=8, parity="N", stopbits=1, serial_port_owner="none", serial_port_owner_stop_command=None, serial_port_owner_start_command=None, serial_retry_count=0, serial_retry_delay_seconds=0.0)
+        udp_settings = ModbusTransportSettings(transport_kind="udp", unit_id=1, timeout_seconds=1.0, host="127.0.0.1", port=502, device=None, baudrate=9600, bytesize=8, parity="N", stopbits=1, serial_port_owner="none", serial_port_owner_stop_command=None, serial_port_owner_start_command=None, serial_retry_count=0, serial_retry_delay_seconds=0.0)
+        tcp = ModbusTcpTransport(tcp_settings)
+        udp = ModbusUdpTransport(udp_settings)
+
+        fake_sock = MagicMock()
+        fake_sock.__enter__.return_value = fake_sock
+        fake_sock.__exit__.return_value = False
+        with patch("shelly_wallbox.backend.modbus_transport.socket.create_connection", return_value=fake_sock), patch("shelly_wallbox.backend.modbus_transport._recv_exact", side_effect=[b"\x00\x01\x00\x00\x00\x01\x01", b""]):
+            self.assertEqual(tcp.exchange(ModbusRequest(1, 0x03, b"\x00\x00\x00\x01"), timeout_seconds=1.0), b"")
+
+        udp_sock = MagicMock()
+        udp_sock.__enter__.return_value = udp_sock
+        udp_sock.__exit__.return_value = False
+        udp_sock.recvfrom.return_value = (b"\x00\x01", ("127.0.0.1", 502))
+        with patch("shelly_wallbox.backend.modbus_transport.socket.socket", return_value=udp_sock):
+            with self.assertRaises(TimeoutError):
+                udp.exchange(ModbusRequest(1, 0x03, b"\x00\x00\x00\x01"), timeout_seconds=1.0)
+
+        transport = ModbusSerialRtuTransport(self._serial_settings())
+        with patch("shelly_wallbox.backend.modbus_transport.os.open", return_value=5), patch("shelly_wallbox.backend.modbus_transport.os.close"), patch("shelly_wallbox.backend.modbus_transport.termios.tcsetattr"), patch("shelly_wallbox.backend.modbus_transport.termios.tcflush"), patch("shelly_wallbox.backend.modbus_transport._configured_serial_attrs", return_value=[]), patch.object(transport, "_write_all"), patch.object(transport, "_read_exact", side_effect=[b"\x01\x03\x02", b"\x00\xa0\x00\x00"]):
+            with self.assertRaises(ModbusResponseError):
+                transport._exchange_once(ModbusRequest(1, 0x03, b"\x00\x00\x00\x01"), 1.0)
+
+        with patch("shelly_wallbox.backend.modbus_transport.select.select", return_value=([], [], [])), patch("shelly_wallbox.backend.modbus_transport.time.monotonic", side_effect=[0.0, 0.0]):
+            with self.assertRaises(ModbusTimeoutError):
+                ModbusSerialRtuTransport._read_exact(5, 1, 1.0)
+
+        self.assertIsInstance(
+            ModbusSerialRtuTransport._normalized_serial_os_error(OSError(errno.EPERM, "nope")),
+            ModbusPortBusyError,
+        )
+
+    def test_modbus_transport_runtime_covers_parity_owner_and_short_reads(self) -> None:
+        odd_settings = self._serial_settings()
+        odd_settings = ModbusTransportSettings(**{**odd_settings.__dict__, "parity": "O", "stopbits": 2, "device": None})
+        with patch("shelly_wallbox.backend.modbus_transport.termios.tcgetattr", return_value=[0, 0, 0, 0, 0, 0, [0, 0, 0, 0, 0, 0, 0]]):
+            attrs = _configured_serial_attrs(5, odd_settings)
+        self.assertTrue(attrs[2])
+
+        even_settings = ModbusTransportSettings(**{**self._serial_settings().__dict__, "parity": "E", "stopbits": 1, "device": None})
+        with patch("shelly_wallbox.backend.modbus_transport.termios.tcgetattr", return_value=[0, 0, 0, 0, 0, 0, [0, 0, 0, 0, 0, 0, 0]]):
+            even_attrs = _configured_serial_attrs(5, even_settings)
+        self.assertTrue(even_attrs[2])
+
+        none_settings = ModbusTransportSettings(**{**self._serial_settings().__dict__, "parity": "N", "stopbits": 1, "device": None})
+        with patch("shelly_wallbox.backend.modbus_transport.termios.tcgetattr", return_value=[0, 0, 0, 0, 0, 0, [0, 0, 0, 0, 0, 0, 0]]):
+            none_attrs = _configured_serial_attrs(5, none_settings)
+        self.assertTrue(isinstance(none_attrs, list))
+
+        owner = _VenusSerialPortOwner("/dev/ttyS7", "/stop.sh", None)
+        owner._run_command = MagicMock()
+        owner._owned = True
+        owner.recover()
+        owner._run_command.assert_called_once_with("/stop.sh")
+        owner._owned = False
+        owner.ensure_owned()
+        self.assertTrue(owner._owned)
+
+        owner_settings = ModbusTransportSettings(**{**self._serial_settings(owner="venus_serial_starter").__dict__, "device": None})
+        self.assertIsNone(_serial_port_owner(owner_settings))
+
+        transport = ModbusSerialRtuTransport(self._serial_settings())
+        with patch("shelly_wallbox.backend.modbus_transport.os.open", return_value=5), patch("shelly_wallbox.backend.modbus_transport.os.close"), patch("shelly_wallbox.backend.modbus_transport.termios.tcsetattr"), patch("shelly_wallbox.backend.modbus_transport.termios.tcflush"), patch("shelly_wallbox.backend.modbus_transport._configured_serial_attrs", return_value=[]), patch.object(transport, "_write_all"), patch.object(transport, "_read_exact", side_effect=[b"\x01\x03\x02", b"\x00"]):
+            with self.assertRaises(ModbusTimeoutError):
+                transport._exchange_once(ModbusRequest(1, 0x03, b"\x00\x00\x00\x01"), 1.0)
+
+        with patch("shelly_wallbox.backend.modbus_transport.select.select", return_value=([5], [], [])), patch("shelly_wallbox.backend.modbus_transport.os.read", return_value=b""), patch("shelly_wallbox.backend.modbus_transport.time.monotonic", side_effect=[0.0, 0.0]):
+            with self.assertRaises(ModbusTimeoutError):
+                ModbusSerialRtuTransport._read_exact(5, 1, 1.0)

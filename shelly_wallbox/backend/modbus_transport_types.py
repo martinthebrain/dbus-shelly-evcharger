@@ -45,4 +45,4 @@ class ModbusRequest:
 class ModbusTransport(Protocol):
     """Transport boundary that exchanges one Modbus request and returns the response PDU."""
 
-    def exchange(self, request: ModbusRequest, *, timeout_seconds: float) -> bytes: ...
+    def exchange(self, request: ModbusRequest, *, timeout_seconds: float) -> bytes: ...  # pragma: no cover

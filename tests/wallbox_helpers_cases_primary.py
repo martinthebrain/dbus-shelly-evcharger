@@ -224,6 +224,24 @@ class TestShellyWallboxHelpersPrimary(ShellyWallboxHelpersTestBase):
 
         self.assertEqual(service._get_pv_power(), 900)
 
+    def test_get_pv_power_ignores_missing_and_nonnumeric_service_values_before_zero_fallback(self):
+        service = ShellyWallboxService.__new__(ShellyWallboxService)
+        service.auto_pv_path = "/Ac/Power"
+        service.auto_pv_service = ""
+        service.auto_use_dc_pv = False
+        service._resolve_auto_pv_services = MagicMock(return_value=["pv1", "pv2"])
+        service.auto_pv_scan_interval_seconds = 60
+        service._last_pv_missing_warning = None
+
+        def fake_get_value(service_name, _path):
+            if service_name == "pv1":
+                return None
+            return ["bad"]
+
+        service._get_dbus_value = MagicMock(side_effect=fake_get_value)
+
+        self.assertEqual(service._get_pv_power(), 0.0)
+
     def test_get_pv_power_skips_reads_during_retry_cooldown(self):
         service = ShellyWallboxService.__new__(ShellyWallboxService)
         service._source_retry_after = {"pv": 200.0}

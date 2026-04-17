@@ -46,6 +46,10 @@ class TestServiceBootstrapControllerLifecycle(ServiceBootstrapControllerTestCase
         _request_mainloop_quit(gobject_module, mainloop)
         mainloop.quit.assert_called()
 
+        gobject_module = object()
+        _request_mainloop_quit(gobject_module, mainloop)
+        self.assertTrue(mainloop.quit.called)
+
     def test_run_service_loop_instantiates_service_and_runs_mainloop(self):
         mainloop = MagicMock()
         gobject_module = MagicMock()

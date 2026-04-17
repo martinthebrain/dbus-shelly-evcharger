@@ -55,6 +55,7 @@ class TestShellyWallboxBackendShellySupport(unittest.TestCase):
             resolve_shelly_profile("unknown")
         with self.assertRaisesRegex(ValueError, "is not valid for switch backends"):
             validate_shelly_profile_role("pm1_meter", "switch")
+        self.assertEqual(_config("").sections(), [])
         with self.assertRaises(FileNotFoundError):
             _config("/definitely/missing.ini")
 

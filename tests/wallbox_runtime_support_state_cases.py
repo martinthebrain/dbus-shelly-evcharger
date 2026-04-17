@@ -38,6 +38,8 @@ class TestRuntimeSupportControllerState(RuntimeSupportTestCaseBase):
         controller = RuntimeSupportController(SimpleNamespace(), self._age_zero, self._health_zero)
         with patch("builtins.open", side_effect=OSError("no uptime")):
             self.assertIsNone(controller._system_uptime_seconds())
+        with patch("builtins.open", mock_open(read_data="nope\n")):
+            self.assertIsNone(controller._system_uptime_seconds())
         with patch("builtins.open", mock_open(read_data="12.5 0.0\n")):
             self.assertEqual(controller._system_uptime_seconds(), 12.5)
         self.assertIsNone(controller._boot_delayed_update_due_at(100.0, 10.0))
@@ -52,6 +54,8 @@ class TestRuntimeSupportControllerState(RuntimeSupportTestCaseBase):
             with open(os.path.join(repo_root, "version.txt"), "w", encoding="utf-8") as handle:
                 handle.write("2.3.4\n")
             self.assertEqual(controller._read_local_version(repo_root), "2.3.4")
+        with patch("os.path.isfile", return_value=True), patch("builtins.open", side_effect=OSError("no version")):
+            self.assertEqual(controller._read_local_version("/tmp/repo"), "")
 
     def test_runtime_audit_helpers_cover_remaining_scalar_edges(self) -> None:
         service = SimpleNamespace(_last_charger_state_phase_selection=0, _time_now=lambda: "bad", _phase_switch_lockout_selection=None, _phase_switch_lockout_until=200.0, _contactor_fault_counts=[], _contactor_fault_active_reason="")
@@ -117,3 +121,27 @@ class TestRuntimeSupportControllerState(RuntimeSupportTestCaseBase):
             controller.write_auto_audit_event("waiting-grid", cached=False)
             controller.watchdog_recover(1000.0)
             service._reset_system_bus.assert_not_called()
+
+    def test_watchdog_retry_helpers_cover_suppression_and_remaining_time_paths(self) -> None:
+        service = make_runtime_support_service(
+            _last_recovery_attempt_at=95.0,
+            auto_watchdog_recovery_seconds=0.0,
+            _source_retry_after={"dbus": 110.0},
+        )
+        controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
+
+        self.assertTrue(controller._watchdog_recovery_suppressed(service, 100.0))
+        self.assertEqual(controller.source_retry_remaining("dbus", 100.0), 10)
+
+    def test_health_helpers_ignore_unknown_failure_keys(self) -> None:
+        service = make_runtime_support_service(
+            _error_state={"dbus": 0},
+            _failure_active={"dbus": False},
+            _source_retry_after={},
+        )
+        controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
+
+        controller.mark_failure("unknown")
+
+        self.assertEqual(service._error_state, {"dbus": 0})
+        self.assertEqual(service._failure_active, {"dbus": False})

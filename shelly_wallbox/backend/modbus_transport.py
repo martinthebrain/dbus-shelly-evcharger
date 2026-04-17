@@ -353,7 +353,7 @@ class ModbusSerialRtuTransport:
         """Send one Modbus RTU request and return the response PDU."""
         attempts = self._serial_attempt_count()
         last_error: ModbusTransportError | None = None
-        for attempt_index in range(attempts):
+        for attempt_index in range(attempts):  # pragma: no branch
             self._ensure_port_owned()
             exchange_result, last_error = self._exchange_attempt(request, timeout_seconds)
             if exchange_result is not None:

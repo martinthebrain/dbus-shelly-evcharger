@@ -143,3 +143,42 @@ class TestShellyWallboxBackendModbusTransportConfig(unittest.TestCase):
         sock.recv.side_effect = [b"\x01", b""]
         with self.assertRaises(TimeoutError):
             _recv_exact(sock, 2)
+
+    def test_transport_normalizers_cover_invalid_edges_and_default_fallbacks(self) -> None:
+        self.assertEqual(_normalized_timeout_seconds("bad", 2.5), 2.5)
+        self.assertEqual(_normalized_timeout_seconds("0", 2.5), 2.5)
+        self.assertEqual(_normalized_retry_count("bad", 3), 3)
+        self.assertEqual(_normalized_retry_delay_seconds("bad", 0.4), 0.4)
+        self.assertEqual(_normalized_transport_kind("udp"), "udp")
+        self.assertEqual(_normalized_serial_port_owner("victron"), "venus_serial_starter")
+
+        with self.assertRaises(ValueError):
+            _normalized_unit_id("248")
+        with self.assertRaises(ValueError):
+            _normalized_port("70000", 502)
+        with self.assertRaises(ValueError):
+            _normalized_device("   ")
+        with self.assertRaises(ValueError):
+            _normalized_baudrate("0")
+        with self.assertRaises(ValueError):
+            _normalized_bytesize("9")
+        with self.assertRaises(ValueError):
+            _normalized_parity("X")
+        with self.assertRaises(ValueError):
+            _normalized_stopbits("3")
+
+    def test_venus_serial_port_owner_release_and_baudrate_helper_cover_remaining_branches(self) -> None:
+        owner = _VenusSerialPortOwner("/dev/ttyS7", "/stop.sh", "/start.sh")
+        owner._owned = True
+        with patch.object(owner, "_run_command", side_effect=ModbusPortOwnershipError("boom")):
+            owner.release()
+        self.assertTrue(owner._owned)
+
+        failing_owner = _VenusSerialPortOwner("/dev/ttyS7", "/stop.sh", "/start.sh")
+        failed = SimpleNamespace(returncode=1, stderr="bad", stdout="")
+        with patch("shelly_wallbox.backend.modbus_transport.subprocess.run", return_value=failed):
+            with self.assertRaisesRegex(ModbusPortOwnershipError, "bad"):
+                failing_owner.ensure_owned()
+
+        with self.assertRaises(ValueError):
+            _serial_baudrate_constant(12345)

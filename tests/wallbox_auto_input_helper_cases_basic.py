@@ -58,6 +58,15 @@ class TestShellyWallboxAutoInputHelperBasic(AutoInputHelperTestCase):
 
         self.assertEqual(helper._derive_subscription_refresh_seconds(), 15.0)
 
+    def test_derive_subscription_refresh_seconds_ignores_non_positive_candidates(self):
+        helper = AutoInputHelper.__new__(AutoInputHelper)
+        helper.config = {
+            "AutoPvScanIntervalSeconds": "0",
+            "AutoBatteryScanIntervalSeconds": "-5",
+        }
+
+        self.assertEqual(helper._derive_subscription_refresh_seconds(), 60.0)
+
     def test_handle_signal_sets_stop_flag_and_requests_idle_quit(self):
         helper = self._make_helper()
         helper._main_loop = MagicMock()
@@ -67,6 +76,16 @@ class TestShellyWallboxAutoInputHelperBasic(AutoInputHelperTestCase):
 
         self.assertTrue(helper._stop_requested)
         idle_add.assert_called_once_with(helper._main_loop.quit)
+
+    def test_handle_signal_sets_stop_flag_without_idle_quit_when_main_loop_is_missing(self):
+        helper = self._make_helper()
+        helper._main_loop = None
+
+        with patch("shelly_wallbox_auto_input_helper.GLib.idle_add") as idle_add:
+            helper._handle_signal(15, None)
+
+        self.assertTrue(helper._stop_requested)
+        idle_add.assert_not_called()
 
     def test_warning_throttled_logs_once_per_interval(self):
         helper = self._make_helper()
@@ -383,6 +402,17 @@ class TestShellyWallboxAutoInputHelperBasic(AutoInputHelperTestCase):
         self.assertNotIn(drop_key, helper._signal_matches)
         self.assertNotIn(drop_key, helper._monitored_specs)
 
+    def test_clear_missing_subscriptions_also_drops_specs_without_live_match(self):
+        helper = self._make_helper()
+        drop_key = ("grid", "svc", "/Ac/Grid/L1/Power")
+        helper._signal_matches = {drop_key: None}
+        helper._monitored_specs = {drop_key: {"y": 2}}
+
+        helper._clear_missing_subscriptions(set())
+
+        self.assertEqual(helper._signal_matches, {})
+        self.assertEqual(helper._monitored_specs, {})
+
     def test_desired_subscription_specs_combines_pv_battery_and_grid_sources(self):
         helper = self._make_helper()
         helper.auto_pv_service = "com.victronenergy.pvinverter.http_40"
@@ -432,6 +462,14 @@ class TestShellyWallboxAutoInputHelperBasic(AutoInputHelperTestCase):
 
         helper._stop_requested = True
         self.assertFalse(helper._refresh_subscriptions_timer())
+
+    def test_parent_watchdog_stops_without_quit_call_when_mainloop_is_missing(self):
+        helper = self._make_helper()
+        helper._stop_requested = False
+        helper._main_loop = None
+        helper._parent_alive = MagicMock(return_value=False)
+
+        self.assertFalse(helper._parent_watchdog())
 
     def test_schedule_refresh_subscriptions_only_schedules_one_idle_callback(self):
         helper = self._make_helper()

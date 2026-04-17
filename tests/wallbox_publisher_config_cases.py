@@ -209,6 +209,22 @@ class TestDbusPublishControllerConfig(DbusPublishControllerTestCase):
         self.assertEqual(values["/StartStop"], 0)
         self.assertEqual(values["/SetCurrent"], 12.5)
 
+    def test_config_helpers_cover_fault_and_contactor_count_fallbacks(self) -> None:
+        service = SimpleNamespace(
+            backend_mode="",
+            meter_backend_type=None,
+            _last_health_reason="contactor-lockout-open",
+            _contactor_lockout_reason="",
+            _contactor_fault_active_reason="contactor-suspected-open",
+            _contactor_fault_counts=[],
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        self.assertEqual(controller._backend_mode_value(service), "combined")
+        self.assertEqual(controller._backend_type_value(service, "meter_backend_type", "meter"), "meter")
+        self.assertEqual(controller._fault_reason(service), "contactor-lockout-open")
+        self.assertEqual(controller._contactor_fault_count(service), 0)
+
     def test_config_values_convert_stable_three_phase_line_voltage_to_display_current(self) -> None:
         service = SimpleNamespace(
             virtual_mode=1,

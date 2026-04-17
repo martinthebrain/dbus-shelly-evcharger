@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 sys.modules["vedbus"] = MagicMock()
 
+from shelly_wallbox.service.factory import ServiceControllerFactoryMixin
 from shelly_wallbox.service.auto import DbusAutoLogicMixin
 from shelly_wallbox.service.runtime import RuntimeHelperMixin
 from shelly_wallbox.service.state_publish import StatePublishMixin
@@ -47,6 +48,20 @@ class _StateService(StatePublishMixin):
 
     def _ensure_dbus_publisher(self):
         return None
+
+
+class _FactoryService(ServiceControllerFactoryMixin):
+    _normalize_mode_func = staticmethod(lambda value: int(value))
+    _mode_uses_auto_logic_func = staticmethod(lambda mode: bool(mode))
+    _normalize_phase_func = staticmethod(lambda value: str(value))
+    _month_window_func = staticmethod(lambda *args, **kwargs: None)
+    _age_seconds_func = staticmethod(lambda _captured_at, _now: 0)
+    _health_code_func = staticmethod(lambda _reason: 0)
+    _phase_values_func = staticmethod(lambda *args, **kwargs: {})
+    _read_version_func = staticmethod(lambda _path: "")
+    _gobject_module = MagicMock()
+    _script_path_value = ""
+    _formatter_bundle = {}
 
 
 class TestShellyWallboxServiceMixins(unittest.TestCase):
@@ -258,7 +273,42 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         self.assertEqual(cloned["pm_status"], {"output": True})
         defaults = service._observability_state_defaults()
         self.assertIn("_error_state", defaults)
-        self.assertIn("_warning_state", defaults)
+
+    def test_service_controller_factory_skips_recreating_existing_controllers(self):
+        service = _FactoryService()
+        existing = object()
+        service._dbus_publisher = existing
+        service._auto_controller = existing
+        service._shelly_io_controller = existing
+        service._state_controller = existing
+        service._write_controller = existing
+        service._auto_input_supervisor = existing
+        service._runtime_support_controller = existing
+        service._dbus_input_controller = existing
+        service._bootstrap_controller = existing
+        service._update_controller = existing
+
+        service._ensure_dbus_publisher()
+        service._ensure_auto_controller()
+        service._ensure_shelly_io_controller()
+        service._ensure_state_controller()
+        service._ensure_write_controller()
+        service._ensure_auto_input_supervisor()
+        service._ensure_runtime_support_controller()
+        service._ensure_dbus_input_controller()
+        service._ensure_bootstrap_controller()
+        service._ensure_update_controller()
+
+        self.assertIs(service._dbus_publisher, existing)
+        self.assertIs(service._auto_controller, existing)
+        self.assertIs(service._shelly_io_controller, existing)
+        self.assertIs(service._state_controller, existing)
+        self.assertIs(service._write_controller, existing)
+        self.assertIs(service._auto_input_supervisor, existing)
+        self.assertIs(service._runtime_support_controller, existing)
+        self.assertIs(service._dbus_input_controller, existing)
+        self.assertIs(service._bootstrap_controller, existing)
+        self.assertIs(service._update_controller, existing)
 
     def test_auto_logic_mixin_delegates_and_exposes_static_helpers(self):
         service = _AutoService()

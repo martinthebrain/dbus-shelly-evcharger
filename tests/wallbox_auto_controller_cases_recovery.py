@@ -307,3 +307,17 @@ class TestAutoDecisionControllerRecovery(AutoDecisionControllerTestCase):
         self.assertIs(decision, controller._NO_DECISION)
         self.assertTrue(service._grid_recovery_required)
         self.assertEqual(service._grid_recovery_since, 110.0)
+
+    def test_missing_battery_soc_helpers_cover_suppressed_warning_and_invalid_value_without_callback(self):
+        controller, service = self._make_controller()
+        service._last_battery_allow_warning = 995.0
+        service.auto_battery_scan_interval_seconds = 10.0
+        service._warning_throttled = None
+
+        with patch("shelly_wallbox.auto.logic_gates.logging.warning") as warning_mock:
+            soc, decision = controller._allowed_missing_battery_soc(False, 1000.0, False)
+
+        self.assertEqual(soc, float(controller._auto_policy().resume_soc))
+        self.assertIs(decision, controller._NO_DECISION)
+        warning_mock.assert_not_called()
+        self.assertIsNone(controller._normalized_battery_soc(120.0, 1000.0))

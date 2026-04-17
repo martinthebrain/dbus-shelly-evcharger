@@ -169,6 +169,10 @@ class TestDbusInputController(unittest.TestCase):
         self.assertTrue(seen_value)
         self.assertEqual(missing_paths, ["/Ac/Grid/L2/Power"])
 
+        with patch.object(controller, "_handle_source_failure", return_value=None) as handle_failure:
+            self.assertIsNone(controller._handle_missing_grid_values(False, [], 100.0))
+        handle_failure.assert_called_once()
+
     def test_battery_override_cached_resolution_and_nonnumeric_grid_values(self) -> None:
         service = self._make_service()
         controller = DbusInputController(service)

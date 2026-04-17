@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import configparser
+from types import SimpleNamespace
 from typing import Any, cast
 
 from shelly_wallbox.backend.models import SwitchState
@@ -6,8 +8,16 @@ from shelly_wallbox.backend.shelly_contactor_switch import ShellyContactorSwitch
 from shelly_wallbox.backend.switch_group import (
     SwitchGroupBackend,
     SwitchGroupSettings,
+    SwitchGroupMember,
+    _child_switch_backend,
     _member_backend_type,
+    _phase_members,
+    _required_phase_label,
     _resolved_member_path,
+    _supported_phase_selections,
+    _validated_member_capabilities,
+    _validate_phase_members,
+    _validate_supported_phase_selection_list,
     load_switch_group_settings,
 )
 from tests.wallbox_backend_switch_support import SwitchBackendTestCaseBase, _FakeResponse, MagicMock, Path, tempfile
@@ -155,3 +165,86 @@ class TestShellyWallboxBackendSwitchGroup(SwitchBackendTestCaseBase):
             child = Path(temp_dir) / "child.ini"
             child.write_text("[Adapter]\nType=template_switch\nBaseUrl=http://phase1.local\n", encoding="utf-8")
             self.assertEqual(_member_backend_type(child), "template_switch")
+
+    def test_switch_group_helper_edges_cover_remaining_validation_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            group_path = Path(temp_dir) / "group.ini"
+            child = Path(temp_dir) / "child.ini"
+            child.write_text("[DEFAULT]\nBaseUrl=http://phase1.local\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "may not be empty"):
+                _resolved_member_path(str(group_path), "   ")
+
+            self.assertEqual(_member_backend_type(child), "shelly_combined")
+            with self.assertRaisesRegex(ValueError, "Unsupported switch-group member key"):
+                _required_phase_label("P9")
+
+            parser = configparser.ConfigParser()
+            parser.read_dict({"Members": {"P1": "child.ini"}})
+            phase_members = _phase_members(str(group_path), parser["Members"])
+            self.assertEqual(phase_members["P1"].backend_type, "shelly_combined")
+
+            with self.assertRaisesRegex(ValueError, "requires a member config for P1"):
+                _validate_phase_members({"P2": phase_members["P1"]})
+            with self.assertRaisesRegex(ValueError, "requires P2"):
+                _validate_phase_members(
+                    {
+                        "P1": phase_members["P1"],
+                        "P3": SwitchGroupMember("P3", "template_switch", child),
+                    }
+                )
+            with self.assertRaisesRegex(ValueError, "must include P1"):
+                _validate_supported_phase_selection_list(["P1_P2"])
+
+            capabilities = configparser.ConfigParser()
+            capabilities.read_dict({"Capabilities": {"SupportedPhaseSelections": "P1,P1"}})
+            self.assertEqual(_supported_phase_selections(capabilities["Capabilities"], {"P1": phase_members["P1"]}), ("P1",))
+            capabilities.read_dict({"Capabilities": {"SupportedPhaseSelections": "P1_P2"}})
+            with self.assertRaisesRegex(ValueError, "unsupported phase selection"):
+                _supported_phase_selections(capabilities["Capabilities"], {"P1": phase_members["P1"]})
+
+            backend = SwitchGroupBackend.__new__(SwitchGroupBackend)
+            backend._selected_phase_selection = "P1"
+            backend.settings = SwitchGroupSettings(
+                phase_members={"P1": phase_members["P1"]},
+                phase_switch_targets={"P1": ("P1",)},
+                supported_phase_selections=("P1",),
+                switching_mode="direct",
+                requires_charge_pause_for_phase_change=False,
+                max_direct_switch_power_w=None,
+            )
+            self.assertEqual(backend._phase_selection_from_active_labels(frozenset({"P9"})), "P1")
+            self.assertIsNone(backend._aggregate_feedback_closed({}, frozenset({"P1"})))
+            self.assertFalse(
+                backend._aggregate_interlock_ok(
+                    {"P1": SwitchState(enabled=True, phase_selection="P1", interlock_ok=False)}
+                )
+            )
+            self.assertIsNone(backend._aggregate_interlock_ok({}))
+
+            with self.assertRaisesRegex(ValueError, "may not themselves be switch_group"):
+                _child_switch_backend(
+                    self._service(MagicMock()),
+                    SwitchGroupMember("P1", "switch_group", child),
+                )
+            with self.assertRaisesRegex(ValueError, "Unsupported switch-group child backend"):
+                _child_switch_backend(
+                    self._service(MagicMock()),
+                    SwitchGroupMember("P1", "missing_backend", child),
+                )
+
+            bad_backend = SimpleNamespace(
+                capabilities=MagicMock(
+                    return_value=SimpleNamespace(
+                        supported_phase_selections=("P1", "P1_P2"),
+                        switching_mode="direct",
+                        requires_charge_pause_for_phase_change=False,
+                        max_direct_switch_power_w=None,
+                    )
+                )
+            )
+            with self.assertRaisesRegex(ValueError, "single-phase support only"):
+                _validated_member_capabilities(phase_members["P1"], bad_backend)
+
+            with self.assertRaisesRegex(ValueError, "requires a config path"):
+                load_switch_group_settings(self._service(MagicMock()), "")

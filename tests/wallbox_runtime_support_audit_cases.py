@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import tempfile
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 from shelly_wallbox.runtime.support import RuntimeSupportController
 from tests.wallbox_runtime_support_support import RuntimeSupportTestCaseBase
@@ -59,3 +59,99 @@ class TestRuntimeSupportControllerAudit(RuntimeSupportTestCaseBase):
             with open(path, "r", encoding="utf-8") as handle:
                 payload = handle.read()
             self.assertIn("reason=waiting-surplus", payload)
+
+    def test_auto_audit_cleanup_helpers_cover_remaining_branches(self) -> None:
+        service = make_runtime_support_service(auto_audit_log_max_age_hours=0.0)
+        controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
+
+        self.assertIsNone(controller._auto_audit_cutoff_epoch(service, 1000.0))
+        self.assertFalse(controller._auto_audit_cleanup_due("", 1000.0))
+        self.assertTrue(controller._auto_audit_repeat_suppressed(("same",), ("same",), 0.0, 995.0, 1000.0))
+        self.assertFalse(controller._auto_audit_repeat_suppressed(("same",), ("other",), 30.0, 995.0, 1000.0))
+        self.assertIsNone(controller._auto_audit_reason_detail(service, "waiting"))
+
+        with patch("builtins.open", side_effect=RuntimeError("boom")):
+            self.assertIsNone(controller._load_auto_audit_lines("/tmp/missing.log"))
+        with patch("shelly_wallbox.runtime.audit.write_text_atomically", side_effect=RuntimeError("boom")):
+            controller._write_pruned_auto_audit_lines("/tmp/prune.log", ["x"])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = f"{temp_dir}/auto-reasons.log"
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("100\told\n")
+                handle.write("bad-line\n")
+                handle.write("400\tnew\n")
+            service = make_runtime_support_service(
+                _time_now=lambda: 1000.0,
+                auto_audit_log=True,
+                auto_audit_log_path=path,
+                auto_audit_log_max_age_hours=0.1,
+            )
+            controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
+            controller._cleanup_auto_audit_log(1000.0)
+            with open(path, "r", encoding="utf-8") as handle:
+                payload = handle.read()
+            self.assertIn("bad-line", payload)
+            self.assertNotIn("100\told", payload)
+
+    def test_auto_audit_event_covers_repeat_cleanup_reason_detail_and_empty_path(self) -> None:
+        service = make_runtime_support_service(
+            _time_now=lambda: 1000.0,
+            auto_audit_log=True,
+            auto_audit_log_path="",
+            auto_stop_condition_reason=object(),
+            _last_auto_metrics=make_auto_metrics(),
+        )
+        controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
+
+        self.assertIsNone(controller._auto_audit_reason_detail(service, "auto-stop"))
+
+        with patch.object(controller, "_cleanup_auto_audit_log") as cleanup_mock:
+            service._last_auto_audit_key = controller._auto_audit_key(service, "waiting-surplus", False)
+            service._last_auto_audit_event_at = 995.0
+            controller.write_auto_audit_event("waiting-surplus", cached=False)
+        cleanup_mock.assert_called_once_with(1000.0)
+
+        service._last_auto_audit_key = None
+        service._last_auto_audit_event_at = None
+        with patch.object(controller, "_cleanup_auto_audit_log") as cleanup_mock:
+            controller.write_auto_audit_event("waiting-surplus", cached=False)
+        cleanup_mock.assert_called_once_with(1000.0)
+
+    def test_auto_audit_cleanup_and_write_helpers_cover_cutoff_none_and_flat_paths(self) -> None:
+        service = make_runtime_support_service(auto_audit_log_max_age_hours=0.0)
+        controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
+
+        with patch.object(controller, "_auto_audit_cleanup_due", return_value=True), patch.object(
+            controller,
+            "_auto_audit_cutoff_epoch",
+            return_value=None,
+        ):
+            controller._cleanup_auto_audit_log(1000.0)
+
+        with patch("shelly_wallbox.runtime.audit.open", mock_open()) as open_mock:
+            controller._write_auto_audit_line("auto-reasons.log", "payload\n")
+        open_mock.assert_called_once_with("auto-reasons.log", "a", encoding="utf-8")
+
+    def test_runtime_audit_field_helpers_cover_lockout_feedback_and_fault_edges(self) -> None:
+        service = make_runtime_support_service(
+            _time_now=lambda: 100.0,
+            supported_phase_selections=("P1", "P1_P2"),
+            _phase_switch_lockout_selection="",
+            _phase_switch_lockout_until=120.0,
+            _last_switch_feedback_closed=None,
+            _last_switch_interlock_ok=None,
+            _last_health_reason="contactor-feedback-mismatch",
+            _contactor_fault_counts={"contactor-suspected-open": 2},
+            _contactor_fault_active_reason="contactor-suspected-open",
+        )
+        controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
+
+        self.assertIsNone(controller._phase_lockout_target_for_audit(service))
+        self.assertFalse(controller._phase_degraded_active_for_audit(service))
+        self.assertTrue(controller._switch_feedback_mismatch_for_audit(service))
+        self.assertEqual(controller._contactor_fault_count_for_audit(service), 2)
+
+        service._phase_switch_lockout_selection = None
+        with patch.object(type(controller), "_phase_lockout_active_for_audit", return_value=True):
+            self.assertIsNone(controller._phase_lockout_target_for_audit(service))

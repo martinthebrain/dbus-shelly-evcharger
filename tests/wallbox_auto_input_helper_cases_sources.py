@@ -42,6 +42,24 @@ class TestShellyWallboxAutoInputHelperSources(AutoInputHelperTestCase):
         self.assertEqual(helper._dbus_list_failures, 1)
         self.assertEqual(helper._dbus_list_backoff_until, 105.0)
 
+    def test_list_dbus_services_skips_backoff_cap_when_maximum_is_disabled(self):
+        helper = self._make_helper()
+        helper.auto_dbus_backoff_base_seconds = 5.0
+        helper.auto_dbus_backoff_max_seconds = 0.0
+        helper._reset_system_bus = MagicMock()
+        helper._get_system_bus = MagicMock(return_value=MagicMock(get_object=MagicMock(return_value=object())))
+        failing_interface = MagicMock()
+        failing_interface.ListNames.side_effect = RuntimeError("dbus down")
+        original_interface = shelly_wallbox_auto_input_helper.dbus.Interface
+        shelly_wallbox_auto_input_helper.dbus.Interface = MagicMock(return_value=failing_interface)
+        try:
+            with unittest.mock.patch("shelly_wallbox_auto_input_helper.time.time", return_value=100.0):
+                self.assertEqual(helper._list_dbus_services(), [])
+        finally:
+            shelly_wallbox_auto_input_helper.dbus.Interface = original_interface
+
+        self.assertEqual(helper._dbus_list_backoff_until, 105.0)
+
     def test_get_system_bus_always_caches_system_bus(self):
         helper = self._make_helper()
         original_session_bus = shelly_wallbox_auto_input_helper.dbus.SessionBus

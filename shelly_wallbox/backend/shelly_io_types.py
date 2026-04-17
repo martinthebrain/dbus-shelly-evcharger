@@ -91,31 +91,31 @@ class ShellyPmStatus(TypedDict, total=False):
 class _ResponseLike(Protocol):
     """Small protocol for requests-like responses used in tests and runtime."""
 
-    def raise_for_status(self) -> None: ...
+    def raise_for_status(self) -> None: ...  # pragma: no cover
 
-    def json(self) -> object: ...
+    def json(self) -> object: ...  # pragma: no cover
 
 
 class _SessionLike(Protocol):
     """Requests-session subset used by the Shelly I/O controller."""
 
-    def get(self, **kwargs: object) -> _ResponseLike: ...
+    def get(self, **kwargs: object) -> _ResponseLike: ...  # pragma: no cover
 
 
 class _WorkerStopEventLike(Protocol):
     """Threading event subset used by the background I/O worker."""
 
-    def is_set(self) -> bool: ...
+    def is_set(self) -> bool: ...  # pragma: no cover
 
-    def wait(self, timeout: float) -> bool: ...
+    def wait(self, timeout: float) -> bool: ...  # pragma: no cover
 
 
 class _WorkerThreadLike(Protocol):
     """Thread subset used for the optional background I/O worker."""
 
-    def is_alive(self) -> bool: ...
+    def is_alive(self) -> bool: ...  # pragma: no cover
 
-    def start(self) -> None: ...
+    def start(self) -> None: ...  # pragma: no cover
 
 
 class _RequestAuthKwargs(TypedDict, total=False):
@@ -194,38 +194,38 @@ class ShellyIoHost(Protocol):
     _charger_target_current_amps: float | None
     _charger_target_current_applied_at: float | None
 
-    def _time_now(self) -> float: ...
+    def _time_now(self) -> float: ...  # pragma: no cover
 
-    def _request(self, url: str) -> JsonObject: ...
+    def _request(self, url: str) -> JsonObject: ...  # pragma: no cover
 
-    def _request_with_session(self, session: object, url: str) -> JsonObject: ...
+    def _request_with_session(self, session: object, url: str) -> JsonObject: ...  # pragma: no cover
 
-    def rpc_call(self, method: str, **params: ShellyRpcScalar) -> JsonObject: ...
+    def rpc_call(self, method: str, **params: ShellyRpcScalar) -> JsonObject: ...  # pragma: no cover
 
     def _rpc_call_with_session(
         self,
         session: object,
         method: str,
         **params: ShellyRpcScalar,
-    ) -> JsonObject: ...
+    ) -> JsonObject: ...  # pragma: no cover
 
-    def _build_local_pm_status(self, relay_on: bool) -> ShellyPmStatus: ...
+    def _build_local_pm_status(self, relay_on: bool) -> ShellyPmStatus: ...  # pragma: no cover
 
-    def _publish_local_pm_status(self, relay_on: bool, now: float | None = None) -> ShellyPmStatus: ...
+    def _publish_local_pm_status(self, relay_on: bool, now: float | None = None) -> ShellyPmStatus: ...  # pragma: no cover
 
-    def _peek_pending_relay_command(self) -> PendingRelayCommand: ...
+    def _peek_pending_relay_command(self) -> PendingRelayCommand: ...  # pragma: no cover
 
-    def _clear_pending_relay_command(self, relay_on: bool) -> None: ...
+    def _clear_pending_relay_command(self, relay_on: bool) -> None: ...  # pragma: no cover
 
-    def _worker_fetch_pm_status(self) -> JsonObject: ...
+    def _worker_fetch_pm_status(self) -> JsonObject: ...  # pragma: no cover
 
-    def _worker_apply_pending_relay_command(self) -> None: ...
+    def _worker_apply_pending_relay_command(self) -> None: ...  # pragma: no cover
 
-    def _ensure_worker_state(self) -> None: ...
+    def _ensure_worker_state(self) -> None: ...  # pragma: no cover
 
-    def _update_worker_snapshot(self, **fields: object) -> None: ...
+    def _update_worker_snapshot(self, **fields: object) -> None: ...  # pragma: no cover
 
-    def _mark_failure(self, source_key: str) -> None: ...
+    def _mark_failure(self, source_key: str) -> None: ...  # pragma: no cover
 
     def _warning_throttled(
         self,
@@ -234,24 +234,24 @@ class ShellyIoHost(Protocol):
         message: str,
         *args: object,
         **kwargs: object,
-    ) -> None: ...
+    ) -> None: ...  # pragma: no cover
 
-    def _mark_recovery(self, source_key: str, message: str, *args: object) -> None: ...
+    def _mark_recovery(self, source_key: str, message: str, *args: object) -> None: ...  # pragma: no cover
 
-    def _source_retry_ready(self, source_key: str, now: float) -> bool: ...
+    def _source_retry_ready(self, source_key: str, now: float) -> bool: ...  # pragma: no cover
 
     def _delay_source_retry(
         self,
         source_key: str,
         now: float,
         delay_seconds: float | None = None,
-    ) -> None: ...
+    ) -> None: ...  # pragma: no cover
 
-    def _mark_relay_changed(self, relay_on: bool, changed_at: float) -> None: ...
+    def _mark_relay_changed(self, relay_on: bool, changed_at: float) -> None: ...  # pragma: no cover
 
-    def _mode_uses_auto_logic(self, mode: object) -> bool: ...
+    def _mode_uses_auto_logic(self, mode: object) -> bool: ...  # pragma: no cover
 
-    def _ensure_auto_input_helper_process(self) -> None: ...
+    def _ensure_auto_input_helper_process(self) -> None: ...  # pragma: no cover
 
 
 def normalize_supported_phase_tuple(

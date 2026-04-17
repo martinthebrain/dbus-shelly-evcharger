@@ -185,3 +185,19 @@ class TestShellyWallboxBackendSimpleEvseCharger(unittest.TestCase):
             _rounded_current_setting(81.0)
         with self.assertRaises(FileNotFoundError):
             SimpleEvseChargerBackend(self._service(), config_path="/definitely/missing.ini")
+
+    def test_simpleevse_reuses_preseeded_transport_when_client_is_created(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=simpleevse_charger\nTransport=tcp\n"
+                "[Transport]\nHost=192.168.1.50\nPort=502\nUnitId=1\n",
+            )
+            backend = SimpleEvseChargerBackend(self._service(), config_path=config_path)
+            backend._transport = _FakeSimpleEvseTransport()
+
+            with patch("shelly_wallbox.backend.simpleevse_charger.create_modbus_transport") as create_transport:
+                client = backend._client()
+
+            self.assertIs(client, backend._client_cache)
+            create_transport.assert_not_called()

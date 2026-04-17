@@ -29,36 +29,51 @@ class _FakeModbusTransport:
             19: 0,
         }
 
+    def _read_bits(self, request: ModbusRequest) -> bytes:
+        function_code = request.function_code
+        address = int.from_bytes(request.payload[0:2], "big")
+        count = int.from_bytes(request.payload[2:4], "big")
+        source = self.coils if function_code == 0x01 else self.discrete_inputs
+        values = [bool(source.get(address + index, False)) for index in range(count)]
+        byte_value = 0
+        for index, value in enumerate(values):
+            if value:
+                byte_value |= 1 << index
+        return bytes((function_code, 1, byte_value))
+
+    def _read_registers(self, request: ModbusRequest) -> bytes:
+        function_code = request.function_code
+        address = int.from_bytes(request.payload[0:2], "big")
+        count = int.from_bytes(request.payload[2:4], "big")
+        source = self.holding_registers if function_code == 0x03 else self.input_registers
+        registers = [int(source.get(address + index, 0)) for index in range(count)]
+        payload = b"".join(register.to_bytes(2, "big") for register in registers)
+        return bytes((function_code, len(payload))) + payload
+
+    def _write_coil(self, request: ModbusRequest) -> bytes:
+        address = int.from_bytes(request.payload[0:2], "big")
+        encoded = int.from_bytes(request.payload[2:4], "big")
+        self.coils[address] = encoded == 0xFF00
+        return bytes((request.function_code,)) + request.payload
+
+    def _write_register(self, request: ModbusRequest) -> bytes:
+        address = int.from_bytes(request.payload[0:2], "big")
+        value = int.from_bytes(request.payload[2:4], "big")
+        self.holding_registers[address] = value
+        return bytes((request.function_code,)) + request.payload
+
     def exchange(self, request: ModbusRequest, *, timeout_seconds: float) -> bytes:
+        del timeout_seconds
         self.requests.append(request)
         function_code = request.function_code
         if function_code in {0x01, 0x02}:
-            address = int.from_bytes(request.payload[0:2], "big")
-            count = int.from_bytes(request.payload[2:4], "big")
-            source = self.coils if function_code == 0x01 else self.discrete_inputs
-            values = [bool(source.get(address + index, False)) for index in range(count)]
-            byte_value = 0
-            for index, value in enumerate(values):
-                if value:
-                    byte_value |= 1 << index
-            return bytes((function_code, 1, byte_value))
+            return self._read_bits(request)
         if function_code in {0x03, 0x04}:
-            address = int.from_bytes(request.payload[0:2], "big")
-            count = int.from_bytes(request.payload[2:4], "big")
-            source = self.holding_registers if function_code == 0x03 else self.input_registers
-            registers = [int(source.get(address + index, 0)) for index in range(count)]
-            payload = b"".join(register.to_bytes(2, "big") for register in registers)
-            return bytes((function_code, len(payload))) + payload
+            return self._read_registers(request)
         if function_code == 0x05:
-            address = int.from_bytes(request.payload[0:2], "big")
-            encoded = int.from_bytes(request.payload[2:4], "big")
-            self.coils[address] = encoded == 0xFF00
-            return bytes((function_code,)) + request.payload
+            return self._write_coil(request)
         if function_code == 0x06:
-            address = int.from_bytes(request.payload[0:2], "big")
-            value = int.from_bytes(request.payload[2:4], "big")
-            self.holding_registers[address] = value
-            return bytes((function_code,)) + request.payload
+            return self._write_register(request)
         raise AssertionError(f"Unexpected Modbus function code {function_code}")
 
 
@@ -180,3 +195,21 @@ class TestShellyWallboxBackendModbusCharger(unittest.TestCase):
                 self.assertEqual(backend._phase_selection_cache, "P1")
                 with self.assertRaisesRegex(ValueError, "Unsupported phase selection"):
                     backend.set_phase_selection("P1_P2_P3")
+
+    def test_modbus_charger_reuses_preseeded_transport_when_client_is_created(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=modbus_charger\nProfile=generic\nTransport=tcp\n"
+                "[Transport]\nHost=192.168.1.40\nPort=502\nUnitId=7\n"
+                "[EnableWrite]\nRegisterType=coil\nAddress=20\nTrueValue=1\nFalseValue=0\n"
+                "[CurrentWrite]\nRegisterType=holding\nAddress=30\nDataType=uint16\nScale=10\n",
+            )
+            backend = ModbusChargerBackend(self._service(), config_path=config_path)
+            backend._transport = _FakeModbusTransport()
+
+            with patch("shelly_wallbox.backend.modbus_charger.create_modbus_transport") as create_transport:
+                client = backend._client()
+
+            self.assertIs(client, backend._client_cache)
+            create_transport.assert_not_called()

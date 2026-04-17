@@ -54,6 +54,54 @@ class TestUpdateCycleControllerQuattuordenary(UpdateCycleControllerTestBase):
         self.assertIsNone(service._charger_retry_source)
         self.assertIsNone(service._charger_retry_until)
 
+    def test_charger_current_failure_without_transport_reason_still_marks_failure(self):
+        service = SimpleNamespace(
+            auto_shelly_soft_fail_seconds=10.0,
+            _mark_failure=MagicMock(),
+            _warning_throttled=MagicMock(),
+        )
+
+        UpdateCycleController._handle_charger_current_target_failure(service, RuntimeError("boom"), now=100.0)
+
+        service._mark_failure.assert_called_once_with("charger")
+        service._warning_throttled.assert_called_once()
+
+    def test_remember_charger_retry_uses_source_retry_dict_without_delay_helper(self):
+        service = SimpleNamespace(
+            _source_retry_after={},
+            auto_dbus_backoff_base_seconds=5.0,
+        )
+
+        UpdateCycleController._remember_charger_retry(service, "offline", "read", 100.0)
+
+        self.assertEqual(service._source_retry_after["charger"], 120.0)
+
+    def test_remember_charger_retry_without_delay_helper_and_without_retry_dict_still_sets_runtime_state(self):
+        service = SimpleNamespace(
+            _source_retry_after=None,
+            auto_dbus_backoff_base_seconds=5.0,
+        )
+
+        UpdateCycleController._remember_charger_retry(service, "offline", "read", 100.0)
+
+        self.assertEqual(service._charger_retry_reason, "offline")
+        self.assertEqual(service._charger_retry_source, "read")
+        self.assertEqual(service._charger_retry_until, 120.0)
+
+    def test_relay_sync_confirmed_match_clears_tracking_without_recovery_log_when_not_failed(self):
+        service = SimpleNamespace(
+            _relay_sync_expected_state=True,
+            _relay_sync_requested_at=90.0,
+            _relay_sync_deadline_at=95.0,
+            _relay_sync_failure_reported=False,
+            _mark_recovery=MagicMock(),
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        self.assertTrue(controller._relay_sync_confirmed_match(service, True, True, True))
+        service._mark_recovery.assert_not_called()
+        self.assertIsNone(service._relay_sync_expected_state)
+
     def test_apply_relay_decision_marks_charger_failure_when_native_backend_raises(self):
         charger_backend = SimpleNamespace(set_enabled=MagicMock(side_effect=RuntimeError("boom")))
         service = SimpleNamespace(

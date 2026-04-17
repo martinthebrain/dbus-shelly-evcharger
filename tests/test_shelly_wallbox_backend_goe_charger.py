@@ -218,3 +218,16 @@ class TestShellyWallboxBackendGoECharger(unittest.TestCase):
 
             backend._observed_phase_selection = "P1"
             backend.set_phase_selection("P1")
+
+    def test_request_kwargs_omits_optional_params_and_auth_when_not_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=goe_charger\nBaseUrl=http://goe.local\n",
+            )
+            backend = GoEChargerBackend(self._service(MagicMock()), config_path=config_path)
+
+            self.assertEqual(
+                backend._request_kwargs("http://goe.local/api/status"),
+                {"url": "http://goe.local/api/status", "timeout": 2.0},
+            )

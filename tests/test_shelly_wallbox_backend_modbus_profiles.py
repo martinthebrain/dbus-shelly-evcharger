@@ -98,6 +98,24 @@ class TestShellyWallboxBackendModbusProfiles(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not expose phase selection writes"):
             profile.set_phase_selection(client, "P1")
 
+        profile = GenericModbusChargerProfile(
+            profile_name="generic",
+            supported_phase_selections=("P1",),
+            state_enabled=None,
+            state_current=None,
+            state_phase_selection=None,
+            state_actual_current=None,
+            state_power_watts=None,
+            state_energy_kwh=None,
+            state_status=None,
+            state_fault=None,
+            enable_write=ModbusEnableWrite("holding", 10, 1, 0),
+            current_write=ModbusNumericWrite("holding", 20, "uint16", 1.0, "big"),
+            phase_write=None,
+        )
+        state = profile.read_state(client, cached_enabled=True, cached_current_amps=16.0, cached_phase_selection="P1")
+        self.assertEqual(state.phase_selection, "P1")
+
     def test_modbus_profile_config_helpers_cover_validation_edges(self) -> None:
         section = self._parser("[Field]\n")["Field"]
         with self.assertRaisesRegex(ValueError, "requires Address"):

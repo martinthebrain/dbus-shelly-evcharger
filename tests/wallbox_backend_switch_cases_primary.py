@@ -89,6 +89,60 @@ class TestShellyWallboxBackendSwitchPrimary(SwitchBackendTestCaseBase):
         backend.set_enabled(True)
         service.set_relay.assert_called_once_with(True)
 
+    def test_combined_backend_covers_meter_capability_and_guard_paths(self) -> None:
+        service = SimpleNamespace(
+            phase=None,
+            max_current=None,
+            _last_voltage=None,
+            fetch_pm_status=MagicMock(return_value={"aenergy": {}, "apower": "bad", "voltage": "bad"}),
+            _peek_pending_relay_command=MagicMock(return_value=(None, None)),
+            _last_pm_status=object(),
+            set_relay=MagicMock(),
+        )
+        backend = ShellyCombinedBackend(service)
+
+        self.assertEqual(ShellyCombinedBackend._phase_selection_for_service(None), "P1")
+        self.assertEqual(ShellyCombinedBackend._phase_powers(9.0, None), (9.0, 0.0, 0.0))
+        self.assertIsNone(ShellyCombinedBackend._phase_currents(None, "L1"))
+
+        meter = backend.read_meter()
+        self.assertIsNone(meter.relay_on)
+        self.assertEqual(meter.power_w, 0.0)
+        self.assertEqual(meter.energy_kwh, 0.0)
+        self.assertEqual(meter.phase_selection, "P1")
+
+        capabilities = backend.capabilities()
+        self.assertIsNone(capabilities.max_direct_switch_power_w)
+        self.assertFalse(backend.read_switch_state().enabled)
+
+        backend.set_phase_selection("P1")
+        with self.assertRaisesRegex(ValueError, "single-phase"):
+            backend.set_phase_selection("P1_P2")
+
+    def test_combined_backend_covers_positive_current_and_direct_power_limit(self) -> None:
+        service = SimpleNamespace(
+            phase="3P",
+            max_current=16.0,
+            _last_voltage=230.0,
+            fetch_pm_status=MagicMock(
+                return_value={
+                    "output": True,
+                    "apower": 6900.0,
+                    "current": 12.0,
+                    "voltage": 230.0,
+                    "aenergy": {"total": 1200.0},
+                }
+            ),
+            _peek_pending_relay_command=MagicMock(return_value=(None, None)),
+            _last_pm_status={"output": True},
+            set_relay=MagicMock(),
+        )
+        backend = ShellyCombinedBackend(service)
+
+        self.assertEqual(ShellyCombinedBackend._phase_currents(12.0, "3P"), (4.0, 4.0, 4.0))
+        self.assertEqual(backend.read_meter().phase_currents_a, (4.0, 4.0, 4.0))
+        self.assertEqual(backend.capabilities().max_direct_switch_power_w, 3680.0)
+
     def test_shelly_switch_returns_selected_phase_when_active_channels_do_not_match_any_map(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = self._write_switch_config(temp_dir)

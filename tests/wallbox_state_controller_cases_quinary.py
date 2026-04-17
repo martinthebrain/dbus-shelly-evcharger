@@ -27,3 +27,21 @@ class TestServiceStateControllerQuinary(ServiceStateControllerTestBase):
         with patch.object(ServiceStateController, "config_path", return_value=os.path.join(parser.name, "missing.ini")):
             with self.assertRaises(ValueError):
                 missing_config_controller.load_config()
+
+    def test_runtime_restore_helpers_cover_non_dict_fault_and_mismatch_maps(self) -> None:
+        service = make_runtime_state_service()
+        controller = ServiceStateController(service, self._normalize_mode)
+
+        self.assertEqual(controller._normalized_phase_switch_mismatch_counts([], "P1"), {})
+        self.assertEqual(controller._normalized_contactor_fault_counts([]), {})
+
+    def test_runtime_override_pending_payload_requires_dict_values_and_text(self) -> None:
+        service = make_runtime_state_service(
+            runtime_overrides_path="/tmp/runtime.ini",
+            _runtime_overrides_pending_serialized='{"Mode":"1"}',
+            _runtime_overrides_pending_values=[],
+            _runtime_overrides_pending_text=None,
+        )
+        controller = ServiceStateController(service, self._normalize_mode)
+
+        self.assertIsNone(controller._pending_runtime_overrides_payload(service, "/tmp/runtime.ini"))

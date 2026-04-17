@@ -16,6 +16,8 @@ class TestWallboxPortsWrite(unittest.TestCase):
             _ = write_port.unknown_attr
         with self.assertRaises(AttributeError):
             write_port.unknown_attr = 1
+        with self.assertRaises(AttributeError):
+            write_port.clear_auto_samples()
 
     def test_port_allowed_methods_exist_on_service_class(self) -> None:
         source_text = "\n".join(Path(file_name).read_text(encoding="utf-8") for file_name in ("dbus_shelly_wallbox.py", "shelly_wallbox/service/auto.py", "shelly_wallbox/service/runtime.py", "shelly_wallbox/service/state_publish.py", "shelly_wallbox/service/update.py"))
@@ -115,3 +117,21 @@ class TestWallboxPortsWrite(unittest.TestCase):
         service._last_pm_status_confirmed = False
         service._last_pm_status_at = None
         self.assertTrue(port.relay_may_be_on_for_cutover())
+
+    def test_write_controller_port_covers_fresh_last_output_and_validation_fallback(self) -> None:
+        service = self._service()
+        service._peek_pending_relay_command = MagicMock(return_value=(None, None))
+        service._get_worker_snapshot.return_value = {"pm_status": None, "pm_confirmed": False}
+        service._last_confirmed_pm_status = None
+        service._last_confirmed_pm_status_at = None
+        service._last_pm_status = {"output": True}
+        service._last_pm_status_confirmed = True
+        service._last_pm_status_at = 99.5
+        service._worker_poll_interval_seconds = 1.0
+        service.relay_sync_timeout_seconds = 2.0
+        service._validate_runtime_config = None
+        port = WriteControllerPort(service)
+
+        self.assertTrue(port._fresh_last_output(100.0, 2.0))
+        self.assertTrue(port._fresh_confirmed_relay_output({"pm_status": None, "pm_confirmed": False}) is True)
+        self.assertIsNone(port.validate_runtime_config())

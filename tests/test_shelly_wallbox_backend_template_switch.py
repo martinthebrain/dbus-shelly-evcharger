@@ -232,3 +232,19 @@ class TestShellyWallboxBackendTemplateSwitch(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, r"requires \[StateResponse\] EnabledPath"):
                 TemplateSwitchBackend(self._service(MagicMock()), config_path=missing_enabled)
+
+    def test_template_switch_set_phase_selection_updates_cache_without_request_url(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=template_switch\nBaseUrl=http://adapter.local\n"
+                "[Capabilities]\nSupportedPhaseSelections=P1\n"
+                "[StateRequest]\nUrl=/switch/state\n"
+                "[StateResponse]\nEnabledPath=enabled\n"
+                "[CommandRequest]\nMethod=POST\nUrl=/switch/control\n",
+            )
+            backend = TemplateSwitchBackend(self._service(MagicMock()), config_path=config_path)
+
+            backend.set_phase_selection("P1")
+
+            self.assertEqual(backend._selected_phase_selection, "P1")

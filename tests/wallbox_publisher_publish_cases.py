@@ -196,6 +196,19 @@ class TestDbusPublishControllerPublish(DbusPublishControllerTestCase):
             ):
                 self.assertIsNone(controller._derived_learned_set_current(100.0))
 
+    def test_learned_display_helpers_cover_minimal_candidate_and_unbounded_current_edges(self) -> None:
+        service = SimpleNamespace(
+            _charger_backend=object(),
+            _dbus_live_publish_interval_seconds=0.0,
+            auto_shelly_soft_fail_seconds=0.0,
+            min_current=None,
+            max_current=0.0,
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        self.assertEqual(controller._charger_state_max_age_seconds(), 2.0)
+        self.assertEqual(controller._clamped_display_current(12.5), 12.5)
+
     def test_publish_transactional_removes_new_paths_when_group_write_fails(self) -> None:
         class FlakyDbusService(dict[str, int]):
             def __setitem__(self, key: str, value: int) -> None:

@@ -191,6 +191,36 @@ class TestUpdateCycleControllerTertiary(UpdateCycleControllerTestBase):
             self.assertTrue(service._software_update_available)
             self.assertEqual(service._software_update_available_version, "1.2.4")
 
+    def test_software_update_manifest_and_log_handle_helpers_cover_remaining_edges(self) -> None:
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = ["not-a-dict"]
+
+        with patch("shelly_wallbox.update.controller.requests.get", return_value=response):
+            self.assertEqual(
+                UpdateCycleController._software_update_manifest_result(
+                    "https://example.invalid/bootstrap_manifest.json",
+                    "1.2.3",
+                    "",
+                ),
+                ("", False, ""),
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            relative_log_path = str(Path(temp_dir) / "software-update.log")
+            log_handle = UpdateCycleController._software_update_log_handle(relative_log_path)
+            log_handle.close()
+
+        UpdateCycleController._close_open_log_handle(None)
+        service = self._software_update_service("/tmp")
+        service._software_update_process_log_handle = None
+        UpdateCycleController._close_software_update_log_handle(service)
+        with patch.object(UpdateCycleController, "_software_update_no_update_active", return_value=True):
+            self.assertEqual(
+                UpdateCycleController._software_update_availability_state(service, True),
+                "available-blocked",
+            )
+
     def test_software_update_run_and_poll_cover_process_lifecycle_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_root = Path(temp_dir)

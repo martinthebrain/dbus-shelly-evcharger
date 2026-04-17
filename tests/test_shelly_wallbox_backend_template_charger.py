@@ -260,6 +260,12 @@ class TestShellyWallboxBackendTemplateCharger(unittest.TestCase):
         cached = _TemplateChargerCachedState(enabled=True, current_amps=10.0, phase_selection="P1")
         self.assertEqual(backend._payload_phase_selection({}, cached), "P1")
         self.assertIsNone(backend._payload_text({}, None))
+        state = backend._state_from_payload({"enabled": True}, cached)
+        self.assertTrue(state.enabled)
+
+        cached_disabled = _TemplateChargerCachedState(enabled=False, current_amps=9.0, phase_selection="P1")
+        state = backend._state_from_payload({"enabled": True}, cached_disabled)
+        self.assertFalse(state.enabled)
 
         with self.assertRaisesRegex(ValueError, "Unsupported charger current"):
             backend.set_current(-1.0)

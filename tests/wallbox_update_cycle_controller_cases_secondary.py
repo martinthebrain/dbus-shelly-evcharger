@@ -181,6 +181,48 @@ class TestUpdateCycleControllerSecondary(UpdateCycleControllerTestBase):
         service._charger_backend = None
         self.assertIsNone(controller._charger_current_target_amps(service, True, 100.0, True))
 
+    def test_relay_helper_edges_cover_non_blocking_health_and_native_power_status(self):
+        service = _auto_phase_service(
+            _charger_backend=object(),
+            _last_charger_state_at=100.0,
+            _last_charger_state_power_w=1800.0,
+            auto_shelly_soft_fail_seconds=7.0,
+            _warning_throttled=MagicMock(),
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        with patch.object(controller, "charger_health_override", return_value="charger-fault"):
+            self.assertEqual(controller._blocking_charger_health(False, False, 100.0), "charger-fault")
+        service._warning_throttled.assert_not_called()
+
+        with patch.object(controller, "derive_status_code", return_value=7) as derive_status_code:
+            effective_power, status = controller._status_after_relay_decision(
+                True,
+                500.0,
+                True,
+                None,
+                100.0,
+            )
+
+        self.assertEqual(effective_power, 1800.0)
+        self.assertEqual(status, 7)
+        derive_status_code.assert_called_once()
+
+    def test_relay_mixin_startup_publish_falls_back_for_non_dict_helper_result(self):
+        svc = SimpleNamespace(
+            _publish_local_pm_status=MagicMock(return_value="ignored"),
+            auto_shelly_soft_fail_seconds=7.0,
+            _warning_throttled=MagicMock(),
+        )
+        controller = UpdateCycleController(svc, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        published = controller._publish_startup_local_pm_status({"output": False}, True, 100.0)
+
+        self.assertEqual(
+            published,
+            {"output": True, "apower": 0.0, "current": 0.0},
+        )
+
     def test_relay_mixin_direct_helper_edges_cover_shadowed_remaining_branches(self):
         svc = SimpleNamespace(
             _worker_poll_interval_seconds=None,
@@ -339,4 +381,15 @@ class TestUpdateCycleControllerSecondary(UpdateCycleControllerTestBase):
             self.assertEqual(
                 controller._resume_after_phase_switch_pause(service, False, 12.0, 3.0, True, 103.0, False),
                 (False, 12.0, 3.0, True),
+            )
+
+    def test_phase_switch_fallback_selection_uses_requested_selection_when_active_normalizes_empty(self):
+        svc = SimpleNamespace(active_phase_selection="", requested_phase_selection="P1_P2")
+        with patch(
+            "shelly_wallbox.update.relay_phase_switch_policy.normalize_phase_selection",
+            side_effect=["", "P1_P2"],
+        ):
+            self.assertEqual(
+                _UpdateCycleRelayMixin._phase_switch_fallback_selection(svc, None, "P1"),
+                "P1_P2",
             )

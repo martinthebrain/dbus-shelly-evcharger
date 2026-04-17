@@ -117,6 +117,38 @@ class TestAutoDecisionControllerPrimary(AutoDecisionControllerTestCase):
             self.assertFalse(controller._scheduled_night_decision(False, 100.0, False))
         self.assertEqual(service._last_health_reason, "waiting-offtime")
 
+    def test_relay_on_helpers_cover_auto_stop_grid_reporting_and_nonnumeric_time_source(self):
+        controller, service = self._make_controller()
+        service.auto_stop_delay_seconds = 30.0
+
+        with (
+            patch.object(controller, "_minimum_runtime_elapsed", return_value=True),
+            patch.object(controller, "_relay_on_stop_reason", return_value="auto-stop-grid"),
+            patch.object(controller, "_pending_stop_or_running", return_value=False) as pending_stop,
+        ):
+            self.assertFalse(controller._handle_relay_on(1000.0, 200.0, 60.0, True, 100.0, False))
+
+        self.assertEqual(pending_stop.call_args.kwargs["stop_key"], "auto-stop-grid")
+        self.assertEqual(pending_stop.call_args.args[1], "auto-stop")
+
+        service._time_now = lambda: "bad"
+        with patch("shelly_wallbox.auto.logic_samples.time.time", return_value=123.0):
+            self.assertEqual(controller._learning_policy_now(), 123.0)
+
+    def test_relay_on_helpers_keep_custom_stop_reason_reporting_outside_grid_and_soc(self):
+        controller, service = self._make_controller()
+        service.auto_stop_delay_seconds = 45.0
+
+        with (
+            patch.object(controller, "_minimum_runtime_elapsed", return_value=True),
+            patch.object(controller, "_relay_on_stop_reason", return_value="custom-stop"),
+            patch.object(controller, "_pending_stop_or_running", return_value=False) as pending_stop,
+        ):
+            self.assertFalse(controller._handle_relay_on(1000.0, 200.0, 60.0, True, 100.0, False))
+
+        self.assertEqual(pending_stop.call_args.args[1], "custom-stop")
+        self.assertEqual(pending_stop.call_args.kwargs["stop_key"], "custom-stop")
+
     def test_set_health_cached_updates_code_and_audit_log(self):
         controller, service = self._make_controller()
         service.auto_audit_log = True

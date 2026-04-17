@@ -7,7 +7,7 @@ from configparser import SectionProxy
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from shelly_wallbox.auto.policy import AutoPolicy
+    from shelly_wallbox.auto.policy import AutoPolicy  # pragma: no cover
 
 
 def _config_value(defaults: SectionProxy, key: str, fallback: Any) -> str:
