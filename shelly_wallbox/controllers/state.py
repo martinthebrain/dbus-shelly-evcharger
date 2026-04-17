@@ -840,15 +840,26 @@ class ServiceStateController:
             return
         payload = self.current_runtime_overrides()
         serialized = compact_json(payload)
-        pending_serialized = getattr(svc, "_runtime_overrides_pending_serialized", None)
         if serialized == getattr(svc, "_runtime_overrides_serialized", None):
-            if serialized == pending_serialized:
-                self._clear_pending_runtime_overrides(svc)
+            # The live runtime values have returned to the already persisted
+            # snapshot. Any staged future write would now be stale, regardless
+            # of whether it matches or differs from the current on-disk state.
+            self._clear_pending_runtime_overrides(svc)
             return
         rendered = self._runtime_override_ini_text(payload)
         current_time = self._runtime_now(svc)
         last_saved_at = self._coerce_optional_runtime_float(getattr(svc, "_runtime_overrides_last_saved_at", None))
+        pending_due_at = self._coerce_optional_runtime_float(getattr(svc, "_runtime_overrides_pending_due_at", None))
         min_interval = self._runtime_override_write_min_interval_seconds(svc)
+        if pending_due_at is not None and current_time < pending_due_at:
+            self._stage_runtime_overrides_write(
+                svc,
+                payload,
+                serialized,
+                rendered,
+                pending_due_at,
+            )
+            return
         if last_saved_at is not None and (current_time - last_saved_at) < min_interval:
             self._stage_runtime_overrides_write(
                 svc,
