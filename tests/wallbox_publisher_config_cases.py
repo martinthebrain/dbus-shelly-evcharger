@@ -1,0 +1,236 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+from tests.wallbox_publisher_support import (
+    DbusPublishController,
+    DbusPublishControllerTestCase,
+    MagicMock,
+    SimpleNamespace,
+)
+
+
+class TestDbusPublishControllerConfig(DbusPublishControllerTestCase):
+    def test_config_values_use_stable_learned_current_by_default(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            requested_phase_selection="P1_P2",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1", "P1_P2"),
+            min_current=6.0,
+            max_current=16.0,
+            auto_start_surplus_watts=1850.0,
+            auto_stop_surplus_watts=1350.0,
+            auto_min_soc=40.0,
+            auto_resume_soc=50.0,
+            auto_start_delay_seconds=10.0,
+            auto_stop_delay_seconds=30.0,
+            auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
+            auto_scheduled_night_start_delay_seconds=3600.0,
+            auto_scheduled_latest_end_time="06:30",
+            auto_scheduled_night_current_amps=13.0,
+            auto_dbus_backoff_base_seconds=5.0,
+            auto_dbus_backoff_max_seconds=60.0,
+            auto_grid_recovery_start_seconds=14.0,
+            auto_stop_surplus_delay_seconds=45.0,
+            auto_stop_surplus_volatility_low_watts=80.0,
+            auto_stop_surplus_volatility_high_watts=240.0,
+            auto_reference_charge_power_watts=2100.0,
+            auto_learn_charge_power_enabled=True,
+            auto_learn_charge_power_min_watts=1400.0,
+            auto_learn_charge_power_alpha=0.25,
+            auto_learn_charge_power_start_delay_seconds=12.0,
+            auto_learn_charge_power_window_seconds=180.0,
+            auto_learn_charge_power_max_age_seconds=21600.0,
+            auto_phase_switching_enabled=True,
+            auto_phase_prefer_lowest_when_idle=False,
+            auto_phase_upshift_delay_seconds=120.0,
+            auto_phase_downshift_delay_seconds=30.0,
+            auto_phase_upshift_headroom_watts=250.0,
+            auto_phase_downshift_margin_watts=150.0,
+            auto_phase_mismatch_retry_seconds=300.0,
+            auto_phase_mismatch_lockout_count=3,
+            auto_phase_mismatch_lockout_seconds=1800.0,
+            learned_charge_power_state="stable",
+            learned_charge_power_watts=2990.0,
+            learned_charge_power_updated_at=95.0,
+            learned_charge_power_phase="L1",
+            learned_charge_power_voltage=230.0,
+            phase="L1",
+            voltage_mode="phase",
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        values = controller._config_values(1, now=100.0)
+
+        self.assertEqual(values["/SetCurrent"], 13.0)
+        self.assertEqual(values["/PhaseSelection"], "P1_P2")
+        self.assertEqual(values["/PhaseSelectionActive"], "P1")
+        self.assertEqual(values["/SupportedPhaseSelections"], "P1,P1_P2")
+        self.assertEqual(values["/Auto/StartSurplusWatts"], 1850.0)
+        self.assertEqual(values["/Auto/StopSurplusWatts"], 1350.0)
+        self.assertEqual(values["/Auto/MinSoc"], 40.0)
+        self.assertEqual(values["/Auto/ResumeSoc"], 50.0)
+        self.assertEqual(values["/Auto/StartDelaySeconds"], 10.0)
+        self.assertEqual(values["/Auto/StopDelaySeconds"], 30.0)
+        self.assertEqual(values["/Auto/ScheduledEnabledDays"], "Mon,Tue,Wed,Thu,Fri")
+        self.assertEqual(values["/Auto/ScheduledFallbackDelaySeconds"], 3600.0)
+        self.assertEqual(values["/Auto/ScheduledLatestEndTime"], "06:30")
+        self.assertEqual(values["/Auto/ScheduledNightCurrent"], 13.0)
+        self.assertEqual(values["/Auto/DbusBackoffBaseSeconds"], 5.0)
+        self.assertEqual(values["/Auto/DbusBackoffMaxSeconds"], 60.0)
+        self.assertEqual(values["/Auto/GridRecoveryStartSeconds"], 14.0)
+        self.assertEqual(values["/Auto/StopSurplusDelaySeconds"], 45.0)
+        self.assertEqual(values["/Auto/StopSurplusVolatilityLowWatts"], 80.0)
+        self.assertEqual(values["/Auto/StopSurplusVolatilityHighWatts"], 240.0)
+        self.assertEqual(values["/Auto/ReferenceChargePowerWatts"], 2100.0)
+        self.assertEqual(values["/Auto/LearnChargePowerEnabled"], 1)
+        self.assertEqual(values["/Auto/LearnChargePowerMinWatts"], 1400.0)
+        self.assertEqual(values["/Auto/LearnChargePowerAlpha"], 0.25)
+        self.assertEqual(values["/Auto/LearnChargePowerStartDelaySeconds"], 12.0)
+        self.assertEqual(values["/Auto/LearnChargePowerWindowSeconds"], 180.0)
+        self.assertEqual(values["/Auto/LearnChargePowerMaxAgeSeconds"], 21600.0)
+        self.assertEqual(values["/Auto/PhaseSwitching"], 1)
+        self.assertEqual(values["/Auto/PhasePreferLowestWhenIdle"], 0)
+        self.assertEqual(values["/Auto/PhaseUpshiftDelaySeconds"], 120.0)
+        self.assertEqual(values["/Auto/PhaseDownshiftDelaySeconds"], 30.0)
+        self.assertEqual(values["/Auto/PhaseUpshiftHeadroomWatts"], 250.0)
+        self.assertEqual(values["/Auto/PhaseDownshiftMarginWatts"], 150.0)
+        self.assertEqual(values["/Auto/PhaseMismatchRetrySeconds"], 300.0)
+        self.assertEqual(values["/Auto/PhaseMismatchLockoutCount"], 3)
+        self.assertEqual(values["/Auto/PhaseMismatchLockoutSeconds"], 1800.0)
+
+    def test_config_values_can_disable_learned_current_display(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1",),
+            min_current=6.0,
+            max_current=16.0,
+            display_learned_set_current=0,
+            learned_charge_power_state="stable",
+            learned_charge_power_watts=2990.0,
+            learned_charge_power_updated_at=95.0,
+            learned_charge_power_phase="L1",
+            learned_charge_power_voltage=230.0,
+            phase="L1",
+            voltage_mode="phase",
+            auto_learn_charge_power_max_age_seconds=21600.0,
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        values = controller._config_values(1, now=100.0)
+
+        self.assertEqual(values["/SetCurrent"], 16.0)
+
+    def test_config_values_keep_actual_set_current_when_native_charger_backend_is_present(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_enable=1,
+            virtual_set_current=11.0,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1",),
+            min_current=6.0,
+            max_current=16.0,
+            learned_charge_power_state="stable",
+            learned_charge_power_watts=2990.0,
+            learned_charge_power_updated_at=95.0,
+            learned_charge_power_phase="L1",
+            learned_charge_power_voltage=230.0,
+            phase="L1",
+            voltage_mode="phase",
+            auto_learn_charge_power_max_age_seconds=21600.0,
+            _charger_backend=SimpleNamespace(set_current=MagicMock()),
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        values = controller._config_values(1, now=100.0)
+
+        self.assertEqual(values["/SetCurrent"], 11.0)
+
+    def test_config_values_degrade_supported_phase_selections_while_lockout_is_active(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1", "P1_P2", "P1_P2_P3"),
+            min_current=6.0,
+            max_current=16.0,
+            _phase_switch_lockout_selection="P1_P2_P3",
+            _phase_switch_lockout_until=140.0,
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        values = controller._config_values(1, now=100.0)
+
+        self.assertEqual(values["/SupportedPhaseSelections"], "P1,P1_P2")
+
+    def test_config_values_prefer_fresh_native_charger_readback_for_gui_state(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1",),
+            min_current=6.0,
+            max_current=16.0,
+            learned_charge_power_state="stable",
+            learned_charge_power_watts=2990.0,
+            learned_charge_power_updated_at=95.0,
+            learned_charge_power_phase="L1",
+            learned_charge_power_voltage=230.0,
+            phase="L1",
+            voltage_mode="phase",
+            auto_learn_charge_power_max_age_seconds=21600.0,
+            auto_shelly_soft_fail_seconds=10.0,
+            _charger_backend=SimpleNamespace(set_current=MagicMock()),
+            _last_charger_state_enabled=False,
+            _last_charger_state_current_amps=12.5,
+            _last_charger_state_status="paused",
+            _last_charger_state_fault="vehicle-sleeping",
+            _last_charger_state_at=99.5,
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        values = controller._config_values(1, now=100.0)
+
+        self.assertEqual(values["/Enable"], 0)
+        self.assertEqual(values["/StartStop"], 0)
+        self.assertEqual(values["/SetCurrent"], 12.5)
+
+    def test_config_values_convert_stable_three_phase_line_voltage_to_display_current(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=1,
+            virtual_autostart=1,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            requested_phase_selection="P1_P2_P3",
+            active_phase_selection="P1_P2_P3",
+            supported_phase_selections=("P1", "P1_P2_P3"),
+            min_current=6.0,
+            max_current=16.0,
+            learned_charge_power_state="stable",
+            learned_charge_power_watts=10400.0,
+            learned_charge_power_updated_at=95.0,
+            learned_charge_power_phase="3P",
+            learned_charge_power_voltage=400.0,
+            phase="3P",
+            voltage_mode="line_to_line",
+            auto_learn_charge_power_max_age_seconds=21600.0,
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        values = controller._config_values(1, now=100.0)
+
+        self.assertEqual(values["/SetCurrent"], 15.0)

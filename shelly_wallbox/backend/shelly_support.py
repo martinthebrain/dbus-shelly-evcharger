@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import configparser
-from dataclasses import dataclass
 from typing import Any, Mapping, cast
 from urllib.parse import urlencode
 
@@ -23,6 +22,7 @@ from .shelly_profiles import (
     resolve_shelly_profile,
     validate_shelly_profile_role,
 )
+from .shelly_support_types import ShellyBackendSettings, ShellySignalReadbackSettings
 from shelly_wallbox.core.contracts import finite_float_or_none, normalize_binary_flag
 from shelly_wallbox.backend.shelly_io import ShellyPmStatus, ShellyRpcScalar
 
@@ -188,38 +188,6 @@ def _single_phase_vector(total: float, single_phase_line: object) -> tuple[float
     if line == "L3":
         return 0.0, 0.0, total
     return total, 0.0, 0.0
-
-
-@dataclass(frozen=True)
-class ShellyBackendSettings:
-    """Normalized Shelly backend config independent from service defaults."""
-
-    profile_name: str | None
-    host: str
-    component: str
-    device_id: int
-    timeout_seconds: float
-    username: str
-    password: str
-    use_digest_auth: bool
-    phase_selection: PhaseSelection
-    switching_mode: SwitchingMode
-    supported_phase_selections: tuple[PhaseSelection, ...]
-    requires_charge_pause_for_phase_change: bool
-    max_direct_switch_power_w: float | None
-    phase_switch_targets: dict[PhaseSelection, tuple[int, ...]]
-    feedback_readback: ShellySignalReadbackSettings | None
-    interlock_readback: ShellySignalReadbackSettings | None
-
-
-@dataclass(frozen=True)
-class ShellySignalReadbackSettings:
-    """Optional Shelly RPC signal readback for feedback/interlock semantics."""
-
-    component: str
-    device_id: int
-    value_path: str
-    invert: bool
 
 
 def _config_value(defaults: configparser.SectionProxy, key: str, fallback: object) -> str:
