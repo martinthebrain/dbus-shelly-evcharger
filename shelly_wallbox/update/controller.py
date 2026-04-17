@@ -210,18 +210,45 @@ class UpdateCycleController(
             )
             svc._software_update_run_requested_at = None
             return False
+        if not restart_script or not os.path.isfile(restart_script):
+            cls._set_software_update_state(
+                svc,
+                "update-unavailable",
+                detail="restart script missing",
+                last_result="failed",
+            )
+            svc._software_update_run_requested_at = None
+            return False
 
         log_path = str(getattr(svc, "software_update_log_path", "") or "")
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        log_handle = open(log_path, "ab")  # pylint: disable=consider-using-with
-        command = ["/bin/bash", "-lc", f'cd "{repo_root}" && "./install.sh" && "{restart_script}"']
-        process = subprocess.Popen(  # pylint: disable=consider-using-with
-            command,
-            cwd=repo_root,
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+        log_handle = None
+        try:
+            log_dir = os.path.dirname(log_path)
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
+            log_handle = open(log_path, "ab")  # pylint: disable=consider-using-with
+            command = ["/bin/bash", "-lc", f'cd "{repo_root}" && "./install.sh" && "{restart_script}"']
+            process = subprocess.Popen(  # pylint: disable=consider-using-with
+                command,
+                cwd=repo_root,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except Exception as error:  # pylint: disable=broad-except
+            if log_handle is not None:
+                try:
+                    log_handle.close()
+                except OSError:
+                    pass
+            cls._set_software_update_state(
+                svc,
+                "install-failed",
+                detail=str(error),
+                last_result="failed",
+            )
+            svc._software_update_run_requested_at = None
+            return False
         svc._software_update_process = process
         svc._software_update_process_log_handle = log_handle
         svc._software_update_last_run_at = now

@@ -336,6 +336,21 @@ class TestUpdateCycleController(unittest.TestCase):
             self.assertIsNone(service._software_update_run_requested_at)
             self.assertIsNone(service._software_update_process)
 
+    def test_software_update_run_requires_restart_script(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            (repo_root / "install.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            service = self._software_update_service(temp_dir, _software_update_run_requested_at=50.0)
+            controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+            started = controller._start_software_update_run(service, 120.0, "manual")
+
+            self.assertFalse(started)
+            self.assertEqual(service._software_update_state, "update-unavailable")
+            self.assertEqual(service._software_update_detail, "restart script missing")
+            self.assertIsNone(service._software_update_run_requested_at)
+            self.assertIsNone(service._software_update_process)
+
     def test_software_update_housekeeping_starts_boot_delayed_run_when_due(self):
         service = self._software_update_service(
             "",
