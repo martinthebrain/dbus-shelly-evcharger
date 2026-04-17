@@ -122,11 +122,8 @@ installations.
 | `smartevse_charger` | Modbus | enable, disable, current, status, fault |
 | `modbus_charger` | Modbus | generic profile-driven charger mapping |
 
-For fixed one-, two-, or three-phase charger boards with current reporting and
-one configured phase layout, the charger config can declare that layout through
-`[Capabilities] SupportedPhaseSelections=...`. In meterless charger setups the
-service then publishes estimated power and energy and marks the estimate on
-DBus through `/Auto/ChargerEstimate*`.
+Backend examples, transport notes, charger-native topologies, and Modbus
+starter configs live in [CHARGER_BACKENDS.md](CHARGER_BACKENDS.md).
 
 ### External Phase Switching
 
@@ -228,11 +225,15 @@ Useful bootstrap variables:
 - `SHELLY_WALLBOX_BOOTSTRAP_PUBKEY`
 - `SHELLY_WALLBOX_REQUIRE_SIGNED_MANIFEST`
 
+The full installation walkthrough lives in [INSTALL.md](INSTALL.md).
+
 ## Configuration Guide
 
 The main deployment file is:
 
 - `deploy/venus/config.shelly_wallbox.ini`
+
+The full configuration guide lives in [CONFIGURATION.md](CONFIGURATION.md).
 
 Start with these settings:
 
@@ -275,35 +276,11 @@ python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-charger.ini
 
 ## Diagnostics And Operations
 
-Useful commands on a GX device:
+Operations and live DBus diagnostics are collected in
+[DIAGNOSTICS.md](DIAGNOSTICS.md).
 
-```bash
-svstat /service/dbus-shelly-wallbox
-svc -t /service/dbus-shelly-wallbox
-tail -f /var/volatile/log/dbus-shelly-wallbox/current
-tail -f /var/volatile/log/dbus-shelly-wallbox/auto-reasons.log
-```
-
-Useful backend-related DBus paths:
-
-- Backend composition:
-  `/Auto/BackendMode`, `/Auto/MeterBackend`, `/Auto/SwitchBackend`,
-  `/Auto/ChargerBackend`
-- Charger command health:
-  `/Auto/ChargerWriteErrors`, `/Auto/ChargerCurrentTarget`,
-  `/Auto/ChargerCurrentTargetAge`
-- Outward EVSE state:
-  `/Auto/StatusSource`, `/Auto/FaultActive`, `/Auto/FaultReason`,
-  `/Auto/RecoveryActive`
-- Phase and contactor state:
-  `/Auto/PhaseObserved`, `/Auto/PhaseMismatchActive`,
-  `/Auto/PhaseLockoutActive`, `/Auto/ContactorLockoutActive`
-- Feedback and interlock:
-  `/Auto/SwitchFeedbackClosed`, `/Auto/SwitchInterlockOk`,
-  `/Auto/LastSwitchFeedbackAge`
-
-These paths give a fast read on active backend composition, charger write
-health, phase state, contactor state, feedback state, and outward EVSE status.
+For common field issues and quick checks, see
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ## Design Spec And Contracts
 
@@ -338,3 +315,5 @@ boundaries for auto/update/backend/bootstrap concerns, and a growing set of
 tests around invariants, topologies, and outward-state contracts. That makes it
 straightforward to extend hardware support, policy layers, and diagnostics while
 keeping the visible behavior crisp.
+
+Contributor guidance lives in [CONTRIBUTING.md](CONTRIBUTING.md).
