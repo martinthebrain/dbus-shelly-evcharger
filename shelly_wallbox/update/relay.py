@@ -2247,7 +2247,14 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         now: float | None = None,
         health_reason: str | None = None,
     ) -> int:
-        """Translate relay/power state into the Venus EV charger status code."""
+        """Translate runtime state into the outward Venus EV charger status code.
+
+        The ordering here is intentional and treated as a compatibility
+        contract: hard EVSE-side faults first, then charger-native hard faults,
+        then fresh charger-native status text, and only then fallback inference
+        from relay/power state. This keeps the published truth stable when
+        meter, switch, feedback, and charger signals disagree.
+        """
         hard_fault_status = cls._hard_evse_fault_status_override(svc, health_reason)
         if hard_fault_status is not None:
             return hard_fault_status

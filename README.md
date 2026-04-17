@@ -206,9 +206,76 @@ bridge:
 
 - `/Auto/ScheduledState`
 - `/Auto/ScheduledStateCode`
+- `/Auto/ScheduledReason`
+- `/Auto/ScheduledReasonCode`
 - `/Auto/ScheduledNightBoostActive`
+- `/Auto/ScheduledTargetDayEnabled`
 - `/Auto/ScheduledTargetDay`
 - `/Auto/ScheduledTargetDate`
+- `/Auto/ScheduledFallbackStart`
+- `/Auto/ScheduledBoostUntil`
+
+## Outward Truth Priority
+
+When multiple internal signals disagree, the service does not try to publish
+"all truths at once". It resolves them in a fixed outward priority order so the
+Victron GUI, DBus consumers, and MQTT subscribers see one stable, debuggable
+truth.
+
+The intended priority order is:
+
+1. `manual override`
+2. hard EVSE fault / lockout
+3. safety / interlock / explicit contactor feedback fault
+4. retry / recovery / temporary blocked states
+5. scheduled night boost
+6. auto intent
+7. heuristics and fallback inference
+
+Practical consequences:
+
+- explicit EVSE-side faults beat charger-native "ready" or "charging" text
+- explicit switch feedback and interlock beat heuristic contactor suspicion
+- confirmed external phase observation beats contradictory native charger phase
+- retry/recovery remains visible diagnostically, but should not masquerade as a
+  hard fault unless a true fault condition is active
+
+This priority model is now covered by targeted tests and should be treated as a
+compatibility contract for future changes.
+
+## Supported Topologies
+
+The project supports a broad set of real-world charging setups, but not every
+combination is intentionally allowed.
+
+Normative support matrix:
+
+- `combined`
+  One normalized combined backend handles both meter and switch duties.
+- `split relay+meter`
+  Separate `meter` and `switch` backends, optionally with different hardware.
+- `native charger`
+  Split setups with charger-native control and no external switch:
+  `MeterType=none`, `SwitchType=none`, `ChargerType=<native/template charger>`.
+- `charger + external phase switch`
+  Native charger plus external switching/phase selection, for example
+  `ChargerType=simpleevse_charger` or `smartevse_charger` with
+  `SwitchType=switch_group`.
+- `meterless charger-native split`
+  Allowed when a charger backend can provide enough live state for synthesized
+  PM status.
+
+Normatively forbidden combinations:
+
+- `MeterType=none` in `combined` mode
+- `SwitchType=none` in `combined` mode
+- `MeterType=none` in `split` mode without a configured charger backend
+- `SwitchType=none` in `split` mode without a configured charger backend
+- runtime overrides changing structural backend selection such as `Mode`,
+  `MeterType`, `SwitchType`, `ChargerType`, or backend config paths in the
+  `[Backends]` section
+
+The probe and factory validation tests explicitly lock these rules down.
 
 ## Configuration
 
@@ -581,6 +648,24 @@ real service start, use:
 ```bash
 python3 -m shelly_wallbox.backend.probe validate-wallbox deploy/venus/config.shelly_wallbox.ini
 ```
+
+## Change Discipline
+
+When extending the service, especially around Auto logic, split backends, or
+new hardware integrations, use these questions first:
+
+1. Which truth is authoritative when signals disagree?
+2. What may persist across restart, and what must stay transient?
+3. Which configurations should remain explicitly forbidden?
+
+If a change cannot answer those three questions clearly, it is usually not done
+enough yet. In practice this means:
+
+- add or update a priority/invariant test before widening behavior
+- avoid promoting a heuristic to an outward truth when an explicit source
+  exists
+- keep runtime overrides for policy and tuning, not for structural topology
+  changes
 
 For `template_switch` adapters, `[StateResponse]` can now optionally expose
 two additional booleans:

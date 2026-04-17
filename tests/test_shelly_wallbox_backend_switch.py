@@ -257,6 +257,44 @@ class TestShellyWallboxBackendSwitch(unittest.TestCase):
                 ],
             )
 
+    def test_switch_group_keeps_feedback_and_interlock_unknown_until_all_members_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            p1_path = Path(temp_dir) / "phase1-switch.ini"
+            p2_path = Path(temp_dir) / "phase2-switch.ini"
+            path = Path(temp_dir) / "switch-group.ini"
+            p1_path.write_text(
+                "[Adapter]\nType=template_switch\nBaseUrl=http://phase1.local\n"
+                "[StateRequest]\nMethod=GET\nUrl=/state\n"
+                "[StateResponse]\nEnabledPath=data.enabled\nFeedbackClosedPath=data.feedback_closed\nInterlockOkPath=data.interlock_ok\n"
+                "[CommandRequest]\nMethod=POST\nUrl=/control\n",
+                encoding="utf-8",
+            )
+            p2_path.write_text(
+                "[Adapter]\nType=template_switch\nBaseUrl=http://phase2.local\n"
+                "[StateRequest]\nMethod=GET\nUrl=/state\n"
+                "[StateResponse]\nEnabledPath=data.enabled\n"
+                "[CommandRequest]\nMethod=POST\nUrl=/control\n",
+                encoding="utf-8",
+            )
+            path.write_text(
+                "[Adapter]\nType=switch_group\n"
+                "[Members]\nP1=phase1-switch.ini\nP2=phase2-switch.ini\n",
+                encoding="utf-8",
+            )
+            session = MagicMock()
+            session.get.side_effect = [
+                _FakeResponse({"data": {"enabled": True, "feedback_closed": True, "interlock_ok": True}}),
+                _FakeResponse({"data": {"enabled": False}}),
+            ]
+            backend = SwitchGroupBackend(self._service(session), config_path=str(path))
+
+            state = backend.read_switch_state()
+
+            self.assertTrue(state.enabled)
+            self.assertEqual(state.phase_selection, "P1")
+            self.assertIsNone(state.feedback_closed)
+            self.assertIsNone(state.interlock_ok)
+
     def test_contactor_mode_has_no_direct_switch_power_limit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "switch.ini"

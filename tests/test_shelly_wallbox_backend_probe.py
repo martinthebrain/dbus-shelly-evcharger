@@ -520,6 +520,107 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "MeterType=none requires a configured charger backend"):
                 validate_wallbox_config(wallbox_path)
 
+    def test_validate_wallbox_config_rejects_meterless_combined_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wallbox_path = self._write_config(
+                temp_dir,
+                "config.ini",
+                "[DEFAULT]\nHost=192.168.1.20\n"
+                "[Backends]\nMode=combined\nMeterType=none\nSwitchType=shelly_combined\nChargerType=\n",
+            )
+
+            with self.assertRaisesRegex(ValueError, "MeterType=none is only supported in split backend mode"):
+                validate_wallbox_config(wallbox_path)
+
+    def test_validate_wallbox_config_rejects_switchless_combined_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wallbox_path = self._write_config(
+                temp_dir,
+                "config.ini",
+                "[DEFAULT]\nHost=192.168.1.20\n"
+                "[Backends]\nMode=combined\nMeterType=shelly_combined\nSwitchType=none\nChargerType=\n",
+            )
+
+            with self.assertRaisesRegex(ValueError, "SwitchType=none is only supported in split backend mode"):
+                validate_wallbox_config(wallbox_path)
+
+    def test_validate_wallbox_config_accepts_representative_backend_matrix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            switch_path = self._write_config(
+                temp_dir,
+                "switch.ini",
+                "[Adapter]\nType=shelly_switch\nHost=192.168.1.21\nShellyProfile=switch_1ch_with_pm\n",
+            )
+            meter_path = self._write_config(
+                temp_dir,
+                "meter.ini",
+                "[Adapter]\nType=shelly_meter\nHost=192.168.1.22\nShellyProfile=em1_meter_single_or_dual\n",
+            )
+            modbus_charger_path = self._write_config(
+                temp_dir,
+                "modbus-charger.ini",
+                "[Adapter]\nType=modbus_charger\nProfile=generic\nTransport=serial_rtu\n"
+                "[Transport]\nDevice=/dev/ttyUSB0\nBaudrate=9600\nParity=N\nStopBits=1\nUnitId=7\n"
+                "[EnableWrite]\nRegisterType=coil\nAddress=20\nTrueValue=1\nFalseValue=0\n"
+                "[CurrentWrite]\nRegisterType=holding\nAddress=30\nDataType=uint16\nScale=10\n",
+            )
+            goe_charger_path = self._write_config(
+                temp_dir,
+                "goe-charger.ini",
+                "[Adapter]\nType=goe_charger\nBaseUrl=http://goe.local\n",
+            )
+            cases = (
+                (
+                    "combined-default",
+                    "[DEFAULT]\nHost=192.168.1.20\n",
+                    {"mode": "combined", "meter_type": "shelly_combined", "switch_type": "shelly_combined"},
+                    {"meter": True, "switch": True, "charger": False},
+                ),
+                (
+                    "split-meter-switch-modbus",
+                    "[DEFAULT]\nHost=192.168.1.20\n"
+                    "[Backends]\nMode=split\n"
+                    "MeterType=shelly_meter\n"
+                    f"MeterConfigPath={meter_path}\n"
+                    "SwitchType=shelly_switch\n"
+                    f"SwitchConfigPath={switch_path}\n"
+                    "ChargerType=modbus_charger\n"
+                    f"ChargerConfigPath={modbus_charger_path}\n",
+                    {
+                        "mode": "split",
+                        "meter_type": "shelly_meter",
+                        "switch_type": "shelly_switch",
+                        "charger_type": "modbus_charger",
+                    },
+                    {"meter": True, "switch": True, "charger": True},
+                ),
+                (
+                    "split-switchless-goe",
+                    "[DEFAULT]\nHost=192.168.1.20\n"
+                    "[Backends]\nMode=split\nMeterType=none\nSwitchType=none\n"
+                    "ChargerType=goe_charger\n"
+                    f"ChargerConfigPath={goe_charger_path}\n",
+                    {
+                        "mode": "split",
+                        "meter_type": "none",
+                        "switch_type": "none",
+                        "charger_type": "goe_charger",
+                    },
+                    {"meter": False, "switch": False, "charger": True},
+                ),
+            )
+
+            for name, payload, expected_selection, expected_roles in cases:
+                with self.subTest(name=name):
+                    wallbox_path = self._write_config(temp_dir, f"{name}.ini", payload)
+
+                    result = validate_wallbox_config(wallbox_path)
+                    selection = cast(dict[str, object], result["selection"])
+
+                    for key, value in expected_selection.items():
+                        self.assertEqual(selection[key], value)
+                    self.assertEqual(result["resolved_roles"], expected_roles)
+
     def test_probe_meter_command_prints_normalized_meter_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             meter_path = self._write_config(

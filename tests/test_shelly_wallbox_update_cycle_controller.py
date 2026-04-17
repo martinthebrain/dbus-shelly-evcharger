@@ -1109,6 +1109,68 @@ class TestUpdateCycleController(unittest.TestCase):
         self.assertEqual(service._phase_switch_lockout_at, 100.0)
         self.assertEqual(service._phase_switch_lockout_until, 160.0)
 
+    def test_phase_change_scenario_repeated_feedback_mismatches_escalate_to_lockout(self):
+        service = SimpleNamespace(
+            _phase_switch_pending_selection="P1_P2",
+            _phase_switch_state="stabilizing",
+            _phase_switch_requested_at=80.0,
+            _phase_switch_stable_until=81.0,
+            _phase_switch_resume_relay=True,
+            requested_phase_selection="P1_P2",
+            active_phase_selection="P1",
+            auto_shelly_soft_fail_seconds=10.0,
+            auto_phase_mismatch_lockout_count=2,
+            auto_phase_mismatch_lockout_seconds=60.0,
+            _phase_switch_mismatch_counts={},
+            _phase_switch_lockout_selection=None,
+            _phase_switch_lockout_reason="",
+            _phase_switch_lockout_at=None,
+            _phase_switch_lockout_until=None,
+            _peek_pending_relay_command=MagicMock(return_value=(None, None)),
+            _queue_relay_command=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _save_runtime_state=MagicMock(),
+            _mark_failure=MagicMock(),
+            _warning_throttled=MagicMock(),
+            _set_health=MagicMock(),
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        controller.orchestrate_pending_phase_switch(
+            {"output": False, "_phase_selection": "P1"},
+            False,
+            0.0,
+            0.0,
+            True,
+            100.0,
+            False,
+        )
+        self.assertEqual(service._phase_switch_mismatch_counts, {"P1_P2": 1})
+        self.assertIsNone(service._phase_switch_lockout_selection)
+
+        service._phase_switch_pending_selection = "P1_P2"
+        service._phase_switch_state = "stabilizing"
+        service._phase_switch_requested_at = 140.0
+        service._phase_switch_stable_until = 141.0
+        service._phase_switch_resume_relay = True
+        service.requested_phase_selection = "P1_P2"
+
+        controller.orchestrate_pending_phase_switch(
+            {"output": False, "_phase_selection": "P1"},
+            False,
+            0.0,
+            0.0,
+            True,
+            170.0,
+            False,
+        )
+
+        self.assertEqual(service._phase_switch_mismatch_counts, {"P1_P2": 2})
+        self.assertEqual(service._phase_switch_lockout_selection, "P1_P2")
+        self.assertEqual(service._phase_switch_lockout_reason, "mismatch-threshold")
+        self.assertEqual(service._phase_switch_lockout_at, 170.0)
+        self.assertEqual(service._phase_switch_lockout_until, 230.0)
+
     def test_update_learned_charge_power_ignores_unconfirmed_measurements(self):
         service = SimpleNamespace(
             charging_started_at=50.0,
@@ -2456,6 +2518,29 @@ class TestUpdateCycleController(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(service._last_status_source, "contactor-lockout-open")
 
+    def test_derive_status_code_prefers_contactor_lockout_over_fresh_native_charger_charging(self):
+        service = SimpleNamespace(
+            _charger_backend=SimpleNamespace(),
+            _last_charger_state_status="charging",
+            _last_charger_state_at=100.0,
+            _last_health_reason="contactor-lockout-open",
+            auto_shelly_soft_fail_seconds=10.0,
+            charging_threshold_watts=1500.0,
+            idle_status=1,
+        )
+
+        status = UpdateCycleController.derive_status_code(
+            service,
+            True,
+            2000.0,
+            True,
+            health_reason="contactor-lockout-open",
+            now=100.0,
+        )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(service._last_status_source, "contactor-lockout-open")
+
     def test_derive_status_code_maps_switch_feedback_mismatch_to_disconnected_fault_status(self):
         service = SimpleNamespace(
             _last_health_reason="contactor-feedback-mismatch",
@@ -2467,6 +2552,29 @@ class TestUpdateCycleController(unittest.TestCase):
             service,
             True,
             2000.0,
+            True,
+            health_reason="contactor-feedback-mismatch",
+            now=100.0,
+        )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(service._last_status_source, "contactor-feedback-fault")
+
+    def test_derive_status_code_prefers_feedback_fault_over_fresh_native_charger_ready(self):
+        service = SimpleNamespace(
+            _charger_backend=SimpleNamespace(),
+            _last_charger_state_status="ready",
+            _last_charger_state_at=100.0,
+            _last_health_reason="contactor-feedback-mismatch",
+            auto_shelly_soft_fail_seconds=10.0,
+            charging_threshold_watts=1500.0,
+            idle_status=6,
+        )
+
+        status = UpdateCycleController.derive_status_code(
+            service,
+            True,
+            0.0,
             True,
             health_reason="contactor-feedback-mismatch",
             now=100.0,
@@ -2490,6 +2598,21 @@ class TestUpdateCycleController(unittest.TestCase):
         self.assertEqual(status, 2)
         self.assertEqual(service._last_status_source, "charger-status-charging")
         self.assertEqual(service._last_charger_fault_active, 0)
+
+    def test_derive_status_code_keeps_native_charger_charging_truth_when_meter_power_is_zero(self):
+        service = SimpleNamespace(
+            _charger_backend=SimpleNamespace(),
+            _last_charger_state_status="charging",
+            _last_charger_state_at=100.0,
+            auto_shelly_soft_fail_seconds=10.0,
+            charging_threshold_watts=1500.0,
+            idle_status=6,
+        )
+
+        status = UpdateCycleController.derive_status_code(service, True, 0.0, True, 100.0)
+
+        self.assertEqual(status, 2)
+        self.assertEqual(service._last_status_source, "charger-status-charging")
 
     def test_derive_status_code_maps_fresh_native_charger_ready_status_to_idle_status(self):
         service = SimpleNamespace(
@@ -2710,6 +2833,99 @@ class TestUpdateCycleController(unittest.TestCase):
             controller.switch_feedback_health_override(service, True, True, 100.0),
             "contactor-feedback-mismatch",
         )
+
+    def test_switch_feedback_health_override_prefers_interlock_block_over_other_signals(self):
+        service = SimpleNamespace(
+            _last_switch_feedback_closed=True,
+            _last_switch_interlock_ok=False,
+            _last_switch_feedback_at=100.0,
+            _contactor_suspected_open_since=90.0,
+            _contactor_suspected_welded_since=91.0,
+            auto_shelly_soft_fail_seconds=10.0,
+        )
+        controller = UpdateCycleController(
+            service,
+            _phase_values,
+            lambda reason: {"contactor-interlock": 28, "contactor-feedback-mismatch": 29}.get(reason, 99),
+        )
+
+        self.assertEqual(
+            controller.switch_feedback_health_override(
+                service,
+                True,
+                True,
+                100.0,
+                power=2300.0,
+                current=10.0,
+                pm_confirmed=True,
+            ),
+            "contactor-interlock",
+        )
+        self.assertIsNone(service._contactor_suspected_open_since)
+        self.assertIsNone(service._contactor_suspected_welded_since)
+
+    def test_switch_feedback_health_override_prefers_explicit_open_feedback_over_open_contactor_heuristic(self):
+        service = SimpleNamespace(
+            _last_switch_feedback_closed=False,
+            _last_switch_interlock_ok=True,
+            _last_switch_feedback_at=100.0,
+            _contactor_suspected_open_since=90.0,
+            _contactor_suspected_welded_since=None,
+            _charger_backend=SimpleNamespace(),
+            _last_charger_state_status="charging",
+            _last_charger_state_at=100.0,
+            charging_threshold_watts=100.0,
+            min_current=6.0,
+            auto_shelly_soft_fail_seconds=10.0,
+        )
+        controller = UpdateCycleController(
+            service,
+            _phase_values,
+            lambda reason: {"contactor-interlock": 28, "contactor-feedback-mismatch": 29}.get(reason, 99),
+        )
+
+        self.assertEqual(
+            controller.switch_feedback_health_override(
+                service,
+                True,
+                True,
+                100.0,
+                power=0.0,
+                current=0.0,
+                pm_confirmed=True,
+            ),
+            "contactor-feedback-mismatch",
+        )
+        self.assertIsNone(service._contactor_suspected_open_since)
+
+    def test_switch_feedback_health_override_prefers_explicit_closed_feedback_over_welded_heuristic(self):
+        service = SimpleNamespace(
+            _last_switch_feedback_closed=True,
+            _last_switch_interlock_ok=True,
+            _last_switch_feedback_at=100.0,
+            _contactor_suspected_open_since=None,
+            _contactor_suspected_welded_since=90.0,
+            auto_shelly_soft_fail_seconds=10.0,
+        )
+        controller = UpdateCycleController(
+            service,
+            _phase_values,
+            lambda reason: {"contactor-interlock": 28, "contactor-feedback-mismatch": 29}.get(reason, 99),
+        )
+
+        self.assertEqual(
+            controller.switch_feedback_health_override(
+                service,
+                False,
+                False,
+                100.0,
+                power=2300.0,
+                current=10.0,
+                pm_confirmed=True,
+            ),
+            "contactor-feedback-mismatch",
+        )
+        self.assertIsNone(service._contactor_suspected_welded_since)
 
     def test_switch_feedback_health_override_suspects_welded_contactor_without_feedback(self):
         service = SimpleNamespace(
@@ -2973,6 +3189,227 @@ class TestUpdateCycleController(unittest.TestCase):
         self.assertEqual(service._contactor_lockout_source, "persistent")
         self.assertEqual(service._contactor_lockout_at, 126.0)
 
+    def test_contactor_feedback_scenario_ready_but_no_power_does_not_false_positive_as_open_fault(self):
+        service = SimpleNamespace(
+            _last_switch_feedback_closed=None,
+            _last_switch_interlock_ok=None,
+            _last_switch_feedback_at=None,
+            _contactor_suspected_open_since=None,
+            _contactor_suspected_welded_since=None,
+            _charger_backend=object(),
+            _last_charger_state_at=100.0,
+            _last_charger_state_status="ready",
+            _last_charger_state_power_w=0.0,
+            _last_charger_state_actual_current_amps=0.0,
+            charging_threshold_watts=100.0,
+            min_current=6.0,
+            auto_shelly_soft_fail_seconds=10.0,
+        )
+        controller = UpdateCycleController(
+            service,
+            _phase_values,
+            lambda reason: {"contactor-suspected-open": 30}.get(reason, 99),
+        )
+
+        self.assertIsNone(
+            controller.switch_feedback_health_override(
+                service,
+                True,
+                True,
+                100.0,
+                power=0.0,
+                current=0.0,
+                pm_confirmed=True,
+            )
+        )
+        self.assertIsNone(service._contactor_suspected_open_since)
+
+        service._last_charger_state_at = 110.0
+        self.assertIsNone(
+            controller.switch_feedback_health_override(
+                service,
+                True,
+                True,
+                110.0,
+                power=0.0,
+                current=0.0,
+                pm_confirmed=True,
+            )
+        )
+        self.assertIsNone(service._contactor_suspected_open_since)
+
+    def test_contactor_feedback_scenario_stuck_welded_escalates_from_suspicion_to_lockout(self):
+        service = SimpleNamespace(
+            _last_switch_feedback_closed=None,
+            _last_switch_interlock_ok=None,
+            _last_switch_feedback_at=None,
+            _contactor_suspected_open_since=None,
+            _contactor_suspected_welded_since=None,
+            _contactor_fault_counts={},
+            _contactor_fault_active_reason=None,
+            _contactor_fault_active_since=None,
+            _contactor_lockout_reason="",
+            _contactor_lockout_source="",
+            _contactor_lockout_at=None,
+            _charger_backend=None,
+            charging_threshold_watts=100.0,
+            min_current=6.0,
+            auto_shelly_soft_fail_seconds=10.0,
+            auto_contactor_fault_latch_count=2,
+            auto_contactor_fault_latch_seconds=120.0,
+        )
+        controller = UpdateCycleController(
+            service,
+            _phase_values,
+            lambda reason: {
+                "contactor-suspected-welded": 31,
+                "contactor-lockout-welded": 33,
+            }.get(reason, 99),
+        )
+
+        self.assertIsNone(
+            controller.switch_feedback_health_override(
+                service,
+                False,
+                False,
+                100.0,
+                power=1200.0,
+                current=5.2,
+                pm_confirmed=True,
+            )
+        )
+        self.assertEqual(service._contactor_suspected_welded_since, 100.0)
+
+        self.assertEqual(
+            controller.switch_feedback_health_override(
+                service,
+                False,
+                False,
+                111.0,
+                power=1200.0,
+                current=5.2,
+                pm_confirmed=True,
+            ),
+            "contactor-suspected-welded",
+        )
+        self.assertEqual(service._contactor_fault_counts, {"contactor-suspected-welded": 1})
+
+        self.assertIsNone(
+            controller.switch_feedback_health_override(
+                service,
+                False,
+                False,
+                112.0,
+                power=0.0,
+                current=0.0,
+                pm_confirmed=True,
+            )
+        )
+
+        self.assertIsNone(
+            controller.switch_feedback_health_override(
+                service,
+                False,
+                False,
+                113.0,
+                power=1200.0,
+                current=5.2,
+                pm_confirmed=True,
+            )
+        )
+
+        self.assertEqual(
+            controller.switch_feedback_health_override(
+                service,
+                False,
+                False,
+                124.0,
+                power=1200.0,
+                current=5.2,
+                pm_confirmed=True,
+            ),
+            "contactor-lockout-welded",
+        )
+        self.assertEqual(service._contactor_lockout_reason, "contactor-suspected-welded")
+        self.assertEqual(service._contactor_lockout_source, "count-threshold")
+
+    def test_contactor_feedback_scenario_stuck_open_escalates_from_suspicion_to_lockout(self):
+        service = SimpleNamespace(
+            _last_switch_feedback_closed=None,
+            _last_switch_interlock_ok=None,
+            _last_switch_feedback_at=None,
+            _contactor_suspected_open_since=None,
+            _contactor_suspected_welded_since=None,
+            _contactor_fault_counts={},
+            _contactor_fault_active_reason=None,
+            _contactor_fault_active_since=None,
+            _contactor_lockout_reason="",
+            _contactor_lockout_source="",
+            _contactor_lockout_at=None,
+            _charger_backend=object(),
+            _last_charger_state_at=100.0,
+            _last_charger_state_status="charging",
+            _last_charger_state_power_w=0.0,
+            _last_charger_state_actual_current_amps=0.0,
+            charging_threshold_watts=100.0,
+            min_current=6.0,
+            auto_shelly_soft_fail_seconds=10.0,
+            auto_contactor_fault_latch_count=3,
+            auto_contactor_fault_latch_seconds=15.0,
+        )
+        controller = UpdateCycleController(
+            service,
+            _phase_values,
+            lambda reason: {
+                "contactor-suspected-open": 30,
+                "contactor-lockout-open": 32,
+            }.get(reason, 99),
+        )
+
+        self.assertIsNone(
+            controller.switch_feedback_health_override(
+                service,
+                True,
+                True,
+                100.0,
+                power=0.0,
+                current=0.0,
+                pm_confirmed=True,
+            )
+        )
+        self.assertEqual(service._contactor_suspected_open_since, 100.0)
+
+        service._last_charger_state_at = 110.0
+        self.assertEqual(
+            controller.switch_feedback_health_override(
+                service,
+                True,
+                True,
+                110.0,
+                power=0.0,
+                current=0.0,
+                pm_confirmed=True,
+            ),
+            "contactor-suspected-open",
+        )
+        self.assertEqual(service._contactor_fault_counts, {"contactor-suspected-open": 1})
+
+        service._last_charger_state_at = 126.0
+        self.assertEqual(
+            controller.switch_feedback_health_override(
+                service,
+                True,
+                True,
+                126.0,
+                power=0.0,
+                current=0.0,
+                pm_confirmed=True,
+            ),
+            "contactor-lockout-open",
+        )
+        self.assertEqual(service._contactor_lockout_reason, "contactor-suspected-open")
+        self.assertEqual(service._contactor_lockout_source, "persistent")
+
     def test_apply_charger_current_target_prefers_stable_learned_current(self):
         charger_backend = SimpleNamespace(set_current=MagicMock())
         service = SimpleNamespace(
@@ -3147,6 +3584,57 @@ class TestUpdateCycleController(unittest.TestCase):
 
         self.assertEqual(applied, 9.0)
         charger_backend.set_current.assert_not_called()
+
+    def test_charger_current_scenario_offline_backoff_then_retry_after_window(self):
+        charger_backend = SimpleNamespace(
+            set_current=MagicMock(
+                side_effect=[
+                    ModbusSlaveOfflineError("Modbus slave 1 did not respond"),
+                    None,
+                ]
+            )
+        )
+        service = SimpleNamespace(
+            _charger_backend=charger_backend,
+            auto_shelly_soft_fail_seconds=10.0,
+            _mark_failure=MagicMock(),
+            _mark_recovery=MagicMock(),
+            _warning_throttled=MagicMock(),
+            _delay_source_retry=MagicMock(),
+            virtual_set_current=11.0,
+            min_current=6.0,
+            max_current=16.0,
+            learned_charge_power_state="unknown",
+            learned_charge_power_watts=None,
+            learned_charge_power_updated_at=None,
+            learned_charge_power_phase="L1",
+            learned_charge_power_voltage=230.0,
+            phase="L1",
+            voltage_mode="phase",
+            auto_dbus_backoff_base_seconds=5.0,
+            auto_learn_charge_power_max_age_seconds=21600.0,
+            _charger_target_current_amps=None,
+            _charger_target_current_applied_at=None,
+            _charger_retry_reason=None,
+            _charger_retry_source=None,
+            _charger_retry_until=None,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        first = controller.apply_charger_current_target(service, True, 100.0, True)
+        second = controller.apply_charger_current_target(service, True, 105.0, True)
+        third = controller.apply_charger_current_target(service, True, 121.0, True)
+
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(third, 11.0)
+        self.assertEqual(charger_backend.set_current.call_count, 2)
+        charger_backend.set_current.assert_called_with(11.0)
+        self.assertEqual(service._charger_target_current_amps, 11.0)
+        self.assertEqual(service._charger_target_current_applied_at, 121.0)
+        self.assertIsNone(service._charger_retry_reason)
+        self.assertIsNone(service._charger_retry_source)
+        self.assertIsNone(service._charger_retry_until)
 
     def test_apply_relay_decision_marks_charger_failure_when_native_backend_raises(self):
         charger_backend = SimpleNamespace(set_enabled=MagicMock(side_effect=RuntimeError("boom")))

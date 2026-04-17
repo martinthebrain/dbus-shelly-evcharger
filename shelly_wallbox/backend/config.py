@@ -42,7 +42,13 @@ def _backends_section(config: configparser.ConfigParser) -> configparser.Section
 
 
 def validate_backend_selection(selection: BackendSelection) -> BackendSelection:
-    """Return one validated backend selection or raise on unsupported combinations."""
+    """Return one validated backend selection or raise on unsupported combinations.
+
+    This is the normative topology gate for the service. Runtime overrides may
+    tune policy and behavior, but they must not widen this structural backend
+    space implicitly. If a topology should stay forbidden in the product, it
+    should be rejected here explicitly.
+    """
     if selection.meter_type == "none" and selection.mode != "split":
         raise ValueError("MeterType=none is only supported in split backend mode")
     if selection.switch_type == "none" and selection.mode != "split":

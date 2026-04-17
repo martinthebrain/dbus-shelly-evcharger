@@ -610,3 +610,43 @@ class TestShellyWallboxBackendFactory(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "SwitchType=none requires a configured charger backend"):
             build_service_backends(service)
+
+    def test_build_service_backends_rejects_meterless_combined_mode(self) -> None:
+        service = SimpleNamespace(
+            backend_mode="combined",
+            meter_backend_type="none",
+            switch_backend_type="shelly_combined",
+            charger_backend_type=None,
+            meter_backend_config_path="",
+            switch_backend_config_path="",
+            charger_backend_config_path="",
+            phase="L1",
+            host="192.168.1.20",
+            pm_component="Switch",
+            pm_id=0,
+            max_current=16.0,
+            session=MagicMock(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "MeterType=none is only supported in split backend mode"):
+            build_service_backends(service)
+
+    def test_build_service_backends_rejects_switchless_combined_mode(self) -> None:
+        service = SimpleNamespace(
+            backend_mode="combined",
+            meter_backend_type="shelly_combined",
+            switch_backend_type="none",
+            charger_backend_type=None,
+            meter_backend_config_path="",
+            switch_backend_config_path="",
+            charger_backend_config_path="",
+            phase="L1",
+            host="192.168.1.20",
+            pm_component="Switch",
+            pm_id=0,
+            max_current=16.0,
+            session=MagicMock(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "SwitchType=none is only supported in split backend mode"):
+            build_service_backends(service)
