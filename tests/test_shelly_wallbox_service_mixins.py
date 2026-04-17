@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 sys.modules["vedbus"] = MagicMock()
 
+from shelly_wallbox.service.factory import ServiceControllerFactoryMixin
 from shelly_wallbox.service.auto import DbusAutoLogicMixin
 from shelly_wallbox.service.runtime import RuntimeHelperMixin
 from shelly_wallbox.service.state_publish import StatePublishMixin
@@ -49,6 +50,20 @@ class _StateService(StatePublishMixin):
         return None
 
 
+class _FactoryService(ServiceControllerFactoryMixin):
+    _normalize_mode_func = staticmethod(lambda value: int(value))
+    _mode_uses_auto_logic_func = staticmethod(lambda mode: bool(mode))
+    _normalize_phase_func = staticmethod(lambda value: str(value))
+    _month_window_func = staticmethod(lambda *args, **kwargs: None)
+    _age_seconds_func = staticmethod(lambda _captured_at, _now: 0)
+    _health_code_func = staticmethod(lambda _reason: 0)
+    _phase_values_func = staticmethod(lambda *args, **kwargs: {})
+    _read_version_func = staticmethod(lambda _path: "")
+    _gobject_module = MagicMock()
+    _script_path_value = ""
+    _formatter_bundle = {}
+
+
 class TestShellyWallboxServiceMixins(unittest.TestCase):
     def test_runtime_helper_mixin_delegates_runtime_supervisor_and_io_calls(self):
         service = _RuntimeService()
@@ -74,7 +89,9 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service._mark_failure("dbus")
         service._mark_recovery("dbus", "recovered %s", "ok")
         service._source_retry_ready("dbus", 12.0)
+        service._source_retry_remaining("dbus", 12.0)
         service._delay_source_retry("dbus", 12.0)
+        service._delay_source_retry("dbus", 12.0, 7.0)
         service._stop_auto_input_helper(force=True)
         service._spawn_auto_input_helper(12.0)
         service._ensure_auto_input_helper_process(12.0)
@@ -96,6 +113,8 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service.fetch_rpc("Shelly.GetDeviceInfo")
         service.fetch_pm_status()
         service.set_relay(True)
+        service._phase_selection_requires_pause()
+        service._apply_phase_selection("P1_P2")
 
         runtime = service._runtime_support_controller
         runtime.reset_system_bus.assert_called_once_with()
@@ -116,7 +135,9 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         runtime.mark_failure.assert_called_once_with("dbus")
         runtime.mark_recovery.assert_called_once_with("dbus", "recovered %s", "ok")
         runtime.source_retry_ready.assert_called_once_with("dbus", 12.0)
-        runtime.delay_source_retry.assert_called_once_with("dbus", 12.0)
+        runtime.source_retry_remaining.assert_called_once_with("dbus", 12.0)
+        runtime.delay_source_retry.assert_any_call("dbus", 12.0)
+        runtime.delay_source_retry.assert_any_call("dbus", 12.0, 7.0)
         service._auto_input_supervisor.stop_helper.assert_called_once_with(True)
         service._auto_input_supervisor.spawn_helper.assert_called_once_with(12.0)
         service._auto_input_supervisor.ensure_helper_process.assert_called_once_with(12.0)
@@ -139,6 +160,8 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         io.rpc_call.assert_any_call("Shelly.GetDeviceInfo")
         io.fetch_pm_status.assert_called_once_with()
         io.set_relay.assert_called_once_with(True)
+        io.phase_selection_requires_pause.assert_called_once_with()
+        io.set_phase_selection.assert_called_once_with("P1_P2")
 
     def test_update_cycle_mixin_delegates_all_calls(self):
         service = _UpdateService()
@@ -213,6 +236,8 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service._current_runtime_state()
         service._load_runtime_state()
         service._save_runtime_state()
+        service._save_runtime_overrides()
+        service._flush_runtime_overrides(100.0)
         service._validate_runtime_config()
         service._load_config()
         service._ensure_dbus_publish_state()
@@ -228,6 +253,8 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         state.current_runtime_state.assert_called_once_with()
         state.load_runtime_state.assert_called_once_with()
         state.save_runtime_state.assert_called_once_with()
+        state.save_runtime_overrides.assert_called_once_with()
+        state.flush_runtime_overrides.assert_called_once_with(100.0)
         state.validate_runtime_config.assert_called_once_with()
         state.load_config.assert_called_once_with()
         publisher = service._dbus_publisher
@@ -246,7 +273,42 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         self.assertEqual(cloned["pm_status"], {"output": True})
         defaults = service._observability_state_defaults()
         self.assertIn("_error_state", defaults)
-        self.assertIn("_warning_state", defaults)
+
+    def test_service_controller_factory_skips_recreating_existing_controllers(self):
+        service = _FactoryService()
+        existing = object()
+        service._dbus_publisher = existing
+        service._auto_controller = existing
+        service._shelly_io_controller = existing
+        service._state_controller = existing
+        service._write_controller = existing
+        service._auto_input_supervisor = existing
+        service._runtime_support_controller = existing
+        service._dbus_input_controller = existing
+        service._bootstrap_controller = existing
+        service._update_controller = existing
+
+        service._ensure_dbus_publisher()
+        service._ensure_auto_controller()
+        service._ensure_shelly_io_controller()
+        service._ensure_state_controller()
+        service._ensure_write_controller()
+        service._ensure_auto_input_supervisor()
+        service._ensure_runtime_support_controller()
+        service._ensure_dbus_input_controller()
+        service._ensure_bootstrap_controller()
+        service._ensure_update_controller()
+
+        self.assertIs(service._dbus_publisher, existing)
+        self.assertIs(service._auto_controller, existing)
+        self.assertIs(service._shelly_io_controller, existing)
+        self.assertIs(service._state_controller, existing)
+        self.assertIs(service._write_controller, existing)
+        self.assertIs(service._auto_input_supervisor, existing)
+        self.assertIs(service._runtime_support_controller, existing)
+        self.assertIs(service._dbus_input_controller, existing)
+        self.assertIs(service._bootstrap_controller, existing)
+        self.assertIs(service._update_controller, existing)
 
     def test_auto_logic_mixin_delegates_and_exposes_static_helpers(self):
         service = _AutoService()

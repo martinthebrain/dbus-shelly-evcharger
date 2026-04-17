@@ -49,15 +49,29 @@ def validate_backend_selection(selection: BackendSelection) -> BackendSelection:
     space implicitly. If a topology should stay forbidden in the product, it
     should be rejected here explicitly.
     """
-    if selection.meter_type == "none" and selection.mode != "split":
-        raise ValueError("MeterType=none is only supported in split backend mode")
-    if selection.switch_type == "none" and selection.mode != "split":
-        raise ValueError("SwitchType=none is only supported in split backend mode")
-    if selection.meter_type == "none" and selection.charger_type is None:
-        raise ValueError("MeterType=none requires a configured charger backend")
-    if selection.switch_type == "none" and selection.charger_type is None:
-        raise ValueError("SwitchType=none requires a configured charger backend")
+    for message in _backend_selection_validation_errors(selection):
+        raise ValueError(message)
     return selection
+
+
+def _backend_selection_validation_errors(selection: BackendSelection) -> tuple[str, ...]:
+    """Return all structural backend validation errors for one selection."""
+    errors: list[str] = []
+    if selection.meter_type == "none":
+        errors.extend(_missing_backend_errors(selection.mode, selection.charger_type, "MeterType"))
+    if selection.switch_type == "none":
+        errors.extend(_missing_backend_errors(selection.mode, selection.charger_type, "SwitchType"))
+    return tuple(errors)
+
+
+def _missing_backend_errors(mode: BackendMode, charger_type: str | None, field_name: str) -> list[str]:
+    """Return validation errors for one backend field set to ``none``."""
+    errors: list[str] = []
+    if mode != "split":
+        errors.append(f"{field_name}=none is only supported in split backend mode")
+    if charger_type is None:
+        errors.append(f"{field_name}=none requires a configured charger backend")
+    return errors
 
 
 def load_backend_selection(config: configparser.ConfigParser) -> BackendSelection:

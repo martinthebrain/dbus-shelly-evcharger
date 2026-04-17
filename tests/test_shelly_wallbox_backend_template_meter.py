@@ -5,7 +5,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from shelly_wallbox.backend.template_meter import TemplateMeterBackend
+from shelly_wallbox.backend.template_meter import (
+    TemplateMeterBackend,
+    TemplateMeterSettings,
+    _meter_scalar_values,
+    _phase_vector,
+    _resolved_phase_vector,
+)
+from shelly_wallbox.backend.template_support import TemplateAuthSettings
 
 
 class _FakeResponse:
@@ -145,4 +152,44 @@ class TestShellyWallboxBackendTemplateMeter(unittest.TestCase):
             )
 
             with self.assertRaises(ValueError):
+                TemplateMeterBackend(self._service(MagicMock()), config_path=config_path)
+
+    def test_template_meter_helper_edges_cover_invalid_vectors_and_enabled_parsing(self) -> None:
+        self.assertIsNone(_phase_vector([1.0, 2.0]))
+        self.assertIsNone(_resolved_phase_vector((1.0, None, 3.0)))
+        self.assertIsNone(TemplateMeterBackend._enabled_state(None))
+        self.assertFalse(TemplateMeterBackend._enabled_state(0))
+        self.assertTrue(TemplateMeterBackend._enabled_state(1))
+        self.assertTrue(TemplateMeterBackend._enabled_state("enabled"))
+        self.assertFalse(TemplateMeterBackend._enabled_state("disabled"))
+        self.assertIsNone(TemplateMeterBackend._enabled_state("maybe"))
+
+        settings = TemplateMeterSettings(
+            base_url="http://meter.local",
+            auth_settings=TemplateAuthSettings("", "", False, None, None),
+            timeout_seconds=2.0,
+            meter_method="GET",
+            meter_url="/meter",
+            relay_enabled_path=None,
+            power_path="power_w",
+            voltage_path=None,
+            current_path=None,
+            energy_kwh_path=None,
+            energy_wh_path=None,
+            phase_selection="P1",
+            phase_selection_path=None,
+            phase_powers_path=None,
+            phase_currents_path=None,
+        )
+        with self.assertRaisesRegex(ValueError, "Invalid meter power value"):
+            _meter_scalar_values({"power_w": None}, settings)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=template_meter\nBaseUrl=http://adapter.local\n"
+                "[MeterRequest]\nMethod=GET\nUrl=/meter/state\n"
+                "[MeterResponse]\nPowerPath=\n",
+            )
+            with self.assertRaisesRegex(ValueError, r"requires \[MeterResponse\] PowerPath"):
                 TemplateMeterBackend(self._service(MagicMock()), config_path=config_path)

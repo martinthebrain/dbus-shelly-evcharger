@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import configparser
-from dataclasses import dataclass
 from typing import Any, Mapping, cast
 from urllib.parse import urlencode
 
@@ -17,6 +16,13 @@ from .models import (
     normalize_phase_selection,
     normalize_phase_selection_tuple,
 )
+from .shelly_profiles import (
+    ShellyProfileDefaults,
+    normalize_shelly_profile_name,
+    resolve_shelly_profile,
+    validate_shelly_profile_role,
+)
+from .shelly_support_types import ShellyBackendSettings, ShellySignalReadbackSettings
 from shelly_wallbox.core.contracts import finite_float_or_none, normalize_binary_flag
 from shelly_wallbox.backend.shelly_io import ShellyPmStatus, ShellyRpcScalar
 
@@ -184,136 +190,6 @@ def _single_phase_vector(total: float, single_phase_line: object) -> tuple[float
     return total, 0.0, 0.0
 
 
-@dataclass(frozen=True)
-class ShellyBackendSettings:
-    """Normalized Shelly backend config independent from service defaults."""
-
-    profile_name: str | None
-    host: str
-    component: str
-    device_id: int
-    timeout_seconds: float
-    username: str
-    password: str
-    use_digest_auth: bool
-    phase_selection: PhaseSelection
-    switching_mode: SwitchingMode
-    supported_phase_selections: tuple[PhaseSelection, ...]
-    requires_charge_pause_for_phase_change: bool
-    max_direct_switch_power_w: float | None
-    phase_switch_targets: dict[PhaseSelection, tuple[int, ...]]
-    feedback_readback: ShellySignalReadbackSettings | None
-    interlock_readback: ShellySignalReadbackSettings | None
-
-
-@dataclass(frozen=True)
-class ShellySignalReadbackSettings:
-    """Optional Shelly RPC signal readback for feedback/interlock semantics."""
-
-    component: str
-    device_id: int
-    value_path: str
-    invert: bool
-
-
-@dataclass(frozen=True)
-class ShellyProfileDefaults:
-    """One config-selectable Shelly family preset."""
-
-    component: str
-    device_id: int
-    roles: tuple[str, ...]
-    default_phase_selection: PhaseSelection | None = None
-
-
-_SHELLY_PROFILES: dict[str, ShellyProfileDefaults] = {
-    "switch_1ch": ShellyProfileDefaults(
-        component="Switch",
-        device_id=0,
-        roles=("switch",),
-    ),
-    "switch_1ch_with_pm": ShellyProfileDefaults(
-        component="Switch",
-        device_id=0,
-        roles=("switch", "meter"),
-    ),
-    "switch_multi_or_plug": ShellyProfileDefaults(
-        component="Switch",
-        device_id=0,
-        roles=("switch", "meter"),
-    ),
-    "switch_or_cover_profile": ShellyProfileDefaults(
-        component="Switch",
-        device_id=0,
-        roles=("switch",),
-    ),
-    "pm1_meter_only": ShellyProfileDefaults(
-        component="PM1",
-        device_id=0,
-        roles=("meter",),
-        default_phase_selection="P1",
-    ),
-    "pm1_meter": ShellyProfileDefaults(
-        component="PM1",
-        device_id=0,
-        roles=("meter",),
-        default_phase_selection="P1",
-    ),
-    "em1_meter_single_or_dual": ShellyProfileDefaults(
-        component="EM1",
-        device_id=0,
-        roles=("meter",),
-        default_phase_selection="P1",
-    ),
-    "em1_meter": ShellyProfileDefaults(
-        component="EM1",
-        device_id=0,
-        roles=("meter",),
-        default_phase_selection="P1",
-    ),
-    "em_3phase_profiled": ShellyProfileDefaults(
-        component="EM",
-        device_id=0,
-        roles=("meter",),
-        default_phase_selection="P1_P2_P3",
-    ),
-    "em_meter": ShellyProfileDefaults(
-        component="EM",
-        device_id=0,
-        roles=("meter",),
-        default_phase_selection="P1_P2_P3",
-    ),
-}
-
-
-def normalize_shelly_profile_name(value: object) -> str | None:
-    """Return one normalized optional Shelly family preset name."""
-    profile_name = str(value).strip().lower() if value is not None else ""
-    return profile_name or None
-
-
-def resolve_shelly_profile(profile_name: str | None) -> ShellyProfileDefaults | None:
-    """Return one Shelly profile descriptor when configured."""
-    if profile_name is None:
-        return None
-    defaults = _SHELLY_PROFILES.get(profile_name)
-    if defaults is None:
-        supported = ",".join(sorted(_SHELLY_PROFILES))
-        raise ValueError(f"Unsupported ShellyProfile '{profile_name}' (supported: {supported})")
-    return defaults
-
-
-def validate_shelly_profile_role(profile_name: str | None, role: str) -> None:
-    """Ensure the configured Shelly profile is valid for the requested backend role."""
-    defaults = resolve_shelly_profile(profile_name)
-    if defaults is None or str(role).strip().lower() in defaults.roles:
-        return
-    supported_roles = ",".join(defaults.roles)
-    raise ValueError(
-        f"ShellyProfile '{profile_name}' is not valid for {role} backends (supported roles: {supported_roles})"
-    )
-
-
 def _config_value(defaults: configparser.SectionProxy, key: str, fallback: object) -> str:
     """Return one config value with a typed fallback."""
     return defaults.get(key, str(fallback))
@@ -413,17 +289,11 @@ def load_shelly_backend_settings(
     switching_mode = _resolved_switching_mode(capabilities, default_switching_mode)
     supported_phase_selections = _supported_phase_selections(capabilities)
     max_power = _resolved_max_direct_switch_power_w(service, capabilities, switching_mode)
-
+    component = _resolved_shelly_component(adapter, profile_defaults, service)
     return ShellyBackendSettings(
         profile_name=profile_name,
         host=str(adapter.get("Host", getattr(service, "host", ""))).strip(),
-        component=str(
-            adapter.get(
-                "Component",
-                profile_defaults.component if profile_defaults is not None else getattr(service, "pm_component", "Switch"),
-            )
-        ).strip()
-        or "Switch",
+        component=component,
         device_id=device_id,
         timeout_seconds=_resolved_timeout_seconds(adapter, service),
         username=str(adapter.get("Username", getattr(service, "username", ""))).strip(),
@@ -444,6 +314,16 @@ def load_shelly_backend_settings(
         feedback_readback=_optional_signal_readback_settings(feedback),
         interlock_readback=_optional_signal_readback_settings(interlock),
     )
+
+
+def _resolved_shelly_component(
+    adapter: configparser.SectionProxy,
+    profile_defaults: ShellyProfileDefaults | None,
+    service: Any,
+) -> str:
+    """Return the effective Shelly RPC component for one backend."""
+    default_component = profile_defaults.component if profile_defaults is not None else getattr(service, "pm_component", "Switch")
+    return str(adapter.get("Component", default_component)).strip() or "Switch"
 
 
 def _resolved_switching_mode(
@@ -586,3 +466,21 @@ class ShellyBackendBase:
         value = _mapping_path_value(payload, settings.value_path)
         normalized = bool(normalize_binary_flag(value))
         return not normalized if settings.invert else normalized
+
+
+__all__ = [
+    "ShellyBackendBase",
+    "ShellyBackendSettings",
+    "ShellyPmStatus",
+    "ShellyProfileDefaults",
+    "ShellyRpcScalar",
+    "ShellySignalReadbackSettings",
+    "load_shelly_backend_settings",
+    "normalize_shelly_profile_name",
+    "normalize_switching_mode",
+    "parse_phase_selection_list",
+    "phase_currents_for_selection",
+    "phase_powers_for_selection",
+    "resolve_shelly_profile",
+    "validate_shelly_profile_role",
+]

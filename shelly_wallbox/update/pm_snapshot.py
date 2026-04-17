@@ -1,0 +1,169 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# mypy: disable-error-code=attr-defined
+# pyright: reportAttributeAccessIssue=false
+"""PM snapshot normalization and cache fallback helpers."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from shelly_wallbox.core.contracts import (
+    normalized_worker_snapshot,
+    timestamp_age_within,
+    timestamp_not_future,
+)
+
+
+class _UpdateCyclePmSnapshotMixin:
+    @staticmethod
+    def _worker_pm_snapshot_data(
+        worker_snapshot: dict[str, Any],
+        now: float,
+    ) -> tuple[dict[str, Any] | None, bool, float]:
+        """Return normalized worker PM data plus confirmation and timestamp."""
+        normalized_snapshot = normalized_worker_snapshot(
+            worker_snapshot,
+            now=now,
+            clamp_future_timestamps=False,
+        )
+        pm_status = normalized_snapshot.get("pm_status")
+        if pm_status is None:
+            return None, False, float(now)
+        pm_status = dict(pm_status)
+        pm_confirmed = bool(normalized_snapshot.get("pm_confirmed", False))
+        snapshot_at = normalized_snapshot.get(
+            "pm_captured_at",
+            normalized_snapshot.get("captured_at", now),
+        )
+        return pm_status, pm_confirmed, float(now if snapshot_at is None else snapshot_at)
+
+    @staticmethod
+    def _remember_pm_snapshot(
+        svc: Any,
+        pm_status: dict[str, Any],
+        snapshot_at: float,
+        pm_confirmed: bool,
+    ) -> None:
+        """Persist the freshest known PM status for short read-soft-fail reuse."""
+        remembered = dict(pm_status)
+        remembered["_pm_confirmed"] = pm_confirmed
+        svc._last_pm_status = remembered
+        svc._last_pm_status_at = snapshot_at
+        svc._last_pm_status_confirmed = pm_confirmed
+        if pm_confirmed:
+            svc._last_confirmed_pm_status = dict(remembered)
+            svc._last_confirmed_pm_status_at = snapshot_at
+
+    @classmethod
+    def _cached_pm_status_for_soft_fail(
+        cls,
+        svc: Any,
+        now: float,
+        soft_fail_seconds: float,
+    ) -> dict[str, Any] | None:
+        """Return the last remembered PM status when it is still inside soft-fail budget."""
+        if (
+            svc._last_pm_status is None
+            or svc._last_pm_status_at is None
+            or not timestamp_age_within(
+                svc._last_pm_status_at,
+                now,
+                soft_fail_seconds,
+                future_tolerance_seconds=cls.FUTURE_INPUT_TIMESTAMP_TOLERANCE_SECONDS,
+            )
+        ):
+            return None
+        pm_status = dict(svc._last_pm_status)
+        pm_status["_pm_confirmed"] = bool(getattr(svc, "_last_pm_status_confirmed", False))
+        return pm_status
+
+    @staticmethod
+    def _direct_pm_snapshot_max_age_seconds(svc: Any) -> float:
+        """Return the minimum freshness window for directly supplied worker PM snapshots."""
+        candidates = [1.0]
+        worker_poll_seconds = getattr(svc, "_worker_poll_interval_seconds", None)
+        if worker_poll_seconds is not None:
+            try:
+                worker_poll_seconds = float(worker_poll_seconds)
+            except (TypeError, ValueError):
+                worker_poll_seconds = None
+            if worker_poll_seconds is not None and worker_poll_seconds > 0:
+                candidates.append(worker_poll_seconds * 2.0)
+        return max(1.0, min(candidates))
+
+    @classmethod
+    def resolve_pm_status_for_update(
+        cls,
+        svc: Any,
+        worker_snapshot: dict[str, Any],
+        now: float,
+    ) -> dict[str, Any] | None:
+        """Return the freshest Shelly status, including short soft-fail reuse."""
+        soft_fail_seconds = float(getattr(svc, "auto_shelly_soft_fail_seconds", 10.0))
+        pm_status, pm_confirmed, snapshot_at = cls._worker_pm_snapshot_data(worker_snapshot, now)
+        if pm_status is None:
+            return cls._cached_pm_status_for_soft_fail(svc, now, soft_fail_seconds)
+        pm_status["_pm_confirmed"] = pm_confirmed
+        if cls._pm_snapshot_falls_back_to_cache(snapshot_at, now):
+            return cls._cached_pm_status_for_soft_fail(svc, now, soft_fail_seconds)
+        should_remember, within_soft_fail = cls._pm_snapshot_storage_decision(
+            svc,
+            now,
+            snapshot_at,
+            soft_fail_seconds,
+        )
+        if should_remember:
+            cls._remember_pm_snapshot(svc, pm_status, snapshot_at, pm_confirmed)
+        if within_soft_fail:
+            return pm_status
+        return cls._cached_pm_status_for_soft_fail(svc, now, soft_fail_seconds)
+
+    @classmethod
+    def _pm_snapshot_from_future(cls, snapshot_at: float, now: float) -> bool:
+        """Return True when a worker PM snapshot timestamp lies implausibly in the future."""
+        return not timestamp_not_future(
+            snapshot_at,
+            now,
+            cls.FUTURE_INPUT_TIMESTAMP_TOLERANCE_SECONDS,
+        )
+
+    @classmethod
+    def _pm_snapshot_falls_back_to_cache(cls, snapshot_at: float, now: float) -> bool:
+        """Return True when a PM snapshot must immediately fall back to cached state."""
+        return cls._pm_snapshot_from_future(snapshot_at, now)
+
+    @classmethod
+    def _pm_snapshot_within_soft_fail_budget(
+        cls,
+        svc: Any,
+        now: float,
+        snapshot_at: float,
+        soft_fail_seconds: float,
+    ) -> bool:
+        """Return True when a PM snapshot is still usable before soft-fail fallback."""
+        direct_snapshot_max_age = cls._direct_pm_snapshot_max_age_seconds(svc)
+        return (float(now) - snapshot_at) <= max(soft_fail_seconds, direct_snapshot_max_age)
+
+    @staticmethod
+    def _pm_snapshot_newer_than_last(svc: Any, snapshot_at: float) -> bool:
+        """Return True when a PM snapshot is at least as new as the stored one."""
+        last_snapshot_at = getattr(svc, "_last_pm_status_at", None)
+        return last_snapshot_at is None or snapshot_at >= float(last_snapshot_at)
+
+    @classmethod
+    def _pm_snapshot_storage_decision(
+        cls,
+        svc: Any,
+        now: float,
+        snapshot_at: float,
+        soft_fail_seconds: float,
+    ) -> tuple[bool, bool]:
+        """Return whether to remember a PM snapshot and whether it stays directly usable."""
+        within_soft_fail = cls._pm_snapshot_within_soft_fail_budget(
+            svc,
+            now,
+            snapshot_at,
+            soft_fail_seconds,
+        )
+        should_remember = within_soft_fail or cls._pm_snapshot_newer_than_last(svc, snapshot_at)
+        return should_remember, within_soft_fail

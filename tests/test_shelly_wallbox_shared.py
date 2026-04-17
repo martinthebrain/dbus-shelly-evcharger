@@ -22,8 +22,13 @@ from shelly_wallbox.core.shared import (
 
 class TestShellyWallboxShared(unittest.TestCase):
     def test_numeric_helpers_cover_scalar_container_and_invalid_values(self):
+        class _BadIterable:
+            def __iter__(self):
+                raise TypeError("boom")
+
         self.assertIsNone(_iter_numeric_container_items("abc"))
         self.assertEqual(_iter_numeric_container_items((1, 2)), [1, 2])
+        self.assertIsNone(_iter_numeric_container_items(_BadIterable()))
         self.assertIsNone(_coerce_scalar_numeric(None))
         self.assertIsNone(_coerce_scalar_numeric(True))
         self.assertEqual(_coerce_scalar_numeric("4.5"), 4.5)
@@ -48,6 +53,7 @@ class TestShellyWallboxShared(unittest.TestCase):
         self.assertTrue(discovery_cache_valid(["svc"], 100.0, 60.0, 120.0))
         self.assertFalse(discovery_cache_valid([], 100.0, 60.0, 120.0))
         self.assertEqual(prefixed_service_names(["a.1", "b.2", "a.3"], "a.", max_services=1, sort_names=True), ["a.1"])
+        self.assertEqual(prefixed_service_names(["a.2", "a.1"], "a."), ["a.2", "a.1"])
         self.assertEqual(first_matching_prefixed_service(["x", "a.1", "a.2"], "a.", lambda s: s.endswith("2")), "a.2")
         self.assertIsNone(first_matching_prefixed_service(["x"], "a.", lambda _s: True))
         self.assertTrue(grid_values_complete_enough(True, [], True))
@@ -79,3 +85,17 @@ class TestShellyWallboxShared(unittest.TestCase):
                     with patch("os.unlink", side_effect=OSError("still locked")):
                         with self.assertRaises(RuntimeError):
                             write_text_atomically(failing_path, "payload")
+
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                write_text_atomically("flat.json", "flat")
+                with open("flat.json", "r", encoding="utf-8") as handle:
+                    self.assertEqual(handle.read(), "flat")
+
+                with patch("os.replace", side_effect=RuntimeError("boom")):
+                    with patch("os.path.exists", return_value=False):
+                        with self.assertRaises(RuntimeError):
+                            write_text_atomically("flat.json", "payload")
+            finally:
+                os.chdir(old_cwd)

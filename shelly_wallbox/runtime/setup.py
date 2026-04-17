@@ -20,6 +20,26 @@ from shelly_wallbox.core.split_mixins import ComposableControllerMixin as _Compo
 WorkerSnapshot = dict[str, Any]
 
 
+def _first_existing_version_line(paths: tuple[str, ...]) -> str:
+    """Return the first non-empty version line found in the candidate files."""
+    for path in paths:
+        version = _read_version_line(path)
+        if version:
+            return version
+    return ""
+
+
+def _read_version_line(path: str) -> str:
+    """Return one stripped version line from a file when it exists."""
+    if not path or not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.readline().strip()
+    except OSError:
+        return ""
+
+
 
 class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
     @staticmethod
@@ -57,17 +77,7 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
             os.path.join(repo_root, ".bootstrap-state", "installed_version"),
             os.path.join(repo_root, "version.txt"),
         )
-        for path in candidates:
-            if not path or not os.path.isfile(path):
-                continue
-            try:
-                with open(path, "r", encoding="utf-8") as handle:
-                    first_line = handle.readline().strip()
-            except OSError:
-                continue
-            if first_line:
-                return first_line
-        return ""
+        return _first_existing_version_line(candidates)
 
     def initialize_runtime_support(self) -> None:
         """Initialize runtime caches and watchdog state kept in RAM only."""

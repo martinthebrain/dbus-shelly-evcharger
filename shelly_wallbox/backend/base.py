@@ -17,34 +17,34 @@ from .models import (
 class MeterBackend(Protocol):
     """Read normalized wallbox power and energy values."""
 
-    def read_meter(self) -> MeterReading: ...
+    def read_meter(self) -> MeterReading: ...  # pragma: no cover
 
 
 class SwitchBackend(Protocol):
     """Read and command normalized switching state."""
 
-    def capabilities(self) -> SwitchCapabilities: ...
+    def capabilities(self) -> SwitchCapabilities: ...  # pragma: no cover
 
-    def read_switch_state(self) -> SwitchState: ...
+    def read_switch_state(self) -> SwitchState: ...  # pragma: no cover
 
-    def set_enabled(self, enabled: bool) -> None: ...
+    def set_enabled(self, enabled: bool) -> None: ...  # pragma: no cover
 
-    def set_phase_selection(self, selection: PhaseSelection) -> None: ...
+    def set_phase_selection(self, selection: PhaseSelection) -> None: ...  # pragma: no cover
 
 
 class ChargerBackend(Protocol):
     """Optional direct charger-control backend."""
 
-    def read_charger_state(self) -> ChargerState: ...
+    def read_charger_state(self) -> ChargerState: ...  # pragma: no cover
 
-    def set_enabled(self, enabled: bool) -> None: ...
+    def set_enabled(self, enabled: bool) -> None: ...  # pragma: no cover
 
-    def set_current(self, amps: float) -> None: ...
+    def set_current(self, amps: float) -> None: ...  # pragma: no cover
 
-    def set_phase_selection(self, selection: PhaseSelection) -> None: ...
+    def set_phase_selection(self, selection: PhaseSelection) -> None: ...  # pragma: no cover
 
 
 class BackendConstructor(Protocol):
     """Constructor signature used by the backend registry/factory."""
 
-    def __call__(self, service: Any, config_path: str = "") -> Any: ...
+    def __call__(self, service: Any, config_path: str = "") -> Any: ...  # pragma: no cover

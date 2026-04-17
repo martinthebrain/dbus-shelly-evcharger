@@ -6,7 +6,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from shelly_wallbox.backend.modbus_transport import ModbusRequest
-from shelly_wallbox.backend.smartevse_charger import SmartEvseChargerBackend
+from shelly_wallbox.backend.smartevse_charger import (
+    SmartEvseChargerBackend,
+    _fault_tokens,
+    _normalized_current_amps,
+    _rounded_current_setting,
+    _status_text,
+)
 
 
 class _FakeSmartEvseTransport:
@@ -208,3 +214,31 @@ class TestShellyWallboxBackendSmartEvseCharger(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "requires exactly one fixed"):
                 SmartEvseChargerBackend(self._service(), config_path=config_path)
+
+    def test_smartevse_helper_edges_cover_current_fault_and_status_validation(self) -> None:
+        self.assertEqual(_normalized_current_amps(160), 16.0)
+        self.assertEqual(_rounded_current_setting(0.0), 0)
+        with self.assertRaisesRegex(ValueError, "expected 0 or 6..80 A"):
+            _rounded_current_setting(5.0)
+        self.assertEqual(_fault_tokens(0x0001 | 0x0002 | 0x0004 | 0x0010), ["less-than-6a", "no-comm", "temp-high", "rcd"])
+        self.assertEqual(_status_text(1, 0, False, 0), "disabled")
+        self.assertEqual(_status_text(1, 0x0001, True, 0), "error")
+        self.assertIsNone(_status_text(99, 0, True, 0))
+        with self.assertRaises(FileNotFoundError):
+            SmartEvseChargerBackend(self._service(), config_path="/definitely/missing.ini")
+
+    def test_smartevse_reuses_preseeded_transport_when_client_is_created(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=smartevse_charger\nTransport=tcp\n"
+                "[Transport]\nHost=192.168.1.60\nPort=502\nUnitId=1\n",
+            )
+            backend = SmartEvseChargerBackend(self._service(), config_path=config_path)
+            backend._transport = _FakeSmartEvseTransport()
+
+            with patch("shelly_wallbox.backend.smartevse_charger.create_modbus_transport") as create_transport:
+                client = backend._client()
+
+            self.assertIs(client, backend._client_cache)
+            create_transport.assert_not_called()

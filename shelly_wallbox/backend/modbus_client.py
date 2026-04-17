@@ -35,50 +35,132 @@ def register_count(data_type: str) -> int:
 def decode_register_value(registers: tuple[int, ...], data_type: str, word_order: str = "big") -> float | int | bool:
     """Decode one register tuple into the configured scalar type."""
     normalized_type = str(data_type).strip().lower()
-    ordered = registers if word_order != "little" or len(registers) < 2 else tuple(reversed(registers))
+    ordered = _ordered_registers(registers, word_order)
     if not ordered:
         raise ValueError("Modbus register decode requires at least one register")
     payload = b"".join(int(register).to_bytes(2, "big") for register in ordered)
-    if normalized_type == "bool":
-        return bool(ordered[0])
-    if normalized_type == "uint16":
-        return ordered[0]
-    if normalized_type == "int16":
-        value = ordered[0]
-        return value - 0x10000 if value & 0x8000 else value
-    if normalized_type == "uint32":
-        return int.from_bytes(payload, "big", signed=False)
-    if normalized_type == "int32":
-        return int.from_bytes(payload, "big", signed=True)
-    if normalized_type == "float32":
-        return float(struct.unpack(">f", payload)[0])
-    raise ValueError(f"Unsupported Modbus data type '{data_type}'")
+    return _decoded_register_payload(ordered, payload, normalized_type, data_type)
 
 
 def encode_register_value(value: float | int | bool, data_type: str, word_order: str = "big") -> tuple[int, ...]:
     """Encode one scalar value into Modbus register words."""
     normalized_type = str(data_type).strip().lower()
-    registers: tuple[int, ...]
-    if normalized_type == "bool":
-        registers = (1 if bool(value) else 0,)
-    elif normalized_type == "uint16":
-        registers = (int(value) & 0xFFFF,)
-    elif normalized_type == "int16":
-        registers = (int(value) & 0xFFFF,)
-    elif normalized_type == "uint32":
-        payload = int(value).to_bytes(4, "big", signed=False)
-        registers = (int.from_bytes(payload[:2], "big"), int.from_bytes(payload[2:], "big"))
-    elif normalized_type == "int32":
-        payload = int(value).to_bytes(4, "big", signed=True)
-        registers = (int.from_bytes(payload[:2], "big"), int.from_bytes(payload[2:], "big"))
-    elif normalized_type == "float32":
-        payload = struct.pack(">f", float(value))
-        registers = (int.from_bytes(payload[:2], "big"), int.from_bytes(payload[2:], "big"))
-    else:
-        raise ValueError(f"Unsupported Modbus data type '{data_type}'")
+    registers = _encoded_registers(value, normalized_type, data_type)
     if word_order == "little" and len(registers) > 1:
         return tuple(reversed(registers))
     return registers
+
+
+def _ordered_registers(registers: tuple[int, ...], word_order: str) -> tuple[int, ...]:
+    """Return register words in the requested decode order."""
+    if word_order != "little" or len(registers) < 2:
+        return registers
+    return tuple(reversed(registers))
+
+
+def _decoded_register_payload(
+    ordered: tuple[int, ...],
+    payload: bytes,
+    normalized_type: str,
+    data_type: str,
+) -> float | int | bool:
+    """Return one decoded scalar from ordered register words."""
+    decoder = _REGISTER_DECODERS.get(normalized_type)
+    if decoder is None:
+        raise ValueError(f"Unsupported Modbus data type '{data_type}'")
+    return decoder(ordered, payload)
+
+
+def _decoded_int16(value: int) -> int:
+    """Return one signed 16-bit integer from an unsigned register value."""
+    return value - 0x10000 if value & 0x8000 else value
+
+
+def _encoded_registers(value: float | int | bool, normalized_type: str, data_type: str) -> tuple[int, ...]:
+    """Return register words for one encoded scalar value."""
+    encoder = _REGISTER_ENCODERS.get(normalized_type)
+    if encoder is None:
+        raise ValueError(f"Unsupported Modbus data type '{data_type}'")
+    return encoder(value)
+
+
+def _payload_registers(payload: bytes) -> tuple[int, int]:
+    """Return the two 16-bit register words contained in one four-byte payload."""
+    return int.from_bytes(payload[:2], "big"), int.from_bytes(payload[2:], "big")
+
+
+def _decode_bool_register(ordered: tuple[int, ...], _payload: bytes) -> bool:
+    """Return one bool decoded from the first register word."""
+    return bool(ordered[0])
+
+
+def _decode_uint16_register(ordered: tuple[int, ...], _payload: bytes) -> int:
+    """Return one unsigned 16-bit integer decoded from the first register word."""
+    return ordered[0]
+
+
+def _decode_int16_register(ordered: tuple[int, ...], _payload: bytes) -> int:
+    """Return one signed 16-bit integer decoded from the first register word."""
+    return _decoded_int16(ordered[0])
+
+
+def _decode_uint32_register(_ordered: tuple[int, ...], payload: bytes) -> int:
+    """Return one unsigned 32-bit integer decoded from the payload bytes."""
+    return int.from_bytes(payload, "big", signed=False)
+
+
+def _decode_int32_register(_ordered: tuple[int, ...], payload: bytes) -> int:
+    """Return one signed 32-bit integer decoded from the payload bytes."""
+    return int.from_bytes(payload, "big", signed=True)
+
+
+def _decode_float32_register(_ordered: tuple[int, ...], payload: bytes) -> float:
+    """Return one IEEE754 float decoded from the payload bytes."""
+    return float(struct.unpack(">f", payload)[0])
+
+
+def _encode_bool_register(value: float | int | bool) -> tuple[int, ...]:
+    """Return one encoded bool register tuple."""
+    return (1 if bool(value) else 0,)
+
+
+def _encode_16bit_register(value: float | int | bool) -> tuple[int, ...]:
+    """Return one encoded single-register integer tuple."""
+    return (int(value) & 0xFFFF,)
+
+
+def _encode_uint32_register(value: float | int | bool) -> tuple[int, ...]:
+    """Return one encoded unsigned 32-bit register tuple."""
+    return _payload_registers(int(value).to_bytes(4, "big", signed=False))
+
+
+def _encode_int32_register(value: float | int | bool) -> tuple[int, ...]:
+    """Return one encoded signed 32-bit register tuple."""
+    return _payload_registers(int(value).to_bytes(4, "big", signed=True))
+
+
+def _encode_float32_register(value: float | int | bool) -> tuple[int, ...]:
+    """Return one encoded IEEE754 float register tuple."""
+    return _payload_registers(struct.pack(">f", float(value)))
+
+
+_REGISTER_DECODERS = {
+    "bool": _decode_bool_register,
+    "uint16": _decode_uint16_register,
+    "int16": _decode_int16_register,
+    "uint32": _decode_uint32_register,
+    "int32": _decode_int32_register,
+    "float32": _decode_float32_register,
+}
+
+_REGISTER_ENCODERS = {
+    "bool": _encode_bool_register,
+    "uint16": _encode_16bit_register,
+    "int16": _encode_16bit_register,
+    "uint32": _encode_uint32_register,
+    "int32": _encode_int32_register,
+    "float32": _encode_float32_register,
+}
 
 
 class ModbusClient:

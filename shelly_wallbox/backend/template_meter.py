@@ -183,10 +183,7 @@ def load_template_meter_settings(service: object, config_path: str) -> TemplateM
     )
     meter_url = resolved_url(base_url, meter_request.get("Url", ""))
     power_path = str(meter_response.get("PowerPath", "power_w")).strip()
-    if not meter_url:
-        raise ValueError("Template meter backend requires [MeterRequest] Url")
-    if not power_path:
-        raise ValueError("Template meter backend requires [MeterResponse] PowerPath")
+    _validate_template_meter_paths(meter_url, power_path)
 
     default_phase = normalize_phase_selection(
         phase.get("MeasuredPhaseSelection", phase.get("MeasuredPhase", getattr(service, "phase", "L1"))),
@@ -209,6 +206,14 @@ def load_template_meter_settings(service: object, config_path: str) -> TemplateM
         phase_powers_path=_optional_path(meter_response.get("PhasePowersPath", "")),
         phase_currents_path=_optional_path(meter_response.get("PhaseCurrentsPath", "")),
     )
+
+
+def _validate_template_meter_paths(meter_url: str, power_path: str) -> None:
+    """Validate the required request and response paths for template meter backends."""
+    if not meter_url:
+        raise ValueError("Template meter backend requires [MeterRequest] Url")
+    if not power_path:
+        raise ValueError("Template meter backend requires [MeterResponse] PowerPath")
 
 
 class TemplateMeterBackend(TemplateHttpBackendBase):
