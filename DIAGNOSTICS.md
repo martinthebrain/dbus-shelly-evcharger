@@ -91,6 +91,32 @@ tail -f /var/volatile/log/dbus-shelly-wallbox/auto-reasons.log
 - `/Auto/RuntimeOverridesActive`
 - `/Auto/RuntimeOverridesPath`
 
+## Software Update Diagnostics
+
+- `/Auto/SoftwareUpdateAvailable`
+- `/Auto/SoftwareUpdateState`
+- `/Auto/SoftwareUpdateStateCode`
+- `/Auto/SoftwareUpdateDetail`
+- `/Auto/SoftwareUpdateCurrentVersion`
+- `/Auto/SoftwareUpdateAvailableVersion`
+- `/Auto/SoftwareUpdateNoUpdateActive`
+- `/Auto/SoftwareUpdateRun`
+- `/Auto/SoftwareUpdateLastCheckAge`
+- `/Auto/SoftwareUpdateLastRunAge`
+
+The outward update-state vocabulary is fixed and compact:
+
+- `idle`
+- `checking`
+- `up-to-date`
+- `available`
+- `available-blocked`
+- `running`
+- `installed`
+- `check-failed`
+- `install-failed`
+- `update-unavailable`
+
 ## Probe Commands
 
 Validate a full wallbox configuration:

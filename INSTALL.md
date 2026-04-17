@@ -80,6 +80,9 @@ Useful variables:
 - `SHELLY_WALLBOX_BOOTSTRAP_PUBKEY`
 - `SHELLY_WALLBOX_REQUIRE_SIGNED_MANIFEST`
 
+The full bootstrap and updater behavior, including `noUpdate`, is documented in
+[UPDATE_FLOW.md](UPDATE_FLOW.md).
+
 ## Configuration Patterns
 
 ### Combined relay + meter

@@ -147,7 +147,7 @@ class TestServiceBootstrapController(unittest.TestCase):
             auto_phase_mismatch_retry_seconds=300.0,
             auto_phase_mismatch_lockout_count=3,
             auto_phase_mismatch_lockout_seconds=1800.0,
-            runtime_overrides_path="/data/etc/wallbox-overrides.ini",
+            runtime_overrides_path="/run/wallbox-overrides.ini",
             _runtime_overrides_active=True,
             backend_mode="split",
             meter_backend_type="shelly_meter",
@@ -207,7 +207,7 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service._dbusservice.paths["/Auto/ChargerTransportSource"]["value"], "")
         self.assertEqual(service._dbusservice.paths["/Auto/ChargerTransportDetail"]["value"], "")
         self.assertEqual(service._dbusservice.paths["/Auto/RuntimeOverridesActive"]["value"], 1)
-        self.assertEqual(service._dbusservice.paths["/Auto/RuntimeOverridesPath"]["value"], "/data/etc/wallbox-overrides.ini")
+        self.assertEqual(service._dbusservice.paths["/Auto/RuntimeOverridesPath"]["value"], "/run/wallbox-overrides.ini")
         self.assertEqual(service._dbusservice.paths["/Auto/ChargerRetryActive"]["value"], 0)
         self.assertEqual(service._dbusservice.paths["/Auto/ChargerRetryReason"]["value"], "")
         self.assertEqual(service._dbusservice.paths["/Auto/ChargerRetrySource"]["value"], "")

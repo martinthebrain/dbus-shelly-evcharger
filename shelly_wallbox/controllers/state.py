@@ -1,5 +1,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Configuration and RAM-only runtime-state helpers for the Shelly wallbox service."""
+"""Configuration and RAM-only runtime-state helpers for the Shelly wallbox service.
+
+This controller is responsible for two closely related concerns:
+
+- loading and validating the structural configuration of the wallbox
+- owning the runtime state that should exist outside the live update loop
+
+That second part matters a lot on GX devices. The service needs a clear idea of
+which values belong to the static installation, which values are user-facing
+runtime selections, and which values are temporary observations that should
+simply disappear after restart.
+"""
 
 import configparser
 from dataclasses import dataclass
@@ -43,7 +54,17 @@ from shelly_wallbox.core.shared import compact_json, write_text_atomically
 
 @dataclass(frozen=True)
 class RuntimeOverrideSpec:
-    """One DBus-writable runtime setting that can persist in an override file."""
+    """One DBus-writable runtime setting that can persist in an override file.
+
+    The override layer exists so day-to-day control can travel through DBus and
+    MQTT without rewriting the structural install configuration. Each spec ties
+    together four things:
+
+    - the writable DBus path
+    - the config key written to the override file
+    - the service attribute that carries the live value
+    - the normalization strategy for that value
+    """
 
     dbus_path: str
     config_key: str
@@ -51,6 +72,10 @@ class RuntimeOverrideSpec:
     value_kind: str
 
 
+# This tuple is intentionally explicit instead of generated indirectly from the
+# config parser. Adding a new runtime override is therefore a conscious act:
+# the contributor has to name the outward DBus path, the persistent config key,
+# the runtime attribute, and the value semantics in one place.
 RUNTIME_OVERRIDE_SPECS: tuple[RuntimeOverrideSpec, ...] = (
     RuntimeOverrideSpec("/Mode", "Mode", "virtual_mode", "int"),
     RuntimeOverrideSpec("/AutoStart", "AutoStart", "virtual_autostart", "bool"),
@@ -233,7 +258,13 @@ class _CasePreservingConfigParser(configparser.ConfigParser):
 
 
 class ServiceStateController:
-    """Encapsulate config loading, config validation, and volatile runtime state."""
+    """Encapsulate config loading, config validation, and volatile runtime state.
+
+    In practice this controller is the long-lived memory of the service. It
+    turns configuration files into normalized runtime attributes, owns the
+    persisted override and state files, and provides the stable attribute space
+    that the update cycle and DBus controllers later operate on.
+    """
 
     NON_NEGATIVE_INTERVAL_ATTRS = (
         "auto_pv_scan_interval_seconds",
@@ -282,7 +313,7 @@ class ServiceStateController:
     def runtime_overrides_path(cls, defaults: configparser.SectionProxy) -> str:
         """Return the persistent runtime-override path for the current service instance."""
         device_instance = defaults.get("DeviceInstance", "60").strip() or "60"
-        fallback = f"/data/etc/dbus-shelly-wallbox-overrides-{device_instance}.ini"
+        fallback = f"/run/dbus-shelly-wallbox-overrides-{device_instance}.ini"
         return defaults.get("RuntimeOverridesPath", fallback).strip()
 
     @staticmethod
@@ -709,28 +740,141 @@ class ServiceStateController:
         """Return one stable serialized snapshot of the current runtime overrides."""
         return compact_json(self.current_runtime_overrides())
 
+    @staticmethod
+    def _runtime_override_write_min_interval_seconds(svc: Any) -> float:
+        """Return the minimum spacing between override file writes."""
+        configured = finite_float_or_none(getattr(svc, "runtime_overrides_write_min_interval_seconds", None))
+        return 1.0 if configured is None else max(0.0, float(configured))
+
+    @staticmethod
+    def _runtime_now(svc: Any) -> float:
+        """Return the current service timestamp used for debounce decisions."""
+        time_now = getattr(svc, "_time_now", None)
+        raw_current_time: object = time_now() if callable(time_now) else time.time()
+        return ServiceStateController.coerce_runtime_float(raw_current_time, time.time())
+
+    @staticmethod
+    def _clear_pending_runtime_overrides(svc: Any) -> None:
+        """Drop any staged override write after a flush or a revert."""
+        svc._runtime_overrides_pending_serialized = None
+        svc._runtime_overrides_pending_values = None
+        svc._runtime_overrides_pending_text = None
+        svc._runtime_overrides_pending_due_at = None
+
+    @staticmethod
+    def _runtime_override_ini_text(payload: dict[str, str]) -> str:
+        """Render one stable INI snapshot for atomic runtime-override writes."""
+        parser = _CasePreservingConfigParser()
+        parser[RUNTIME_OVERRIDE_SECTION] = payload
+        from io import StringIO
+
+        handle = StringIO()
+        parser.write(handle)
+        return handle.getvalue()
+
+    def _stage_runtime_overrides_write(
+        self,
+        svc: Any,
+        payload: dict[str, str],
+        serialized: str,
+        rendered: str,
+        due_at: float,
+    ) -> None:
+        """Keep only the latest override snapshot while writes are rate-limited."""
+        svc._runtime_overrides_pending_serialized = serialized
+        svc._runtime_overrides_pending_values = dict(payload)
+        svc._runtime_overrides_pending_text = rendered
+        svc._runtime_overrides_pending_due_at = float(due_at)
+        svc._runtime_overrides_active = True
+        svc._runtime_overrides_values = dict(payload)
+
+    def _write_runtime_overrides_payload(
+        self,
+        svc: Any,
+        path: str,
+        payload: dict[str, str],
+        serialized: str,
+        rendered: str,
+        now: float,
+    ) -> None:
+        """Atomically publish one override snapshot and remember the write timestamp."""
+        write_text_atomically(path, rendered)
+        svc._runtime_overrides_serialized = serialized
+        svc._runtime_overrides_last_saved_at = float(now)
+        svc._runtime_overrides_active = True
+        svc._runtime_overrides_values = dict(payload)
+        self._clear_pending_runtime_overrides(svc)
+
+    def flush_runtime_overrides(self, now: float | None = None) -> None:
+        """Flush one staged runtime-override write once the debounce interval elapsed."""
+        svc = self.service
+        path = str(getattr(svc, "runtime_overrides_path", "")).strip()
+        pending_serialized = getattr(svc, "_runtime_overrides_pending_serialized", None)
+        pending_values = getattr(svc, "_runtime_overrides_pending_values", None)
+        pending_text = getattr(svc, "_runtime_overrides_pending_text", None)
+        if not path or not pending_serialized or not isinstance(pending_values, dict) or not isinstance(pending_text, str):
+            return
+        current_time = self._runtime_now(svc) if now is None else float(now)
+        due_at = self._coerce_optional_runtime_float(getattr(svc, "_runtime_overrides_pending_due_at", None))
+        if due_at is not None and current_time < due_at:
+            return
+        try:
+            self._write_runtime_overrides_payload(
+                svc,
+                path,
+                dict(pending_values),
+                str(pending_serialized),
+                pending_text,
+                current_time,
+            )
+        except Exception as error:  # pylint: disable=broad-except
+            min_interval = self._runtime_override_write_min_interval_seconds(svc)
+            svc._runtime_overrides_pending_due_at = float(current_time + min_interval)
+            logging.warning("Unable to write runtime overrides to %s: %s", path, error)
+
     def save_runtime_overrides(self) -> None:
-        """Persist runtime-overridable DBus settings to a small INI file."""
+        """Persist runtime-overridable DBus settings with atomic debounced writes."""
         svc = self.service
         path = str(getattr(svc, "runtime_overrides_path", "")).strip()
         if not path:
             return
         payload = self.current_runtime_overrides()
         serialized = compact_json(payload)
+        pending_serialized = getattr(svc, "_runtime_overrides_pending_serialized", None)
         if serialized == getattr(svc, "_runtime_overrides_serialized", None):
+            if serialized == pending_serialized:
+                self._clear_pending_runtime_overrides(svc)
             return
-        parser = _CasePreservingConfigParser()
-        parser[RUNTIME_OVERRIDE_SECTION] = payload
+        rendered = self._runtime_override_ini_text(payload)
+        current_time = self._runtime_now(svc)
+        last_saved_at = self._coerce_optional_runtime_float(getattr(svc, "_runtime_overrides_last_saved_at", None))
+        min_interval = self._runtime_override_write_min_interval_seconds(svc)
+        if last_saved_at is not None and (current_time - last_saved_at) < min_interval:
+            self._stage_runtime_overrides_write(
+                svc,
+                payload,
+                serialized,
+                rendered,
+                last_saved_at + min_interval,
+            )
+            return
         try:
-            from io import StringIO
-
-            handle = StringIO()
-            parser.write(handle)
-            write_text_atomically(path, handle.getvalue())
-            svc._runtime_overrides_serialized = serialized
-            svc._runtime_overrides_active = True
-            svc._runtime_overrides_values = dict(payload)
+            self._write_runtime_overrides_payload(
+                svc,
+                path,
+                payload,
+                serialized,
+                rendered,
+                current_time,
+            )
         except Exception as error:  # pylint: disable=broad-except
+            self._stage_runtime_overrides_write(
+                svc,
+                payload,
+                serialized,
+                rendered,
+                current_time + min_interval,
+            )
             logging.warning("Unable to write runtime overrides to %s: %s", path, error)
 
     def _serialized_runtime_state(self) -> str:

@@ -8,6 +8,7 @@ auto-audit logging, and safe persistence of runtime-only state.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from typing import Any
@@ -21,9 +22,58 @@ WorkerSnapshot = dict[str, Any]
 
 
 class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
+    @staticmethod
+    def _service_repo_root(service: Any) -> str:
+        """Return the repository root inferred from the main entrypoint path."""
+        script_path = getattr(type(service), "_script_path_value", getattr(service, "_script_path_value", ""))
+        resolved = os.path.realpath(str(script_path or ""))
+        return os.path.dirname(resolved) if resolved else ""
+
+    @staticmethod
+    def _system_uptime_seconds() -> float | None:
+        """Return the current Linux uptime from ``/proc/uptime`` when available."""
+        try:
+            with open("/proc/uptime", "r", encoding="utf-8") as handle:
+                first_field = handle.readline().split(" ", 1)[0].strip()
+        except OSError:
+            return None
+        try:
+            return max(0.0, float(first_field))
+        except ValueError:
+            return None
+
+    @classmethod
+    def _boot_delayed_update_due_at(cls, current_time: float, delay_seconds: float) -> float | None:
+        """Return the due timestamp for the post-boot auto-update when applicable."""
+        uptime_seconds = cls._system_uptime_seconds()
+        if uptime_seconds is None or uptime_seconds >= delay_seconds:
+            return None
+        return float(current_time) + max(0.0, float(delay_seconds) - uptime_seconds)
+
+    @staticmethod
+    def _read_local_version(repo_root: str) -> str:
+        """Return the locally installed wallbox version or an empty string."""
+        candidates = (
+            os.path.join(repo_root, ".bootstrap-state", "installed_version"),
+            os.path.join(repo_root, "version.txt"),
+        )
+        for path in candidates:
+            if not path or not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    first_line = handle.readline().strip()
+            except OSError:
+                continue
+            if first_line:
+                return first_line
+        return ""
+
     def initialize_runtime_support(self) -> None:
         """Initialize runtime caches and watchdog state kept in RAM only."""
         svc = self.service
+        repo_root = self._service_repo_root(svc)
+        started_at = time.time()
         svc.last_update = 0
         svc.session = requests.Session()
         svc._system_bus = None
@@ -80,15 +130,57 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
         svc._recovery_attempts = 0
         svc._runtime_state_serialized = None
         svc._runtime_overrides_serialized = None
+        svc._runtime_overrides_last_saved_at = None
+        svc._runtime_overrides_pending_serialized = None
+        svc._runtime_overrides_pending_values = None
+        svc._runtime_overrides_pending_text = None
+        svc._runtime_overrides_pending_due_at = None
         svc._runtime_overrides_active = False
         svc._runtime_overrides_values = {}
+        svc.runtime_overrides_write_min_interval_seconds = 1.0
         svc._dbus_publish_state = {}
         svc._dbus_live_publish_interval_seconds = 1.0
         svc._dbus_slow_publish_interval_seconds = 5.0
         svc._last_auto_audit_key = None
         svc._last_auto_audit_event_at = None
         svc._last_auto_audit_cleanup_at = 0.0
-        svc.started_at = time.time()
+        svc.started_at = started_at
+        svc.software_update_repo_root = repo_root
+        svc.software_update_install_script = os.path.join(repo_root, "install.sh") if repo_root else ""
+        svc.software_update_restart_script = (
+            os.path.join(repo_root, "deploy/venus/restart_shelly_wallbox.sh") if repo_root else ""
+        )
+        svc.software_update_no_update_file = os.path.join(repo_root, "noUpdate") if repo_root else ""
+        svc.software_update_log_path = "/var/volatile/log/dbus-shelly-wallbox/software-update.log"
+        svc.software_update_repo_slug = os.environ.get(
+            "SHELLY_WALLBOX_REPO_SLUG",
+            "martinthebrain/dbus-shelly-evcharger",
+        )
+        svc.software_update_channel = os.environ.get("SHELLY_WALLBOX_CHANNEL", "main")
+        svc.software_update_manifest_source = os.environ.get(
+            "SHELLY_WALLBOX_MANIFEST_SOURCE",
+            f"https://raw.githubusercontent.com/{svc.software_update_repo_slug}/{svc.software_update_channel}/deploy/venus/bootstrap_manifest.json",
+        )
+        svc.software_update_version_source = os.environ.get(
+            "SHELLY_WALLBOX_VERSION_SOURCE",
+            f"https://raw.githubusercontent.com/{svc.software_update_repo_slug}/{svc.software_update_channel}/version.txt",
+        )
+        svc._software_update_current_version = self._read_local_version(repo_root)
+        svc._software_update_available_version = ""
+        svc._software_update_available = False
+        svc._software_update_state = "idle"
+        svc._software_update_detail = ""
+        svc._software_update_last_check_at = None
+        svc._software_update_last_run_at = None
+        svc._software_update_last_result = ""
+        svc._software_update_process = None
+        svc._software_update_process_log_handle = None
+        svc._software_update_run_requested_at = None
+        svc._software_update_no_update_active = int(
+            bool(svc.software_update_no_update_file and os.path.isfile(svc.software_update_no_update_file))
+        )
+        svc._software_update_next_check_at = started_at + 300.0
+        svc._software_update_boot_auto_due_at = self._boot_delayed_update_due_at(started_at, 3600.0)
 
     def reset_system_bus(self) -> None:
         """Invalidate cached DBus connections so each thread reconnects cleanly."""

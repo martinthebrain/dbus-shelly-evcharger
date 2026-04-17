@@ -1,5 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Shelly HTTP and relay-worker helpers for the Shelly wallbox service."""
+"""Shelly HTTP and relay-worker helpers for the Shelly wallbox service.
+
+This module is the bridge between the service runtime and live device I/O.
+Historically the project started around Shelly relay control, but the same
+controller now also hosts the normalized charger-side read/write integration
+that other backends plug into.
+
+In other words: this file is where the abstract wallbox model meets network
+requests, worker polling, relay queues, charger estimates, and transport retry
+state.
+"""
 
 from __future__ import annotations
 
@@ -145,7 +155,13 @@ class _RequestKwargs(_RequestAuthKwargs):
 
 
 class ShellyIoHost(Protocol):
-    """Host attributes and callbacks required by ``ShellyIoController``."""
+    """Host attributes and callbacks required by ``ShellyIoController``.
+
+    The protocol is intentionally explicit because the controller depends on a
+    fairly rich host surface: transport state, runtime targets, worker state,
+    diagnostics, and callback hooks. Listing that surface here makes test
+    doubles and future refactors much easier to reason about.
+    """
 
     session: _SessionLike
     use_digest_auth: bool
@@ -268,7 +284,19 @@ class ShellyIoHost(Protocol):
 
 
 class ShellyIoController:
-    """Encapsulate Shelly HTTP access and relay queue/worker behavior."""
+    """Encapsulate Shelly HTTP access and relay queue/worker behavior.
+
+    The controller owns three related responsibilities:
+
+    - read current live state from Shelly or charger backends
+    - coordinate queued relay commands through the worker thread
+    - synthesize a stable wallbox-facing picture from raw device data
+
+    The synthesis part matters as much as the I/O part. Real installations may
+    have incomplete measurements, charger-native state, meterless estimates, or
+    short transport failures. This controller turns those pieces into one
+    coherent runtime surface for the higher layers.
+    """
 
     def __init__(self, service: ShellyIoHost) -> None:
         self.service = service

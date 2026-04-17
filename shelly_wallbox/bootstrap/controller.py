@@ -134,6 +134,7 @@ class ServiceBootstrapController(
         "/Enable",
         "/Auto/PhaseLockoutReset",
         "/Auto/ContactorLockoutReset",
+        "/Auto/SoftwareUpdateRun",
     }
 
     def __init__(

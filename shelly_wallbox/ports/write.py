@@ -70,6 +70,7 @@ class WriteControllerPort(_BaseServicePort):
         "auto_start_condition_since",
         "auto_stop_condition_since",
         "manual_override_until",
+        "_software_update_run_requested_at",
     }
     _MUTABLE_ATTRS = _ALLOWED_ATTRS
 
@@ -228,6 +229,14 @@ class WriteControllerPort(_BaseServicePort):
     @auto_scheduled_night_current_amps.setter
     def auto_scheduled_night_current_amps(self, value: Any) -> None:
         self._service.auto_scheduled_night_current_amps = float(finite_float_or_none(value) or 0.0)
+
+    @property
+    def _software_update_run_requested_at(self) -> float | None:
+        return finite_float_or_none(getattr(self._service, "_software_update_run_requested_at", None))
+
+    @_software_update_run_requested_at.setter
+    def _software_update_run_requested_at(self, value: Any) -> None:
+        self._service._software_update_run_requested_at = finite_float_or_none(value)
 
     @property
     def auto_dbus_backoff_base_seconds(self) -> float:

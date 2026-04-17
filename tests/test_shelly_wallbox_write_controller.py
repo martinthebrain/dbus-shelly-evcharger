@@ -278,6 +278,27 @@ class TestDbusWriteController(unittest.TestCase):
         service._queue_relay_command.assert_not_called()
         service._publish_local_pm_status.assert_not_called()
 
+    def test_handle_software_update_run_write_queues_request_and_resets_dbus_path(self) -> None:
+        service = SimpleNamespace(
+            _dbusservice={"/Auto/SoftwareUpdateRun": 0},
+            _time_now=MagicMock(return_value=200.0),
+            _publish_dbus_path=MagicMock(),
+            _state_summary=self._state_summary,
+            _save_runtime_state=MagicMock(),
+            _save_runtime_overrides=MagicMock(),
+            _software_update_run_requested_at=None,
+        )
+        service._publish_dbus_path.side_effect = self._publish_side_effect(service)
+
+        controller = DbusWriteController(WriteControllerPort(service))
+
+        self.assertTrue(controller.handle_write("/Auto/SoftwareUpdateRun", 1))
+
+        self.assertEqual(service._software_update_run_requested_at, 200.0)
+        self.assertEqual(service._dbusservice["/Auto/SoftwareUpdateRun"], 0)
+        service._save_runtime_state.assert_called_once()
+        service._save_runtime_overrides.assert_called_once()
+
     def test_snapshot_write_state_skips_non_mapping_dbusservice_objects(self) -> None:
         service = SimpleNamespace(
             _dbusservice=object(),

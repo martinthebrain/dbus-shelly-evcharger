@@ -1,5 +1,22 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Shared lightweight contracts for normalized wallbox state and snapshots."""
+"""Shared lightweight contracts for normalized wallbox state and snapshots.
+
+These helpers sit very close to the outward-facing state surface of the
+service. Their job is not to implement policy. Their job is to keep the values
+that leave the core consistent, boring, and easy to reason about.
+
+The main design idea is simple:
+
+- internal code may observe partially stale, partially conflicting signals
+- the outward DBus/MQTT surface should still expose one coherent shape
+- text labels and numeric codes should never drift apart
+- optional diagnostics should collapse to explicit empty/disabled forms instead
+  of leaking half-valid intermediate states
+
+That makes these helpers a small but important contract layer for contributors.
+When the service grows, this module is one of the safest places to encode
+"what a valid outward state looks like".
+"""
 
 from __future__ import annotations
 
@@ -7,6 +24,9 @@ import math
 from typing import Any, cast
 
 
+# These sets define the compact outward vocabulary that other modules may rely
+# on. Anything outside these labels is treated as unknown input and normalized
+# back into the supported state space.
 LEARNED_CHARGE_POWER_STATES = frozenset({"unknown", "learning", "stable", "stale"})
 LEARNED_CHARGE_POWER_PHASES = frozenset({"L1", "L2", "L3", "3P"})
 AUTO_STATE_CODES = {
@@ -32,6 +52,18 @@ SCHEDULED_REASON_CODES = {
     "waiting-fallback-delay": 3,
     "night-boost-window": 4,
     "latest-end-reached": 5,
+}
+SOFTWARE_UPDATE_STATE_CODES = {
+    "idle": 0,
+    "checking": 1,
+    "up-to-date": 2,
+    "available": 3,
+    "available-blocked": 4,
+    "running": 5,
+    "installed": 6,
+    "check-failed": 7,
+    "install-failed": 8,
+    "update-unavailable": 9,
 }
 
 
@@ -156,13 +188,24 @@ def normalized_auto_state_pair(state: Any, code: Any) -> tuple[str, int]:
 
 
 def normalized_status_source(value: Any) -> str:
-    """Return one stable outward-facing status source label."""
+    """Return one stable outward-facing status source label.
+
+    The GUI and MQTT clients benefit from a stable string here because they use
+    it as a compact explanation of "why the current status looks the way it
+    does". Empty strings are therefore avoided and normalized to ``unknown``.
+    """
     source = str(value).strip() if value is not None else ""
     return source or "unknown"
 
 
 def normalized_fault_state(reason: Any) -> tuple[str, int]:
-    """Return one consistent outward-facing fault reason/active pair."""
+    """Return one consistent outward-facing fault reason/active pair.
+
+    The service publishes both a textual reason and a binary active flag. This
+    helper keeps them derived from the same source so they can never diverge
+    into combinations such as "fault active with no reason" or "reason text
+    present while the active flag is 0".
+    """
     normalized_reason = "" if reason is None else str(reason).strip()
     return normalized_reason, int(bool(normalized_reason))
 
@@ -181,6 +224,14 @@ def normalized_scheduled_state_fields(
     their explicit disabled representation. When scheduled mode is active, text
     wins over mismatching numeric codes and night-boost activity may only remain
     active while the normalized state is ``night-boost``.
+
+    This prevents a surprisingly common class of drift bugs:
+
+    - the state text says one thing while the numeric code says another
+    - old scheduled values stay visible after the mode changed away from
+      scheduled
+    - the night-boost flag remains latched even though the state already moved
+      on to another phase of the schedule
     """
     if not bool(scheduled_active):
         return "disabled", 0, "disabled", 0, 0
@@ -192,24 +243,36 @@ def normalized_scheduled_state_fields(
     if normalized_reason not in SCHEDULED_REASON_CODES:
         normalized_reason = "disabled"
 
-    try:
-        supplied_state_code = int(state_code)
-    except (TypeError, ValueError):
-        supplied_state_code = None
-    try:
-        supplied_reason_code = int(reason_code)
-    except (TypeError, ValueError):
-        supplied_reason_code = None
-
     normalized_state_code = SCHEDULED_STATE_CODES[normalized_state]
     normalized_reason_code = SCHEDULED_REASON_CODES[normalized_reason]
-    if supplied_state_code != normalized_state_code:
-        supplied_state_code = normalized_state_code
-    if supplied_reason_code != normalized_reason_code:
-        supplied_reason_code = normalized_reason_code
-
     boost_active = int(bool(night_boost_active) and normalized_state == "night-boost")
-    return normalized_state, supplied_state_code, normalized_reason, supplied_reason_code, boost_active
+    return normalized_state, normalized_state_code, normalized_reason, normalized_reason_code, boost_active
+
+
+def normalized_software_update_state_fields(
+    state: Any,
+    available: Any,
+    no_update_active: Any,
+) -> tuple[str, int, int, int]:
+    """Return one consistent outward-facing software-update state tuple.
+
+    The state vocabulary is intentionally small and fixed. Availability and the
+    ``noUpdate`` marker remain explicit boolean fields, while the state text
+    carries only the primary lifecycle phase. The special ``available-blocked``
+    state exists so operators can distinguish "an update exists but local
+    policy blocks installation" from "no update is available".
+    """
+    normalized_available = normalize_binary_flag(available)
+    normalized_no_update_active = normalize_binary_flag(no_update_active)
+    normalized_state = str(state).strip().lower() if state is not None else "idle"
+    if normalized_state not in SOFTWARE_UPDATE_STATE_CODES:
+        normalized_state = "idle"
+    if normalized_available and normalized_no_update_active and normalized_state == "available":
+        normalized_state = "available-blocked"
+    if normalized_state == "available-blocked" and not normalized_no_update_active:
+        normalized_state = "available" if normalized_available else "up-to-date"
+    normalized_state_code = SOFTWARE_UPDATE_STATE_CODES[normalized_state]
+    return normalized_state, normalized_state_code, normalized_available, normalized_no_update_active
 
 
 def _displayable_timestamp_candidates(

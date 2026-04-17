@@ -4,6 +4,15 @@
 Victron GUI writes arrive here through writable DBus paths such as /Mode,
 /Enable, /StartStop, and /AutoStart. The controller translates those user
 actions into wallbox-specific state changes and Shelly relay commands.
+
+This module is where "operator intent" enters the service. Because writes can
+trigger real-world side effects, the code has to distinguish between two
+phases:
+
+- reversible in-memory state updates
+- irreversible external actions such as queued relay or charger commands
+
+That is why write snapshots and rollback helpers are so prominent here.
 """
 
 from __future__ import annotations
@@ -26,7 +35,20 @@ from shelly_wallbox.controllers.write_snapshot import (
 
 
 class DbusWriteController:
-    """Encapsulate writable DBus path handling for the Shelly wallbox service."""
+    """Encapsulate writable DBus path handling for the Shelly wallbox service.
+
+    A write handler in this project is more than a simple setter. It may need
+    to:
+
+    - normalize GUI input into supported values
+    - update several related runtime attributes together
+    - publish derived DBus paths immediately
+    - queue hardware actions
+    - preserve a rollback snapshot until the write is known to be safe
+
+    Keeping that orchestration inside one controller makes the behavior easier
+    to test and easier to extend when new writable paths are added.
+    """
 
     SNAPSHOT_DBUS_PATHS = SNAPSHOT_DBUS_PATHS
     SNAPSHOT_ATTRS = SNAPSHOT_ATTRS
@@ -75,7 +97,12 @@ class DbusWriteController:
 
     @classmethod
     def _snapshot_write_state(cls, svc: Any) -> dict[str, Any]:
-        """Capture mutable write-path state so failed writes can be rolled back."""
+        """Capture mutable write-path state so failed writes can be rolled back.
+
+        The snapshot is taken before a write begins. As long as no irreversible
+        external side effect has started, a failure can restore this snapshot
+        and leave the service exactly where it was before the write.
+        """
         return capture_write_state(
             svc,
             attrs=cls.SNAPSHOT_ATTRS,
@@ -91,7 +118,13 @@ class DbusWriteController:
         restore_write_state(svc, snapshot)
 
     def _queue_relay_command(self, svc: Any, relay_on: bool, current_time: float) -> None:
-        """Queue one relay command and record that write handling became irreversible."""
+        """Queue one relay command and record that write handling became irreversible.
+
+        Once a relay command has been accepted into the external control path,
+        the write is no longer a purely local state change. From that point on,
+        rollback has to preserve an honest "command already left the process"
+        picture instead of pretending the side effect never started.
+        """
         svc._queue_relay_command(relay_on, current_time)
         self._external_side_effect_started = True
 
@@ -137,7 +170,13 @@ class DbusWriteController:
         svc.ignore_min_offtime_once = False
 
     def _queue_auto_cutover(self, svc: Any, current_time: float) -> None:
-        """Perform the clean manual-to-auto cutover while charging."""
+        """Perform the clean manual-to-auto cutover while charging.
+
+        The cutover intentionally passes through a relay-off state. That gives
+        Auto mode a clean handover point and keeps the next automatic start
+        visible as an explicit policy decision instead of silently inheriting a
+        manual ON state.
+        """
         self._queue_relay_command(svc, False, current_time)
         svc.virtual_enable = 1
         svc.virtual_startstop = 0
@@ -224,7 +263,14 @@ class DbusWriteController:
         *,
         resume_relay: bool,
     ) -> None:
-        """Record one staged phase-switch request before relay-off confirmation."""
+        """Record one staged phase-switch request before relay-off confirmation.
+
+        Phase switching is handled as a staged operation. The request is stored
+        first, then the runtime waits for a safe relay-off confirmation, and
+        only then does the actual transition continue. This staged state is the
+        backbone for lockout handling, mismatch detection, and operator-facing
+        phase diagnostics.
+        """
         svc.requested_phase_selection = requested_selection
         svc._phase_switch_pending_selection = requested_selection
         svc._phase_switch_state = "waiting-relay-off"
@@ -627,6 +673,17 @@ class DbusWriteController:
             port.state_summary(),
         )
 
+    def _handle_software_update_run_write(self, value: Any) -> None:
+        """Queue one software-update run request for the periodic runtime loop."""
+        port = self.port
+        current_time = port.time_now()
+        if not bool(int(value)):
+            port.publish_dbus_path("/Auto/SoftwareUpdateRun", 0, current_time, force=True)
+            return
+        port._software_update_run_requested_at = current_time
+        port.publish_dbus_path("/Auto/SoftwareUpdateRun", 0, current_time, force=True)
+        logging.info("DBus write /Auto/SoftwareUpdateRun=1 queued a software update request %s", port.state_summary())
+
     def _handle_mode_value_write(self, value: Any) -> None:
         """Normalize and dispatch one /Mode write value."""
         self._handle_mode_write(int(value))
@@ -649,6 +706,7 @@ class DbusWriteController:
             "/PhaseSelection": self._handle_phase_selection_write,
             "/Auto/PhaseLockoutReset": self._handle_phase_lockout_reset_write,
             "/Auto/ContactorLockoutReset": self._handle_contactor_lockout_reset_write,
+            "/Auto/SoftwareUpdateRun": self._handle_software_update_run_write,
         }
 
     def _execute_write(self, path: str, value: Any) -> None:

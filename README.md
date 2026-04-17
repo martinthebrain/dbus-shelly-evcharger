@@ -140,7 +140,7 @@ The Venus MQTT bridge exposes the same runtime paths that the service publishes
 on DBus, so the wallbox can be steered locally in the GX UI and remotely in
 Home Assistant or other MQTT clients.
 
-Persisted runtime overrides cover these groups:
+Runtime override paths cover these groups:
 
 - Core charging:
   `/Mode`, `/AutoStart`, `/SetCurrent`, `/MinCurrent`, `/MaxCurrent`,
@@ -167,11 +167,30 @@ Persisted runtime overrides cover these groups:
 - Scheduled policy:
   `/Auto/ScheduledEnabledDays`, `/Auto/ScheduledFallbackDelaySeconds`,
   `/Auto/ScheduledLatestEndTime`, `/Auto/ScheduledNightCurrent`
+- Software update control:
+  `/Auto/SoftwareUpdateRun`
+- Software update visibility:
+  `/Auto/SoftwareUpdateAvailable`, `/Auto/SoftwareUpdateState`,
+  `/Auto/SoftwareUpdateStateCode`, `/Auto/SoftwareUpdateDetail`,
+  `/Auto/SoftwareUpdateCurrentVersion`, `/Auto/SoftwareUpdateAvailableVersion`,
+  `/Auto/SoftwareUpdateNoUpdateActive`
 
 Operational metadata:
 
 - `/Auto/RuntimeOverridesActive`
 - `/Auto/RuntimeOverridesPath`
+
+The default `RuntimeOverridesPath` uses `/run/...`, so DBus and MQTT control
+values stay in RAM during runtime and fall back to the base config after a GX
+reboot.
+
+Software update cadence:
+
+- remote availability check once per week
+- one delayed auto-refresh run about one hour after a GX reboot
+- manual refresh run through DBus or MQTT when `noUpdate` is absent
+- fixed outward update states including `available-blocked` for
+  "update exists and local policy blocks installation"
 
 ## Install On Cerbo GX / Venus OS
 
@@ -226,6 +245,7 @@ Useful bootstrap variables:
 - `SHELLY_WALLBOX_REQUIRE_SIGNED_MANIFEST`
 
 The full installation walkthrough lives in [INSTALL.md](INSTALL.md).
+The bootstrap and updater flow is described in [UPDATE_FLOW.md](UPDATE_FLOW.md).
 
 ## Configuration Guide
 

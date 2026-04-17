@@ -109,6 +109,34 @@ class TestUpdateCycleController(unittest.TestCase):
         path.write_text(content, encoding="utf-8")
         return str(path)
 
+    @staticmethod
+    def _software_update_service(repo_root: str, **overrides: object) -> SimpleNamespace:
+        data: dict[str, object] = {
+            "software_update_repo_root": repo_root,
+            "software_update_install_script": str(Path(repo_root) / "install.sh"),
+            "software_update_restart_script": str(Path(repo_root) / "deploy/venus/restart_shelly_wallbox.sh"),
+            "software_update_no_update_file": str(Path(repo_root) / "noUpdate"),
+            "software_update_log_path": str(Path(repo_root) / "software-update.log"),
+            "software_update_manifest_source": "https://example.invalid/bootstrap_manifest.json",
+            "software_update_version_source": "https://example.invalid/version.txt",
+            "_software_update_current_version": "",
+            "_software_update_available_version": "",
+            "_software_update_available": False,
+            "_software_update_state": "idle",
+            "_software_update_detail": "",
+            "_software_update_last_check_at": None,
+            "_software_update_last_run_at": None,
+            "_software_update_last_result": "",
+            "_software_update_process": None,
+            "_software_update_process_log_handle": None,
+            "_software_update_run_requested_at": None,
+            "_software_update_no_update_active": 0,
+            "_software_update_next_check_at": None,
+            "_software_update_boot_auto_due_at": None,
+        }
+        data.update(overrides)
+        return SimpleNamespace(**data)
+
     def test_auto_phase_selection_tracks_candidate_before_staged_upshift(self):
         service = _auto_phase_service(
             _last_confirmed_pm_status={"output": True},
@@ -257,6 +285,118 @@ class TestUpdateCycleController(unittest.TestCase):
 
     def test_normalize_learned_charge_power_state_falls_back_to_unknown_for_invalid_values(self):
         self.assertEqual(UpdateCycleController._normalize_learned_charge_power_state("weird"), "unknown")
+
+    def test_software_update_check_marks_update_available_from_manifest_hash(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bootstrap_state = Path(temp_dir) / ".bootstrap-state"
+            bootstrap_state.mkdir(parents=True, exist_ok=True)
+            (bootstrap_state / "installed_bundle_sha256").write_text("oldhash\n", encoding="utf-8")
+            (bootstrap_state / "installed_version").write_text("1.2.3\n", encoding="utf-8")
+            service = self._software_update_service(temp_dir)
+            controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+            response = MagicMock()
+            response.raise_for_status.return_value = None
+            response.json.return_value = {"version": "1.2.4", "bundle_sha256": "newhash"}
+
+            with patch("shelly_wallbox.update.controller.requests.get", return_value=response) as mock_get:
+                controller._run_software_update_check(service, 100.0)
+
+            mock_get.assert_called_once_with(
+                "https://example.invalid/bootstrap_manifest.json",
+                timeout=UpdateCycleController.SOFTWARE_UPDATE_REQUEST_TIMEOUT_SECONDS,
+            )
+            self.assertEqual(service._software_update_state, "available")
+            self.assertTrue(service._software_update_available)
+            self.assertEqual(service._software_update_available_version, "1.2.4")
+            self.assertEqual(service._software_update_current_version, "1.2.3")
+            self.assertEqual(service._software_update_detail, "manifest")
+            self.assertEqual(service._software_update_last_check_at, 100.0)
+            self.assertEqual(
+                service._software_update_next_check_at,
+                100.0 + UpdateCycleController.SOFTWARE_UPDATE_CHECK_INTERVAL_SECONDS,
+            )
+
+    def test_software_update_run_is_blocked_by_no_update_marker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            (repo_root / "noUpdate").write_text("", encoding="utf-8")
+            service = self._software_update_service(
+                temp_dir,
+                _software_update_run_requested_at=50.0,
+                _software_update_available=True,
+                _software_update_last_check_at=100.0,
+            )
+            controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+            started = controller._start_software_update_run(service, 120.0, "manual")
+
+            self.assertFalse(started)
+            self.assertEqual(service._software_update_state, "available-blocked")
+            self.assertEqual(service._software_update_detail, "noUpdate marker present")
+            self.assertIsNone(service._software_update_run_requested_at)
+            self.assertIsNone(service._software_update_process)
+
+    def test_software_update_housekeeping_starts_boot_delayed_run_when_due(self):
+        service = self._software_update_service(
+            "",
+            _software_update_next_check_at=10_000.0,
+            _software_update_boot_auto_due_at=100.0,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        with patch.object(UpdateCycleController, "_start_software_update_run", return_value=True) as start_run:
+            controller._software_update_housekeeping(service, 120.0)
+
+        self.assertIsNone(service._software_update_boot_auto_due_at)
+        start_run.assert_called_once_with(service, 120.0, "boot-auto")
+
+    def test_software_update_housekeeping_starts_manual_run_when_requested(self):
+        service = self._software_update_service(
+            "",
+            _software_update_next_check_at=10_000.0,
+            _software_update_run_requested_at=110.0,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        with patch.object(UpdateCycleController, "_start_software_update_run", return_value=True) as start_run:
+            controller._software_update_housekeeping(service, 120.0)
+
+        start_run.assert_called_once_with(service, 120.0, "manual")
+
+    def test_software_update_housekeeping_discards_manual_request_while_run_is_already_active(self):
+        process = MagicMock()
+        process.poll.return_value = None
+        service = self._software_update_service(
+            "",
+            _software_update_process=process,
+            _software_update_run_requested_at=110.0,
+            _software_update_boot_auto_due_at=100.0,
+            _software_update_next_check_at=10_000.0,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        with patch.object(UpdateCycleController, "_start_software_update_run", return_value=True) as start_run:
+            controller._software_update_housekeeping(service, 120.0)
+
+        self.assertIsNone(service._software_update_run_requested_at)
+        self.assertIsNone(service._software_update_boot_auto_due_at)
+        start_run.assert_not_called()
+
+    def test_update_flushes_debounced_runtime_overrides_from_main_loop(self):
+        service = self._software_update_service("")
+        service._time_now = MagicMock(return_value=42.0)
+        service._flush_runtime_overrides = MagicMock()
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        with patch.object(controller, "_run_update_cycle", return_value=True), patch.object(
+            controller,
+            "_software_update_housekeeping",
+        ) as housekeeping_mock:
+            result = controller.update()
+
+        self.assertTrue(result)
+        service._flush_runtime_overrides.assert_called_once_with(42.0)
+        housekeeping_mock.assert_called_once_with(service, 42.0)
 
     def test_current_learning_voltage_signature_uses_last_voltage_fallback_and_none_without_cache(self):
         service = SimpleNamespace(_last_voltage=228.5)

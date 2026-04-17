@@ -1,5 +1,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""CLI helper to validate and probe wallbox backend adapter configs."""
+"""CLI helper to validate and probe wallbox backend adapter configs.
+
+The probe tool gives contributors and operators a safe way to answer practical
+questions such as:
+
+- does this config file parse and match the intended backend role?
+- does the composed wallbox topology resolve correctly?
+- what does a backend expose before the full service is started?
+- can one live charger read be performed without bringing up the whole service?
+
+That makes this module one of the most useful bridges between configuration
+work, backend development, and field troubleshooting.
+"""
 
 from __future__ import annotations
 
@@ -36,7 +48,12 @@ def _adapter_type(path: str) -> str:
 
 
 def _probe_service() -> Any:
-    """Return one small service stub for standalone backend probing."""
+    """Return one small service stub for standalone backend probing.
+
+    Backends expect a service-like host object with a handful of shared
+    attributes. The probe CLI supplies the smallest practical host surface so a
+    backend can be instantiated outside the full Venus runtime.
+    """
     return SimpleNamespace(
         session=requests.Session(),
         host="",
@@ -102,7 +119,12 @@ def _json_ready_sequence(value: list[Any] | tuple[Any, ...]) -> list[Any]:
 
 
 def validate_backend_config(path: str) -> dict[str, object]:
-    """Validate backend config type and role compatibility without network I/O."""
+    """Validate backend config type and role compatibility without network I/O.
+
+    This is the fastest safety check for a single adapter file. It proves that
+    the file can be parsed, that its adapter type is known, and that the file
+    is accepted by the backend constructor for the intended role.
+    """
     adapter_type = _adapter_type(path)
     valid_roles: list[str] = []
     if adapter_type in METER_BACKENDS:
@@ -124,7 +146,12 @@ def validate_backend_config(path: str) -> dict[str, object]:
 
 
 def validate_wallbox_config(path: str) -> dict[str, object]:
-    """Validate one full wallbox config including backend selection compatibility."""
+    """Validate one full wallbox config including backend selection compatibility.
+
+    This command is especially useful for composed installations because it
+    resolves the meter/switch/charger selection as the full service would see
+    it, while still staying outside live device I/O.
+    """
     config = _config(path)
     service = _probe_service_from_wallbox_config(config)
     resolved = build_service_backends(service)
@@ -221,7 +248,12 @@ def probe_charger_backend(path: str) -> dict[str, object]:
 
 
 def read_charger_backend(path: str) -> dict[str, object]:
-    """Read one live charger-state sample through the configured backend."""
+    """Read one live charger-state sample through the configured backend.
+
+    This is the most runtime-near probe mode. It keeps the full service out of
+    the picture and answers the concrete question "what state does this charger
+    backend return right now?".
+    """
     payload = probe_charger_backend(path)
     adapter_type = _adapter_type(path)
     constructor = CHARGER_BACKENDS.get(adapter_type)

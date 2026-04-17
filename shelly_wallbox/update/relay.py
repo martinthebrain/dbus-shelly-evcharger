@@ -5,6 +5,17 @@ The update cycle is the heartbeat of the wallbox integration. Every pass reads
 the latest Shelly snapshot, lets Auto mode decide whether the relay should be
 on, applies corrections if needed, and then publishes the resulting charger
 state back to Venus OS.
+
+This module is where several kinds of truth meet each other:
+
+- backend readback
+- Auto and Scheduled policy intent
+- phase-switch sequencing
+- charger-native state
+- contactor and feedback diagnostics
+
+That makes it one of the best places to understand the wallbox runtime as a
+state machine instead of as a bag of independent flags.
 """
 
 from __future__ import annotations
@@ -42,6 +53,20 @@ from shelly_wallbox.core.split_mixins import ComposableControllerMixin as _Compo
 
 
 class _UpdateCycleRelayMixin(_ComposableControllerMixin):
+    """Mixin with the core update-cycle decision and correction helpers.
+
+    The surrounding service owns the long-lived runtime state. This mixin owns
+    the "one cycle of thinking" that happens over and over:
+
+    1. read current observations
+    2. derive target relay/current/phase intent
+    3. apply corrections when the real world drifted away from that intent
+    4. publish the current state back out
+
+    The methods below therefore read a little like a policy engine. That is
+    expected. They are the narrow waist between backend-specific input and the
+    outward wallbox behavior.
+    """
     PHASE_SWITCH_WAITING_STATE = "waiting-relay-off"
     PHASE_SWITCH_STABILIZING_STATE = "stabilizing"
     CHARGER_FAULT_HINT_TOKENS = frozenset(
@@ -181,7 +206,17 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         voltage: float,
         now: float,
     ) -> tuple[PhaseSelection | None, str, float | None]:
-        """Return the next phase-selection target plus the reason that chose it."""
+        """Return the next phase-selection target plus the reason that chose it.
+
+        This helper is the entry point for automatic phase selection. It first
+        asks whether policy or topology short-circuits phase switching entirely.
+        Then it checks the "easy" branch where the system is idle and can
+        choose a preferred resting layout. Only after those branches are
+        exhausted does it evaluate surplus-driven upshift and downshift rules.
+
+        Returning both a target and a textual reason is important because the
+        same decision is later reused for diagnostics and tests.
+        """
         policy_state = cls._auto_phase_policy_state(svc, supported)
         if policy_state is not None:
             return policy_state
@@ -216,7 +251,12 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         voltage: float,
         now: float,
     ) -> tuple[PhaseSelection | None, str, float | None]:
-        """Return one surplus-driven phase target once idle-mode shortcuts are excluded."""
+        """Return one surplus-driven phase target once idle-mode shortcuts are excluded.
+
+        The ordering matters here. Upshift is evaluated before downshift so the
+        code can express "move up when the headroom is clearly there, otherwise
+        fall back to the more conservative sustain-the-current-layout check".
+        """
         surplus_watts = cls._auto_phase_metric_surplus_watts(svc)
         if surplus_watts is None:
             return None, "phase-surplus-missing", None
@@ -252,7 +292,13 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         svc: Any,
         supported: tuple[PhaseSelection, ...],
     ) -> tuple[PhaseSelection | None, str, float | None] | None:
-        """Return one terminal result when phase policy is disabled or unsupported."""
+        """Return one terminal result when phase policy is disabled or unsupported.
+
+        Returning a terminal result here keeps the later decision code focused
+        on real phase changes. Situations such as "phase switching is disabled"
+        or "there is only one supported layout" are treated as complete answers
+        and carried through as explicit reasons.
+        """
         phase_policy = cls._auto_phase_policy(svc)
         if phase_policy is None or not bool(getattr(phase_policy, "enabled", True)):
             return None, "phase-policy-disabled", None

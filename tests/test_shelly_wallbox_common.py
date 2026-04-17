@@ -14,6 +14,7 @@ from shelly_wallbox.core.contracts import (
     normalized_auto_decision_trace,
     normalized_auto_state_pair,
     normalized_scheduled_state_fields,
+    normalized_software_update_state_fields,
     normalized_status_source,
     normalized_worker_snapshot,
     normalize_learning_phase,
@@ -119,6 +120,22 @@ class TestShellyWallboxCommon(unittest.TestCase):
         self.assertEqual(
             normalized_scheduled_state_fields(False, "night-boost", 4, "night-boost-window", 4, 1),
             ("disabled", 0, "disabled", 0, 0),
+        )
+        self.assertEqual(
+            normalized_software_update_state_fields("available", 1, 0),
+            ("available", 3, 1, 0),
+        )
+        self.assertEqual(
+            normalized_software_update_state_fields("available", 1, 1),
+            ("available-blocked", 4, 1, 1),
+        )
+        self.assertEqual(
+            normalized_software_update_state_fields("available-blocked", 1, 0),
+            ("available", 3, 1, 0),
+        )
+        self.assertEqual(
+            normalized_software_update_state_fields("weird", 0, 0),
+            ("idle", 0, 0, 0),
         )
         self.assertEqual(
             displayable_confirmed_read_timestamp(

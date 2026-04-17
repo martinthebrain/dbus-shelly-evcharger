@@ -1,5 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Shared constants and helper functions for the Shelly wallbox service."""
+"""Shared constants and helper functions for the Shelly wallbox service.
+
+This module contains the small pieces of domain logic that many other parts of
+the service depend on: health labels, broad Auto states, Scheduled mode timing,
+transport retry windows, and freshness helpers.
+
+It is a good module to read when you want to understand how the service thinks
+about charging state at a high level, before looking at backend-specific or
+publish-specific code.
+"""
 
 from __future__ import annotations
 
@@ -54,6 +63,10 @@ def _status_label(_p: Any, value: Any) -> str:
     return labels.get(int(value), "Unbekannt")
 
 
+# The health code tables give the rest of the codebase one stable vocabulary
+# for broad wallbox state. The textual labels remain the primary "meaningful"
+# representation, while the numeric codes are there for DBus consumers, tests,
+# and compact outward diagnostics.
 HEALTH_CODES: dict[str, int] = {
     "init": 0,
     "inputs-missing": 1,
@@ -154,7 +167,13 @@ DEFAULT_SCHEDULED_ENABLED_DAYS: WeekdaySelection = (0, 1, 2, 3, 4)
 
 @dataclass(frozen=True)
 class ScheduledModeSnapshot:
-    """Derived scheduled-mode status for one local timestamp."""
+    """Derived scheduled-mode status for one local timestamp.
+
+    This snapshot is intentionally rich: it includes the broad state, the
+    reason, the target day, and the computed time bounds that explain why the
+    scheduler is in its current state. That makes it useful both for runtime
+    decisions and for operator-facing diagnostics.
+    """
 
     state: str
     state_code: int
@@ -265,7 +284,13 @@ def _derive_auto_state(
     relay_on: bool = False,
     learned_charge_power_state: Any = None,
 ) -> str:
-    """Collapse detailed health reasons into one explicit broad Auto state."""
+    """Collapse detailed health reasons into one explicit broad Auto state.
+
+    Many parts of the runtime work with detailed health reasons because they
+    are precise and useful for debugging. The GUI and many consumers only need
+    a smaller state machine such as ``waiting`` or ``charging``. This helper is
+    the bridge between those two levels.
+    """
     base_reason = _base_auto_reason(reason)
     learned_state = _normalized_learning_hint(learned_charge_power_state)
     state_from_reason = _reason_auto_state(base_reason)
@@ -379,7 +404,13 @@ def _fresh_charger_transport_detail(svc: Any, now: float | int | None = None) ->
 
 
 def _charger_transport_retry_delay_seconds(svc: Any, reason: Any) -> float:
-    """Return one charger-specific retry delay for the given transport failure reason."""
+    """Return one charger-specific retry delay for the given transport failure reason.
+
+    Different transport failures benefit from different retry shapes. A busy
+    port can be retried quickly, while an offline charger should get a longer
+    quiet period. Encoding that policy here keeps the retry behavior readable
+    and consistent across backends.
+    """
     normalized = _normalized_charger_transport_reason(reason)
     base_delay_seconds = _positive_service_float(svc, "auto_dbus_backoff_base_seconds") or 5.0
     soft_fail_seconds = _positive_service_float(svc, "auto_shelly_soft_fail_seconds") or 10.0
@@ -705,10 +736,28 @@ def scheduled_mode_snapshot(
     delay_seconds: float = 3600.0,
     latest_end_time: Any = "06:30",
 ) -> ScheduledModeSnapshot:
-    """Return the scheduled-mode policy state for one local timestamp."""
+    """Return the scheduled-mode policy state for one local timestamp.
+
+    Scheduled mode is modeled as "Auto during the daytime window, plus an
+    optional night-boost window for the target morning". The function derives
+    that state from four ingredients:
+
+    - the local timestamp
+    - the configured month-specific daytime windows
+    - the selected target weekdays
+    - the fallback delay and latest-end cutoff
+
+    The returned snapshot is used both for live policy decisions and for the
+    outward diagnostics that explain the current scheduled behavior.
+    """
     def _dt_text(value: datetime) -> str:
         return value.strftime("%Y-%m-%d %H:%M")
 
+    # The scheduler works in terms of the "target morning". After today's
+    # daytime window ended, the next useful target is usually the following day.
+    # This makes weekday-based night charging behave like people expect: a
+    # Sunday evening can target Monday morning, a Friday evening can target
+    # Saturday morning, and so on.
     target_date = _scheduled_target_day(when, month_windows)
     target_day_index = int(target_date.weekday())
     enabled_tuple = normalize_scheduled_enabled_days(enabled_days)
@@ -729,6 +778,10 @@ def scheduled_mode_snapshot(
     daytime_start = _datetime_for_minutes(target_date, start_minutes)
     night_boost_end = min(latest_end_dt, daytime_start)
     current_minutes = when.hour * 60 + when.minute
+    # During the active daytime window we stay in the normal Auto-facing
+    # branch, even if the same target day would otherwise qualify for night
+    # boost. This keeps the scheduled state model easy to explain:
+    # daytime uses Auto policy, night uses the scheduled fallback window.
     if start_minutes < end_minutes and start_minutes <= current_minutes < end_minutes and when.date() == target_date:
         return ScheduledModeSnapshot(
             state="auto-window",
@@ -759,6 +812,11 @@ def scheduled_mode_snapshot(
             boost_until_text=_dt_text(night_boost_end),
         )
 
+    # Outside the daytime window, the scheduler moves through three clear
+    # phases:
+    # 1. waiting for the fallback delay to expire
+    # 2. active night-boost window
+    # 3. latest-end reached, so the boost window is over
     if when < fallback_start:
         state = "waiting-fallback"
         reason = "waiting-fallback-delay"

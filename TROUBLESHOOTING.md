@@ -26,6 +26,9 @@ If you want the direct traceback, start the service once in the foreground:
 python3 ./dbus_shelly_wallbox.py
 ```
 
+If the issue started directly after a refresh, check the bootstrap and release
+behavior in [UPDATE_FLOW.md](UPDATE_FLOW.md).
+
 ## EV Charger Tile Does Not Appear
 
 Check whether the DBus service is present:
@@ -156,6 +159,9 @@ Restart the service after a larger tuning session:
 ```bash
 svc -t /service/dbus-shelly-wallbox
 ```
+
+If the override path points to `/run/...`, a full GX reboot clears the runtime
+layer and the service comes back on the base config.
 
 ## Fast Validation Commands
 

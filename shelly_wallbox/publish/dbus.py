@@ -1,5 +1,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Helpers for throttled DBus publishing in the Shelly wallbox service."""
+"""Helpers for throttled DBus publishing in the Shelly wallbox service.
+
+This module is the last step before values become visible on Venus DBus and,
+through the Venus MQTT bridge, to external consumers as well.
+
+That makes it an important translation layer:
+
+- the runtime may carry richer internal detail than the GUI needs
+- some values move quickly and should be throttled
+- groups of related values should be published together
+- outward text/code pairs should stay internally consistent
+
+In practice this controller is where "internal service state" turns into the
+stable outward truth that users and operators actually see.
+"""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -32,6 +46,7 @@ from shelly_wallbox.core.contracts import (
     normalized_auto_state_pair,
     normalized_fault_state,
     normalized_scheduled_state_fields,
+    normalized_software_update_state_fields,
     normalized_status_source,
     normalize_binary_flag,
     normalize_learning_phase,
@@ -54,7 +69,18 @@ class _LearnedDisplayCurrentInputs:
 
 
 class DbusPublishController:
-    """Publish Shelly wallbox DBus paths with simple change and interval throttling."""
+    """Publish Shelly wallbox DBus paths with simple change and interval throttling.
+
+    The controller does three things:
+
+    1. decide when a path should be published
+    2. publish related path groups transactionally where practical
+    3. keep outward diagnostics normalized and readable
+
+    Keeping this logic centralized helps a lot when the project grows, because
+    new features can hook into one stable publishing surface instead of each
+    feature inventing its own DBus update rules.
+    """
 
     PHASE_NAMES: tuple[str, str, str] = ("L1", "L2", "L3")
 
@@ -222,7 +248,17 @@ class DbusPublishController:
         interval_seconds: float | None = None,
         force: bool = False,
     ) -> bool:
-        """Publish one DBus path group with shared best-effort rollback and failure reporting."""
+        """Publish one DBus path group with shared best-effort rollback and failure reporting.
+
+        A number of DBus values form one logical snapshot, for example a bundle
+        of diagnostics or all live AC measurements. If one write in that bundle
+        fails, we restore the bookkeeping for paths that were already staged so
+        the next publish cycle can try again from a clean baseline.
+
+        This is not a hard transactional database model. It is a practical
+        "keep related values together as much as possible" strategy for the
+        Venus DBus surface.
+        """
         self.ensure_state()
         current = time.time() if now is None else float(now)
         staged_values, staged_entries, original_service_values = self._stage_publish_values(
@@ -841,13 +877,25 @@ class DbusPublishController:
         return self._publish_values_transactional("config", self._config_values(startstop_display, now), now)
 
     def _diagnostic_counter_values(self, now: float) -> dict[str, str | int | float]:
-        """Return change-driven diagnostic counters keyed by DBus path."""
+        """Return change-driven diagnostic counters keyed by DBus path.
+
+        This method is the compact outward status snapshot for operators. It
+        pulls together health, scheduled state, backend composition, retry,
+        transport, phase, feedback, and contactor diagnostics in one place.
+
+        The normalization helpers used here are important. They ensure the
+        published DBus surface keeps one consistent story even when internal
+        sources were produced by different layers and at slightly different
+        times.
+        """
         error_state = cast(dict[str, Any], self.service._error_state)
         scheduled_snapshot = self._scheduled_snapshot(self.service, now)
         auto_state, auto_state_code = normalized_auto_state_pair(
             getattr(self.service, "_last_auto_state", "idle"),
             getattr(self.service, "_last_auto_state_code", 0),
         )
+        # Scheduled diagnostics are published through one normalized tuple so
+        # the text labels, numeric codes, and active-boost flag always agree.
         scheduled_state, scheduled_state_code, scheduled_reason, scheduled_reason_code, scheduled_night_boost = (
             normalized_scheduled_state_fields(
                 scheduled_snapshot is not None,
@@ -858,7 +906,16 @@ class DbusPublishController:
                 0 if scheduled_snapshot is None else int(bool(scheduled_snapshot.night_boost_active)),
             )
         )
+        # Fault text and fault-active are also derived together so downstream
+        # consumers never have to guess whether one of the two is authoritative.
         fault_reason, fault_active = normalized_fault_state(self._fault_reason(self.service))
+        software_update_state, software_update_state_code, software_update_available, software_update_no_update = (
+            normalized_software_update_state_fields(
+                getattr(self.service, "_software_update_state", "idle"),
+                getattr(self.service, "_software_update_available", False),
+                getattr(self.service, "_software_update_no_update_active", False),
+            )
+        )
         error_count = int(
             error_state.get("dbus", 0)
             + error_state.get("shelly", 0)
@@ -900,6 +957,17 @@ class DbusPublishController:
             "/Auto/ChargerEstimateSource": self._charger_estimate_source(),
             "/Auto/RuntimeOverridesActive": int(bool(getattr(self.service, "_runtime_overrides_active", False))),
             "/Auto/RuntimeOverridesPath": str(getattr(self.service, "runtime_overrides_path", "") or ""),
+            "/Auto/SoftwareUpdateAvailable": software_update_available,
+            "/Auto/SoftwareUpdateState": software_update_state,
+            "/Auto/SoftwareUpdateStateCode": software_update_state_code,
+            "/Auto/SoftwareUpdateDetail": str(getattr(self.service, "_software_update_detail", "") or ""),
+            "/Auto/SoftwareUpdateCurrentVersion": str(
+                getattr(self.service, "_software_update_current_version", "") or ""
+            ),
+            "/Auto/SoftwareUpdateAvailableVersion": str(
+                getattr(self.service, "_software_update_available_version", "") or ""
+            ),
+            "/Auto/SoftwareUpdateNoUpdateActive": software_update_no_update,
             "/Auto/ChargerTransportActive": self._charger_transport_active(now),
             "/Auto/ChargerTransportReason": self._charger_transport_reason(now),
             "/Auto/ChargerTransportSource": self._charger_transport_source(now),
@@ -993,6 +1061,14 @@ class DbusPublishController:
             ),
             "/Auto/ChargerRetryRemaining": float(_charger_retry_remaining_seconds(svc, now)),
             "/Auto/LastSuccessfulUpdateAge": self._age_seconds(svc._last_successful_update_at, now),
+            "/Auto/SoftwareUpdateLastCheckAge": self._age_seconds(
+                getattr(svc, "_software_update_last_check_at", None),
+                now,
+            ),
+            "/Auto/SoftwareUpdateLastRunAge": self._age_seconds(
+                getattr(svc, "_software_update_last_run_at", None),
+                now,
+            ),
             "/Auto/StaleSeconds": self._age_seconds(stale_base, now),
         }
 

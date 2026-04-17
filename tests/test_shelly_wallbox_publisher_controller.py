@@ -480,7 +480,7 @@ class TestDbusPublishController(unittest.TestCase):
             _last_charger_estimate_source="current-voltage-phase",
             _last_charger_estimate_at=current_time - 1.0,
             _runtime_overrides_active=True,
-            runtime_overrides_path="/data/etc/wallbox-overrides.ini",
+            runtime_overrides_path="/run/wallbox-overrides.ini",
             _last_charger_transport_reason="offline",
             _last_charger_transport_source="read",
             _last_charger_transport_detail="Modbus slave 1 on /dev/ttyS7 did not respond",
@@ -521,6 +521,14 @@ class TestDbusPublishController(unittest.TestCase):
             _last_grid_at=current_time - 6.0,
             _last_dbus_ok_at=current_time - 1.0,
             _last_successful_update_at=current_time - 7.0,
+            _software_update_available=True,
+            _software_update_state="available",
+            _software_update_detail="manifest",
+            _software_update_current_version="1.2.3",
+            _software_update_available_version="1.2.4",
+            _software_update_no_update_active=True,
+            _software_update_last_check_at=current_time - 60.0,
+            _software_update_last_run_at=current_time - 3600.0,
             started_at=current_time - 10.0,
         )
         controller = DbusPublishController(service, self._real_age_seconds)
@@ -552,7 +560,14 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(counter_values["/Auto/ChargerEstimateActive"], 1)
         self.assertEqual(counter_values["/Auto/ChargerEstimateSource"], "current-voltage-phase")
         self.assertEqual(counter_values["/Auto/RuntimeOverridesActive"], 1)
-        self.assertEqual(counter_values["/Auto/RuntimeOverridesPath"], "/data/etc/wallbox-overrides.ini")
+        self.assertEqual(counter_values["/Auto/RuntimeOverridesPath"], "/run/wallbox-overrides.ini")
+        self.assertEqual(counter_values["/Auto/SoftwareUpdateAvailable"], 1)
+        self.assertEqual(counter_values["/Auto/SoftwareUpdateState"], "available-blocked")
+        self.assertEqual(counter_values["/Auto/SoftwareUpdateStateCode"], 4)
+        self.assertEqual(counter_values["/Auto/SoftwareUpdateDetail"], "manifest")
+        self.assertEqual(counter_values["/Auto/SoftwareUpdateCurrentVersion"], "1.2.3")
+        self.assertEqual(counter_values["/Auto/SoftwareUpdateAvailableVersion"], "1.2.4")
+        self.assertEqual(counter_values["/Auto/SoftwareUpdateNoUpdateActive"], 1)
         self.assertEqual(counter_values["/Auto/ChargerTransportActive"], 1)
         self.assertEqual(counter_values["/Auto/ChargerTransportReason"], "offline")
         self.assertEqual(counter_values["/Auto/ChargerTransportSource"], "read")
@@ -597,6 +612,8 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(age_values["/Auto/LastChargerEstimateAge"], 1.0)
         self.assertEqual(age_values["/Auto/LastChargerTransportAge"], 2.0)
         self.assertEqual(age_values["/Auto/ChargerRetryRemaining"], 5.0)
+        self.assertEqual(age_values["/Auto/SoftwareUpdateLastCheckAge"], 60.0)
+        self.assertEqual(age_values["/Auto/SoftwareUpdateLastRunAge"], 3600.0)
 
         service._last_health_reason = "contactor-suspected-welded"
         welded_counter_values = controller._diagnostic_counter_values(current_time)
@@ -625,6 +642,44 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(lockout_counter_values["/Auto/ContactorLockoutReason"], "contactor-suspected-open")
         self.assertEqual(lockout_counter_values["/Auto/ContactorLockoutSource"], "count-threshold")
         self.assertEqual(lockout_age_values["/Auto/ContactorLockoutAge"], 6.0)
+
+    def test_software_update_age_values_are_negative_one_before_any_check_or_run(self) -> None:
+        service = SimpleNamespace(
+            _dbusservice={},
+            _dbus_publish_state={},
+            _dbus_live_publish_interval_seconds=1.0,
+            _dbus_slow_publish_interval_seconds=5.0,
+            _error_state={"dbus": 0, "shelly": 0, "charger": 0, "pv": 0, "battery": 0, "grid": 0, "cache_hits": 0},
+            last_status=0,
+            virtual_mode=1,
+            _last_health_reason="init",
+            _last_health_code=0,
+            _last_auto_state="idle",
+            _last_auto_state_code=0,
+            _last_status_source="unknown",
+            auto_month_windows={},
+            auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
+            auto_scheduled_night_start_delay_seconds=3600.0,
+            auto_scheduled_latest_end_time="06:30",
+            _last_confirmed_pm_status_at=None,
+            _last_pm_status_at=None,
+            _last_pm_status_confirmed=False,
+            _last_pv_at=None,
+            _last_battery_soc_at=None,
+            _last_grid_at=None,
+            _last_dbus_ok_at=None,
+            _software_update_last_check_at=None,
+            _software_update_last_run_at=None,
+            _is_update_stale=self._never_stale,
+            _last_successful_update_at=90.0,
+            started_at=90.0,
+        )
+        controller = DbusPublishController(service, self._real_age_seconds)
+
+        age_values = controller._diagnostic_age_values(100.0)
+
+        self.assertEqual(age_values["/Auto/SoftwareUpdateLastCheckAge"], -1.0)
+        self.assertEqual(age_values["/Auto/SoftwareUpdateLastRunAge"], -1.0)
 
     def test_diagnostic_values_keep_fault_and_recovery_visible_while_scheduled_and_retry_are_also_active(self) -> None:
         current_time = 1776718800.0  # 2026-04-20 21:00:00 local/test timestamp

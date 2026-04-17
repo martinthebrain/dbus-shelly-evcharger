@@ -9,6 +9,11 @@ service comes up:
 - register DBus paths
 - start the helper/worker processes
 - hand control over to the GLib main loop
+
+This module is effectively the assembly line for the service. It turns the
+configuration file into a ready-to-run runtime object graph and fills the
+service instance with the normalized attributes the rest of the codebase
+expects.
 """
 
 from __future__ import annotations
@@ -36,6 +41,9 @@ MONTH_WINDOW_DEFAULTS: dict[int, tuple[str, str]] = {
     11: ("08:30", "17:00"),
     12: ("09:00", "16:30"),
 }
+# The month-window defaults are a practical baseline for daytime-oriented
+# charging behavior. Installations can tune them freely, but keeping the full
+# year visible in one table makes the default seasonal shape easy to review.
 
 
 def _config_value(defaults: configparser.SectionProxy, key: str, fallback: Any) -> str:
@@ -56,7 +64,20 @@ def _seasonal_month_windows(
 
 class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
     def load_runtime_configuration(self) -> None:
-        """Load the on-disk config and map it onto service attributes."""
+        """Load the on-disk config and map it onto service attributes.
+
+        The loading order is important:
+
+        1. identity and basic runtime paths
+        2. backend topology
+        3. DBus input sources
+        4. Auto and Scheduled policy
+        5. helper and timeout behavior
+
+        That order mirrors how a person would usually think about a deployment:
+        first "what is this service", then "what hardware is attached", then
+        "how should it behave".
+        """
         svc = self.service
         svc.config = svc._load_config()
         defaults = svc.config["DEFAULT"]
@@ -106,7 +127,7 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
         ).strip()
         svc.runtime_overrides_path = defaults.get(
             "RuntimeOverridesPath",
-            getattr(svc, "runtime_overrides_path", f"/data/etc/dbus-shelly-wallbox-overrides-{svc.deviceinstance}.ini"),
+            getattr(svc, "runtime_overrides_path", f"/run/dbus-shelly-wallbox-overrides-{svc.deviceinstance}.ini"),
         ).strip()
 
     def _load_auto_source_config(self, defaults: configparser.SectionProxy) -> None:
@@ -153,7 +174,13 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
         )
 
     def _load_backend_config(self) -> None:
-        """Load normalized meter/switch/charger backend selection."""
+        """Load normalized meter/switch/charger backend selection.
+
+        Backend selection is normalized early because many later config
+        decisions depend on the topology shape. A charger-native setup and a
+        relay-driven setup expose different valid combinations of meter,
+        switch, and charger roles.
+        """
         svc = self.service
         selection = load_backend_selection(svc.config)
         svc.backend_mode = selection.mode
@@ -193,7 +220,12 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
         svc.auto_audit_log_repeat_seconds = float(_config_value(defaults, "AutoAuditLogRepeatSeconds", 30))
 
     def _load_auto_daytime_policy(self, defaults: configparser.SectionProxy) -> None:
-        """Load seasonal day-window behavior for Auto mode."""
+        """Load seasonal day-window behavior for Auto mode.
+
+        The same section also carries Scheduled-mode inputs because Scheduled is
+        modeled as "Auto in the daytime window plus a target-day night boost".
+        Keeping both in one loader makes that relationship easier to spot.
+        """
         svc = self.service
         svc.auto_daytime_only = defaults.get("AutoDaytimeOnly", "1").strip().lower() in (
             "1",

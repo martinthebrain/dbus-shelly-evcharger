@@ -168,8 +168,12 @@ These are also available through DBus and MQTT as runtime overrides.
 
 ## Runtime Overrides
 
-Selected runtime values can be changed through DBus and MQTT and persist across
-restart in the runtime override file.
+Selected runtime values can be changed through DBus and MQTT and are stored in
+the runtime override file.
+
+The default `RuntimeOverridesPath` uses `/run/...`, so the active values stay
+available during runtime and service restarts, and the base config takes over
+again after a GX reboot.
 
 The runtime layer is a strong fit for:
 
