@@ -401,7 +401,7 @@ def load_shelly_backend_settings(
     profile_name = normalize_shelly_profile_name(adapter.get("ShellyProfile", ""))
     profile_defaults = resolve_shelly_profile(profile_name)
     default_phase = normalize_phase_selection(
-        profile_defaults.default_phase_selection if profile_defaults is not None else getattr(service, "phase", "L1")
+        profile_defaults.default_phase_selection if profile_defaults is not None else getattr(service, "phase", "P1")
     )
     device_id = int(
         _config_value(
