@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Protocol, TypedDict
 
 from requests.auth import HTTPDigestAuth
