@@ -30,6 +30,9 @@ from shelly_wallbox.core.contracts import (
     displayable_confirmed_read_timestamp,
     finite_float_or_none,
     normalized_auto_state_pair,
+    normalized_fault_state,
+    normalized_scheduled_state_fields,
+    normalized_status_source,
     normalize_binary_flag,
     normalize_learning_phase,
     normalize_learning_state,
@@ -845,6 +848,17 @@ class DbusPublishController:
             getattr(self.service, "_last_auto_state", "idle"),
             getattr(self.service, "_last_auto_state_code", 0),
         )
+        scheduled_state, scheduled_state_code, scheduled_reason, scheduled_reason_code, scheduled_night_boost = (
+            normalized_scheduled_state_fields(
+                scheduled_snapshot is not None,
+                "disabled" if scheduled_snapshot is None else scheduled_snapshot.state,
+                0 if scheduled_snapshot is None else scheduled_snapshot.state_code,
+                "disabled" if scheduled_snapshot is None else scheduled_snapshot.reason,
+                0 if scheduled_snapshot is None else scheduled_snapshot.reason_code,
+                0 if scheduled_snapshot is None else int(bool(scheduled_snapshot.night_boost_active)),
+            )
+        )
+        fault_reason, fault_active = normalized_fault_state(self._fault_reason(self.service))
         error_count = int(
             error_state.get("dbus", 0)
             + error_state.get("shelly", 0)
@@ -859,17 +873,22 @@ class DbusPublishController:
             "/Auto/HealthCode": int(self.service._last_health_code),
             "/Auto/State": auto_state,
             "/Auto/StateCode": auto_state_code,
-            "/Auto/ScheduledState": "disabled" if scheduled_snapshot is None else scheduled_snapshot.state,
-            "/Auto/ScheduledStateCode": 0 if scheduled_snapshot is None else scheduled_snapshot.state_code,
-            "/Auto/ScheduledNightBoostActive": (
-                0 if scheduled_snapshot is None else int(bool(scheduled_snapshot.night_boost_active))
+            "/Auto/ScheduledState": scheduled_state,
+            "/Auto/ScheduledStateCode": scheduled_state_code,
+            "/Auto/ScheduledReason": scheduled_reason,
+            "/Auto/ScheduledReasonCode": scheduled_reason_code,
+            "/Auto/ScheduledNightBoostActive": scheduled_night_boost,
+            "/Auto/ScheduledTargetDayEnabled": (
+                0 if scheduled_snapshot is None else int(bool(scheduled_snapshot.target_day_enabled))
             ),
             "/Auto/ScheduledTargetDay": "" if scheduled_snapshot is None else scheduled_snapshot.target_day_label,
             "/Auto/ScheduledTargetDate": "" if scheduled_snapshot is None else scheduled_snapshot.target_date_text,
+            "/Auto/ScheduledFallbackStart": "" if scheduled_snapshot is None else scheduled_snapshot.fallback_start_text,
+            "/Auto/ScheduledBoostUntil": "" if scheduled_snapshot is None else scheduled_snapshot.boost_until_text,
             "/Auto/RecoveryActive": self._recovery_active(self.service),
-            "/Auto/StatusSource": str(getattr(self.service, "_last_status_source", "unknown")),
-            "/Auto/FaultActive": self._fault_active(self.service),
-            "/Auto/FaultReason": self._fault_reason(self.service),
+            "/Auto/StatusSource": normalized_status_source(getattr(self.service, "_last_status_source", "unknown")),
+            "/Auto/FaultActive": fault_active,
+            "/Auto/FaultReason": fault_reason,
             "/Auto/BackendMode": self._backend_mode_value(self.service),
             "/Auto/MeterBackend": self._backend_type_value(self.service, "meter_backend_type", "shelly_combined"),
             "/Auto/SwitchBackend": self._backend_type_value(self.service, "switch_backend_type", "shelly_combined"),

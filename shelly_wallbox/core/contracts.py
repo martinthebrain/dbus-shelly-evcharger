@@ -17,6 +17,22 @@ AUTO_STATE_CODES = {
     "blocked": 4,
     "recovery": 5,
 }
+SCHEDULED_STATE_CODES = {
+    "disabled": 0,
+    "auto-window": 1,
+    "inactive-day": 2,
+    "waiting-fallback": 3,
+    "night-boost": 4,
+    "after-latest-end": 5,
+}
+SCHEDULED_REASON_CODES = {
+    "disabled": 0,
+    "daytime-auto": 1,
+    "target-day-disabled": 2,
+    "waiting-fallback-delay": 3,
+    "night-boost-window": 4,
+    "latest-end-reached": 5,
+}
 
 
 def finite_float_or_none(value: Any) -> float | None:
@@ -137,6 +153,63 @@ def normalized_auto_state_pair(state: Any, code: Any) -> tuple[str, int]:
     if supplied_code != normalized_code:
         return normalized_state, normalized_code
     return normalized_state, normalized_code
+
+
+def normalized_status_source(value: Any) -> str:
+    """Return one stable outward-facing status source label."""
+    source = str(value).strip() if value is not None else ""
+    return source or "unknown"
+
+
+def normalized_fault_state(reason: Any) -> tuple[str, int]:
+    """Return one consistent outward-facing fault reason/active pair."""
+    normalized_reason = "" if reason is None else str(reason).strip()
+    return normalized_reason, int(bool(normalized_reason))
+
+
+def normalized_scheduled_state_fields(
+    scheduled_active: Any,
+    state: Any,
+    state_code: Any,
+    reason: Any,
+    reason_code: Any,
+    night_boost_active: Any,
+) -> tuple[str, int, str, int, int]:
+    """Return one consistent outward-facing scheduled-state tuple.
+
+    When scheduled mode is not active, all scheduled outward fields collapse to
+    their explicit disabled representation. When scheduled mode is active, text
+    wins over mismatching numeric codes and night-boost activity may only remain
+    active while the normalized state is ``night-boost``.
+    """
+    if not bool(scheduled_active):
+        return "disabled", 0, "disabled", 0, 0
+
+    normalized_state = str(state).strip().lower() if state is not None else "disabled"
+    if normalized_state not in SCHEDULED_STATE_CODES:
+        normalized_state = "disabled"
+    normalized_reason = str(reason).strip().lower() if reason is not None else "disabled"
+    if normalized_reason not in SCHEDULED_REASON_CODES:
+        normalized_reason = "disabled"
+
+    try:
+        supplied_state_code = int(state_code)
+    except (TypeError, ValueError):
+        supplied_state_code = None
+    try:
+        supplied_reason_code = int(reason_code)
+    except (TypeError, ValueError):
+        supplied_reason_code = None
+
+    normalized_state_code = SCHEDULED_STATE_CODES[normalized_state]
+    normalized_reason_code = SCHEDULED_REASON_CODES[normalized_reason]
+    if supplied_state_code != normalized_state_code:
+        supplied_state_code = normalized_state_code
+    if supplied_reason_code != normalized_reason_code:
+        supplied_reason_code = normalized_reason_code
+
+    boost_active = int(bool(night_boost_active) and normalized_state == "night-boost")
+    return normalized_state, supplied_state_code, normalized_reason, supplied_reason_code, boost_active
 
 
 def _displayable_timestamp_candidates(

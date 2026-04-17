@@ -114,6 +114,14 @@ SCHEDULED_STATE_CODES: dict[str, int] = {
     "night-boost": 4,
     "after-latest-end": 5,
 }
+SCHEDULED_REASON_CODES: dict[str, int] = {
+    "disabled": 0,
+    "daytime-auto": 1,
+    "target-day-disabled": 2,
+    "waiting-fallback-delay": 3,
+    "night-boost-window": 4,
+    "latest-end-reached": 5,
+}
 WEEKDAY_LABELS: tuple[str, ...] = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 WEEKDAY_TOKEN_MAP: dict[str, int] = {
     "mon": 0,
@@ -150,11 +158,15 @@ class ScheduledModeSnapshot:
 
     state: str
     state_code: int
+    reason: str
+    reason_code: int
     night_boost_active: bool
     target_day_index: int
     target_day_label: str
     target_date_text: str
     target_day_enabled: bool
+    fallback_start_text: str
+    boost_until_text: str
 RECOVERY_AUTO_REASONS = {
     "inputs-missing",
     "battery-soc-missing",
@@ -694,35 +706,18 @@ def scheduled_mode_snapshot(
     latest_end_time: Any = "06:30",
 ) -> ScheduledModeSnapshot:
     """Return the scheduled-mode policy state for one local timestamp."""
+    def _dt_text(value: datetime) -> str:
+        return value.strftime("%Y-%m-%d %H:%M")
+
     target_date = _scheduled_target_day(when, month_windows)
     target_day_index = int(target_date.weekday())
     enabled_tuple = normalize_scheduled_enabled_days(enabled_days)
     target_enabled = target_day_index in enabled_tuple
     start_minutes, end_minutes = _window_minutes_for_date(target_date, month_windows)
-    current_minutes = when.hour * 60 + when.minute
-    if start_minutes < end_minutes and start_minutes <= current_minutes < end_minutes and when.date() == target_date:
-        return ScheduledModeSnapshot(
-            state="auto-window",
-            state_code=SCHEDULED_STATE_CODES["auto-window"],
-            night_boost_active=False,
-            target_day_index=target_day_index,
-            target_day_label=WEEKDAY_LABELS[target_day_index],
-            target_date_text=target_date.isoformat(),
-            target_day_enabled=target_enabled,
-        )
-
-    if not target_enabled:
-        return ScheduledModeSnapshot(
-            state="inactive-day",
-            state_code=SCHEDULED_STATE_CODES["inactive-day"],
-            night_boost_active=False,
-            target_day_index=target_day_index,
-            target_day_label=WEEKDAY_LABELS[target_day_index],
-            target_date_text=target_date.isoformat(),
-            target_day_enabled=False,
-        )
-
+    previous_day = target_date - timedelta(days=1)
+    _previous_start_minutes, previous_end_minutes = _window_minutes_for_date(previous_day, month_windows)
     delay_seconds = max(0.0, float(delay_seconds))
+    fallback_start = _datetime_for_minutes(previous_day, previous_end_minutes) + timedelta(seconds=delay_seconds)
     latest_end_hour, latest_end_minute = parse_hhmm(latest_end_time, (6, 30))
     latest_end_dt = datetime(
         target_date.year,
@@ -731,28 +726,63 @@ def scheduled_mode_snapshot(
         latest_end_hour,
         latest_end_minute,
     )
-    previous_day = target_date - timedelta(days=1)
-    _previous_start_minutes, previous_end_minutes = _window_minutes_for_date(previous_day, month_windows)
-    fallback_start = _datetime_for_minutes(previous_day, previous_end_minutes) + timedelta(seconds=delay_seconds)
     daytime_start = _datetime_for_minutes(target_date, start_minutes)
     night_boost_end = min(latest_end_dt, daytime_start)
+    current_minutes = when.hour * 60 + when.minute
+    if start_minutes < end_minutes and start_minutes <= current_minutes < end_minutes and when.date() == target_date:
+        return ScheduledModeSnapshot(
+            state="auto-window",
+            state_code=SCHEDULED_STATE_CODES["auto-window"],
+            reason="daytime-auto",
+            reason_code=SCHEDULED_REASON_CODES["daytime-auto"],
+            night_boost_active=False,
+            target_day_index=target_day_index,
+            target_day_label=WEEKDAY_LABELS[target_day_index],
+            target_date_text=target_date.isoformat(),
+            target_day_enabled=target_enabled,
+            fallback_start_text=_dt_text(fallback_start),
+            boost_until_text=_dt_text(night_boost_end),
+        )
+
+    if not target_enabled:
+        return ScheduledModeSnapshot(
+            state="inactive-day",
+            state_code=SCHEDULED_STATE_CODES["inactive-day"],
+            reason="target-day-disabled",
+            reason_code=SCHEDULED_REASON_CODES["target-day-disabled"],
+            night_boost_active=False,
+            target_day_index=target_day_index,
+            target_day_label=WEEKDAY_LABELS[target_day_index],
+            target_date_text=target_date.isoformat(),
+            target_day_enabled=False,
+            fallback_start_text=_dt_text(fallback_start),
+            boost_until_text=_dt_text(night_boost_end),
+        )
 
     if when < fallback_start:
         state = "waiting-fallback"
+        reason = "waiting-fallback-delay"
     elif when < night_boost_end:
         state = "night-boost"
+        reason = "night-boost-window"
     elif when.date() == target_date and (start_minutes < end_minutes and current_minutes >= start_minutes):
         state = "auto-window"
+        reason = "daytime-auto"
     else:
         state = "after-latest-end"
+        reason = "latest-end-reached"
     return ScheduledModeSnapshot(
         state=state,
         state_code=SCHEDULED_STATE_CODES[state],
+        reason=reason,
+        reason_code=SCHEDULED_REASON_CODES[reason],
         night_boost_active=(state == "night-boost"),
         target_day_index=target_day_index,
         target_day_label=WEEKDAY_LABELS[target_day_index],
         target_date_text=target_date.isoformat(),
         target_day_enabled=True,
+        fallback_start_text=_dt_text(fallback_start),
+        boost_until_text=_dt_text(night_boost_end),
     )
 
 

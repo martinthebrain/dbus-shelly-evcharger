@@ -512,8 +512,10 @@ class ServiceStateController:
             f"fault_reason={self._summary_fault_reason(svc)}",
             f"auto_state={getattr(svc, '_last_auto_state', 'na')}",
             f"scheduled_state={self._summary_text(None if scheduled_snapshot is None else scheduled_snapshot.state, 'na')}",
+            f"scheduled_reason={self._summary_text(None if scheduled_snapshot is None else scheduled_snapshot.reason, 'na')}",
             f"scheduled_target_day={self._summary_text(None if scheduled_snapshot is None else scheduled_snapshot.target_day_label, 'na')}",
             f"scheduled_boost={self._summary_flag(False if scheduled_snapshot is None else scheduled_snapshot.night_boost_active)}",
+            f"scheduled_boost_until={self._summary_text(None if scheduled_snapshot is None else scheduled_snapshot.boost_until_text, 'na')}",
             f"recovery={self._summary_recovery_active(svc)}",
             f"health={getattr(svc, '_last_health_reason', 'na')}",
         )
