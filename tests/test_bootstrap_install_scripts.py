@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 
-REPO_ROOT = Path("/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/dbus-shelly-evcharger")
+REPO_ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP_SCRIPT = REPO_ROOT / "install.sh"
 UPDATER_SCRIPT = REPO_ROOT / "deploy/venus/bootstrap_updater.sh"
 UPDATER_HASH = REPO_ROOT / "deploy/venus/bootstrap_updater.sh.sha256"
