@@ -5,10 +5,10 @@ from unittest.mock import MagicMock
 
 sys.modules["vedbus"] = MagicMock()
 
-from dbus_shelly_wallbox_service_auto import DbusAutoLogicMixin
-from dbus_shelly_wallbox_service_runtime import RuntimeHelperMixin
-from dbus_shelly_wallbox_service_state_publish import StatePublishMixin
-from dbus_shelly_wallbox_service_update import UpdateCycleMixin
+from shelly_wallbox.service.auto import DbusAutoLogicMixin
+from shelly_wallbox.service.runtime import RuntimeHelperMixin
+from shelly_wallbox.service.state_publish import StatePublishMixin
+from shelly_wallbox.service.update import UpdateCycleMixin
 
 
 class _RuntimeService(RuntimeHelperMixin):
@@ -159,7 +159,7 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service._log_auto_relay_change(True)
         service._apply_relay_decision(True, False, {"output": False}, 0.0, 0.0, 100.0, True)
         service._derive_status_code(True, 2000.0, True)
-        service._publish_online_update(2, 1.5, True, 2000.0, 230.0, 100.0)
+        service._publish_online_update({"output": True}, 2, 1.5, True, 2000.0, 230.0, 100.0)
         service._complete_update_cycle(True, 100.0, True, 2000.0, 8.7, 2, 2500.0, 55.0, -1800.0)
         service._sign_of_life()
         service._update()
@@ -188,7 +188,7 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         controller.log_auto_relay_change.assert_called_once_with(service, True)
         controller.apply_relay_decision.assert_called_once_with(True, False, {"output": False}, 0.0, 0.0, 100.0, True)
         controller.derive_status_code.assert_called_once_with(service, True, 2000.0, True)
-        controller.publish_online_update.assert_called_once_with(2, 1.5, True, 2000.0, 230.0, 100.0)
+        controller.publish_online_update.assert_called_once_with({"output": True}, 2, 1.5, True, 2000.0, 230.0, 100.0)
         controller.complete_update_cycle.assert_called_once_with(
             service,
             True,

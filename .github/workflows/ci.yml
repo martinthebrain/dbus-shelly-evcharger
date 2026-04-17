@@ -31,7 +31,7 @@ jobs:
             python3-gi
 
       - name: Run syntax, tests, and typecheck
-        run: ./check_all.sh
+        run: bash ./scripts/dev/check_all.sh
 
       - name: Generate coverage XML
         run: |

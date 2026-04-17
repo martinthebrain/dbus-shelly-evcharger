@@ -1,0 +1,263 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Helpers for capturing and restoring DBus write-path state."""
+
+from __future__ import annotations
+
+import copy
+from collections import deque
+from typing import Any
+
+SNAPSHOT_DBUS_PATHS = (
+    "/Mode",
+    "/AutoStart",
+    "/StartStop",
+    "/Enable",
+    "/PhaseSelection",
+    "/PhaseSelectionActive",
+    "/SupportedPhaseSelections",
+    "/Auto/PhaseLockoutActive",
+    "/Auto/PhaseLockoutTarget",
+    "/Auto/PhaseLockoutReason",
+    "/Auto/PhaseSupportedConfigured",
+    "/Auto/PhaseSupportedEffective",
+    "/Auto/PhaseDegradedActive",
+    "/Auto/PhaseLockoutReset",
+    "/Auto/ContactorFaultCount",
+    "/Auto/ContactorLockoutActive",
+    "/Auto/ContactorLockoutReason",
+    "/Auto/ContactorLockoutSource",
+    "/Auto/ContactorLockoutAge",
+    "/Auto/ContactorLockoutReset",
+    "/SetCurrent",
+    "/MinCurrent",
+    "/MaxCurrent",
+    "/Auto/StartSurplusWatts",
+    "/Auto/StopSurplusWatts",
+    "/Auto/MinSoc",
+    "/Auto/ResumeSoc",
+    "/Auto/StartDelaySeconds",
+    "/Auto/StopDelaySeconds",
+    "/Auto/ScheduledEnabledDays",
+    "/Auto/ScheduledFallbackDelaySeconds",
+    "/Auto/ScheduledLatestEndTime",
+    "/Auto/ScheduledNightCurrent",
+    "/Auto/DbusBackoffBaseSeconds",
+    "/Auto/DbusBackoffMaxSeconds",
+    "/Auto/GridRecoveryStartSeconds",
+    "/Auto/StopSurplusDelaySeconds",
+    "/Auto/StopSurplusVolatilityLowWatts",
+    "/Auto/StopSurplusVolatilityHighWatts",
+    "/Auto/ReferenceChargePowerWatts",
+    "/Auto/LearnChargePowerEnabled",
+    "/Auto/LearnChargePowerMinWatts",
+    "/Auto/LearnChargePowerAlpha",
+    "/Auto/LearnChargePowerStartDelaySeconds",
+    "/Auto/LearnChargePowerWindowSeconds",
+    "/Auto/LearnChargePowerMaxAgeSeconds",
+    "/Auto/PhaseSwitching",
+    "/Auto/PhasePreferLowestWhenIdle",
+    "/Auto/PhaseUpshiftDelaySeconds",
+    "/Auto/PhaseDownshiftDelaySeconds",
+    "/Auto/PhaseUpshiftHeadroomWatts",
+    "/Auto/PhaseDownshiftMarginWatts",
+    "/Auto/PhaseMismatchRetrySeconds",
+    "/Auto/PhaseMismatchLockoutCount",
+    "/Auto/PhaseMismatchLockoutSeconds",
+)
+SNAPSHOT_ATTRS = (
+    "virtual_mode",
+    "virtual_autostart",
+    "virtual_startstop",
+    "virtual_enable",
+    "virtual_set_current",
+    "requested_phase_selection",
+    "active_phase_selection",
+    "supported_phase_selections",
+    "_phase_switch_pending_selection",
+    "_phase_switch_state",
+    "_phase_switch_requested_at",
+    "_phase_switch_stable_until",
+    "_phase_switch_resume_relay",
+    "_phase_switch_mismatch_active",
+    "_phase_switch_last_mismatch_selection",
+    "_phase_switch_last_mismatch_at",
+    "_phase_switch_lockout_selection",
+    "_phase_switch_lockout_reason",
+    "_phase_switch_lockout_at",
+    "_phase_switch_lockout_until",
+    "_contactor_fault_active_reason",
+    "_contactor_fault_active_since",
+    "_contactor_lockout_reason",
+    "_contactor_lockout_source",
+    "_contactor_lockout_at",
+    "_contactor_suspected_open_since",
+    "_contactor_suspected_welded_since",
+    "min_current",
+    "max_current",
+    "auto_policy",
+    "auto_start_surplus_watts",
+    "auto_stop_surplus_watts",
+    "auto_min_soc",
+    "auto_resume_soc",
+    "auto_start_delay_seconds",
+    "auto_stop_delay_seconds",
+    "auto_scheduled_enabled_days",
+    "auto_scheduled_night_start_delay_seconds",
+    "auto_scheduled_latest_end_time",
+    "auto_scheduled_night_current_amps",
+    "auto_dbus_backoff_base_seconds",
+    "auto_dbus_backoff_max_seconds",
+    "auto_grid_recovery_start_seconds",
+    "auto_stop_surplus_delay_seconds",
+    "auto_stop_surplus_volatility_low_watts",
+    "auto_stop_surplus_volatility_high_watts",
+    "auto_reference_charge_power_watts",
+    "auto_learn_charge_power_enabled",
+    "auto_learn_charge_power_min_watts",
+    "auto_learn_charge_power_alpha",
+    "auto_learn_charge_power_start_delay_seconds",
+    "auto_learn_charge_power_window_seconds",
+    "auto_learn_charge_power_max_age_seconds",
+    "auto_phase_switching_enabled",
+    "auto_phase_prefer_lowest_when_idle",
+    "auto_phase_upshift_delay_seconds",
+    "auto_phase_downshift_delay_seconds",
+    "auto_phase_upshift_headroom_watts",
+    "auto_phase_downshift_margin_watts",
+    "auto_phase_mismatch_retry_seconds",
+    "auto_phase_mismatch_lockout_count",
+    "auto_phase_mismatch_lockout_seconds",
+    "manual_override_until",
+    "auto_start_condition_since",
+    "auto_stop_condition_since",
+    "auto_stop_condition_reason",
+    "_auto_mode_cutover_pending",
+    "_ignore_min_offtime_once",
+    "_pending_relay_state",
+    "_pending_relay_requested_at",
+    "_relay_sync_expected_state",
+    "_relay_sync_requested_at",
+    "_relay_sync_deadline_at",
+    "_relay_sync_failure_reported",
+    "_last_pm_status_at",
+    "_last_pm_status_confirmed",
+    "_last_confirmed_pm_status_at",
+)
+SNAPSHOT_DEQUE_ATTRS = ("auto_samples",)
+SNAPSHOT_VALUE_ATTRS = (
+    "_stop_smoothed_surplus_power",
+    "_stop_smoothed_grid_power",
+)
+SNAPSHOT_MAPPING_ATTRS = (
+    "_dbusservice",
+    "_dbus_publish_state",
+    "_worker_snapshot",
+    "_last_pm_status",
+    "_last_confirmed_pm_status",
+    "_phase_switch_mismatch_counts",
+    "_contactor_fault_counts",
+)
+
+
+def _snapshot_attrs(svc: Any, attr_names: tuple[str, ...]) -> dict[str, Any]:
+    """Capture one set of scalar-like attributes."""
+    return {attr_name: getattr(svc, attr_name) for attr_name in attr_names if hasattr(svc, attr_name)}
+
+
+def _snapshot_deques(svc: Any, attr_names: tuple[str, ...]) -> dict[str, deque[Any]]:
+    """Capture one set of deque attributes."""
+    return {
+        attr_name: deque(getattr(svc, attr_name))
+        for attr_name in attr_names
+        if hasattr(svc, attr_name)
+    }
+
+
+def _snapshot_mappings(svc: Any, attr_names: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+    """Capture deep-copied dict attributes used by the write path."""
+    captured: dict[str, dict[str, Any]] = {}
+    for attr_name in attr_names:
+        if not hasattr(svc, attr_name):
+            continue
+        current = getattr(svc, attr_name)
+        if isinstance(current, dict):
+            captured[attr_name] = copy.deepcopy(current)
+    return captured
+
+
+def _snapshot_dbus_paths(svc: Any, dbus_paths: tuple[str, ...]) -> dict[str, Any]:
+    """Capture writable DBus paths when the service exposes mapping access."""
+    dbus_service = getattr(svc, "_dbusservice", None)
+    if dbus_service is None:
+        return {}
+    captured: dict[str, Any] = {}
+    for path in dbus_paths:
+        try:
+            captured[path] = dbus_service[path]
+        except Exception:  # pylint: disable=broad-except
+            continue
+    return captured
+
+
+def capture_write_state(
+    svc: Any,
+    *,
+    attrs: tuple[str, ...] = SNAPSHOT_ATTRS,
+    deque_attrs: tuple[str, ...] = SNAPSHOT_DEQUE_ATTRS,
+    value_attrs: tuple[str, ...] = SNAPSHOT_VALUE_ATTRS,
+    mapping_attrs: tuple[str, ...] = SNAPSHOT_MAPPING_ATTRS,
+    dbus_paths: tuple[str, ...] = SNAPSHOT_DBUS_PATHS,
+) -> dict[str, Any]:
+    """Capture mutable write-path state so failed writes can be rolled back."""
+    return {
+        "attrs": _snapshot_attrs(svc, attrs),
+        "deques": _snapshot_deques(svc, deque_attrs),
+        "values": _snapshot_attrs(svc, value_attrs),
+        "mappings": _snapshot_mappings(svc, mapping_attrs),
+        "dbus_paths": _snapshot_dbus_paths(svc, dbus_paths),
+    }
+
+
+def _restore_deques(svc: Any, saved_deques: dict[str, deque[Any]]) -> None:
+    """Restore previously captured deque attributes."""
+    for attr_name, saved in saved_deques.items():
+        current = getattr(svc, attr_name, None)
+        if isinstance(current, deque):
+            current.clear()
+            current.extend(saved)
+            continue
+        setattr(svc, attr_name, deque(saved))
+
+
+def _restore_mappings(svc: Any, saved_mappings: dict[str, dict[str, Any]]) -> None:
+    """Restore previously captured dict-like attributes."""
+    for attr_name, saved in saved_mappings.items():
+        current = getattr(svc, attr_name, None)
+        if isinstance(current, dict):
+            current.clear()
+            current.update(saved)
+            continue
+        setattr(svc, attr_name, copy.deepcopy(saved))
+
+
+def _restore_dbus_paths(svc: Any, saved_paths: dict[str, Any]) -> None:
+    """Restore writable DBus paths on best effort."""
+    dbus_service = getattr(svc, "_dbusservice", None)
+    if dbus_service is None:
+        return
+    for path, value in saved_paths.items():
+        try:
+            dbus_service[path] = value
+        except Exception:  # pylint: disable=broad-except
+            continue
+
+
+def restore_write_state(svc: Any, snapshot: dict[str, Any]) -> None:
+    """Restore one previously captured write-path snapshot."""
+    for attr_name, value in snapshot["attrs"].items():
+        setattr(svc, attr_name, value)
+    for attr_name, value in snapshot["values"].items():
+        setattr(svc, attr_name, value)
+    _restore_deques(svc, snapshot["deques"])
+    _restore_mappings(svc, snapshot["mappings"])
+    _restore_dbus_paths(svc, snapshot.get("dbus_paths", {}))

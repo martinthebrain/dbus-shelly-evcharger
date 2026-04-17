@@ -1,16 +1,21 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import configparser
+from datetime import datetime
 import unittest
 from unittest.mock import mock_open, patch
 
-from dbus_shelly_wallbox_contracts import (
+from shelly_wallbox.core.contracts import (
     cutover_confirmed_off,
     displayable_confirmed_read_timestamp,
     finite_float_or_none,
     non_negative_float_or_none,
     non_negative_int,
+    normalized_fault_state,
     normalized_auto_decision_trace,
     normalized_auto_state_pair,
+    normalized_scheduled_state_fields,
+    normalized_software_update_state_fields,
+    normalized_status_source,
     normalized_worker_snapshot,
     normalize_learning_phase,
     normalize_learning_state,
@@ -22,7 +27,7 @@ from dbus_shelly_wallbox_contracts import (
     valid_battery_soc,
     write_failure_is_reversible,
 )
-from dbus_shelly_wallbox_common import (
+from shelly_wallbox.core.common import (
     _a,
     _age_seconds,
     _auto_state_code,
@@ -43,6 +48,8 @@ from dbus_shelly_wallbox_common import (
     parse_hhmm,
     phase_values,
     read_version,
+    scheduled_enabled_days_text,
+    scheduled_mode_snapshot,
 )
 
 
@@ -98,6 +105,38 @@ class TestShellyWallboxCommon(unittest.TestCase):
         self.assertEqual(normalized_auto_state_pair(" charging ", 99), ("charging", 3))
         self.assertEqual(normalized_auto_state_pair("bogus", 4), ("idle", 0))
         self.assertEqual(normalized_auto_state_pair("idle", "bad"), ("idle", 0))
+        self.assertEqual(normalized_status_source(" charger-status-ready "), "charger-status-ready")
+        self.assertEqual(normalized_status_source(""), "unknown")
+        self.assertEqual(normalized_fault_state("contactor-lockout-open"), ("contactor-lockout-open", 1))
+        self.assertEqual(normalized_fault_state(""), ("", 0))
+        self.assertEqual(
+            normalized_scheduled_state_fields(True, "night-boost", 99, "night-boost-window", -1, 1),
+            ("night-boost", 4, "night-boost-window", 4, 1),
+        )
+        self.assertEqual(
+            normalized_scheduled_state_fields(True, "waiting-fallback", 3, "waiting-fallback-delay", 3, 1),
+            ("waiting-fallback", 3, "waiting-fallback-delay", 3, 0),
+        )
+        self.assertEqual(
+            normalized_scheduled_state_fields(False, "night-boost", 4, "night-boost-window", 4, 1),
+            ("disabled", 0, "disabled", 0, 0),
+        )
+        self.assertEqual(
+            normalized_software_update_state_fields("available", 1, 0),
+            ("available", 3, 1, 0),
+        )
+        self.assertEqual(
+            normalized_software_update_state_fields("available", 1, 1),
+            ("available-blocked", 4, 1, 1),
+        )
+        self.assertEqual(
+            normalized_software_update_state_fields("available-blocked", 1, 0),
+            ("available", 3, 1, 0),
+        )
+        self.assertEqual(
+            normalized_software_update_state_fields("weird", 0, 0),
+            ("idle", 0, 0, 0),
+        )
         self.assertEqual(
             displayable_confirmed_read_timestamp(
                 last_confirmed_at=95.0,
@@ -215,6 +254,56 @@ class TestShellyWallboxCommon(unittest.TestCase):
                 max_age_seconds=2.0,
             )
         )
+
+    def test_scheduled_helpers_normalize_days_and_derive_states(self):
+        self.assertEqual(scheduled_enabled_days_text("weekdays"), "Mon,Tue,Wed,Thu,Fri")
+        self.assertEqual(scheduled_enabled_days_text("sat-sun"), "Sat,Sun")
+        self.assertEqual(scheduled_enabled_days_text("mon,wed,fri"), "Mon,Wed,Fri")
+
+        waiting = scheduled_mode_snapshot(
+            datetime(2026, 4, 19, 20, 0),
+            {4: ((7, 30), (19, 30))},
+            "Mon,Tue,Wed,Thu,Fri",
+            delay_seconds=3600.0,
+            latest_end_time="06:30",
+        )
+        self.assertEqual(waiting.state, "waiting-fallback")
+        self.assertEqual(waiting.reason, "waiting-fallback-delay")
+        self.assertEqual(waiting.target_day_label, "Mon")
+        self.assertEqual(waiting.fallback_start_text, "2026-04-19 20:30")
+        self.assertEqual(waiting.boost_until_text, "2026-04-20 06:30")
+
+        night_boost = scheduled_mode_snapshot(
+            datetime(2026, 4, 19, 21, 0),
+            {4: ((7, 30), (19, 30))},
+            "Mon,Tue,Wed,Thu,Fri",
+            delay_seconds=3600.0,
+            latest_end_time="06:30",
+        )
+        self.assertEqual(night_boost.state, "night-boost")
+        self.assertEqual(night_boost.reason, "night-boost-window")
+        self.assertTrue(night_boost.night_boost_active)
+
+        after_end = scheduled_mode_snapshot(
+            datetime(2026, 4, 20, 6, 45),
+            {4: ((7, 30), (19, 30))},
+            "Mon,Tue,Wed,Thu,Fri",
+            delay_seconds=3600.0,
+            latest_end_time="06:30",
+        )
+        self.assertEqual(after_end.state, "after-latest-end")
+        self.assertEqual(after_end.reason, "latest-end-reached")
+
+        inactive = scheduled_mode_snapshot(
+            datetime(2026, 4, 17, 21, 0),
+            {4: ((7, 30), (19, 30))},
+            "Mon,Tue,Wed,Thu,Fri",
+            delay_seconds=3600.0,
+            latest_end_time="06:30",
+        )
+        self.assertEqual(inactive.state, "inactive-day")
+        self.assertEqual(inactive.reason, "target-day-disabled")
+        self.assertFalse(inactive.target_day_enabled)
         self.assertFalse(
             cutover_confirmed_off(
                 relay_on=False,
@@ -235,6 +324,14 @@ class TestShellyWallboxCommon(unittest.TestCase):
         self.assertEqual(_status_label(None, 2), "Laden")
         self.assertEqual(_status_label(None, 999), "Unbekannt")
         self.assertEqual(_health_code("running"), 5)
+        self.assertEqual(_health_code("charger-fault"), 26)
+        self.assertEqual(_health_code("phase-switch-mismatch"), 27)
+        self.assertEqual(_health_code("contactor-interlock"), 28)
+        self.assertEqual(_health_code("contactor-feedback-mismatch"), 29)
+        self.assertEqual(_health_code("contactor-suspected-open"), 30)
+        self.assertEqual(_health_code("contactor-suspected-welded"), 31)
+        self.assertEqual(_health_code("contactor-lockout-open"), 32)
+        self.assertEqual(_health_code("contactor-lockout-welded"), 33)
         self.assertEqual(_health_code("unknown"), 99)
         self.assertEqual(_auto_state_code("charging"), 3)
         self.assertEqual(_auto_state_code("invalid"), 0)
@@ -249,6 +346,13 @@ class TestShellyWallboxCommon(unittest.TestCase):
         self.assertEqual(_derive_auto_state("waiting-surplus"), "waiting")
         self.assertEqual(_derive_auto_state("manual-override"), "blocked")
         self.assertEqual(_derive_auto_state("grid-missing"), "recovery")
+        self.assertEqual(_derive_auto_state("phase-switch-mismatch"), "recovery")
+        self.assertEqual(_derive_auto_state("contactor-interlock"), "blocked")
+        self.assertEqual(_derive_auto_state("contactor-feedback-mismatch"), "recovery")
+        self.assertEqual(_derive_auto_state("contactor-suspected-open"), "recovery")
+        self.assertEqual(_derive_auto_state("contactor-suspected-welded"), "recovery")
+        self.assertEqual(_derive_auto_state("contactor-lockout-open"), "recovery")
+        self.assertEqual(_derive_auto_state("contactor-lockout-welded"), "recovery")
         self.assertEqual(_derive_auto_state("running", relay_on=True, learned_charge_power_state="learning"), "learning")
         self.assertEqual(_derive_auto_state("running", relay_on=True, learned_charge_power_state="stable"), "charging")
         self.assertEqual(_derive_auto_state("custom-reason", relay_on=True, learned_charge_power_state="learning"), "learning")

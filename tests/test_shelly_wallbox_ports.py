@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
 
-from dbus_shelly_wallbox_ports import AutoDecisionPort, DbusInputPort, UpdateCyclePort, WriteControllerPort
+from shelly_wallbox.ports import AutoDecisionPort, DbusInputPort, UpdateCyclePort, WriteControllerPort
 
 
 class TestWallboxPorts(unittest.TestCase):
@@ -78,10 +78,10 @@ class TestWallboxPorts(unittest.TestCase):
             Path(file_name).read_text(encoding="utf-8")
             for file_name in (
                 "dbus_shelly_wallbox.py",
-                "dbus_shelly_wallbox_service_auto.py",
-                "dbus_shelly_wallbox_service_runtime.py",
-                "dbus_shelly_wallbox_service_state_publish.py",
-                "dbus_shelly_wallbox_service_update.py",
+                "shelly_wallbox/service/auto.py",
+                "shelly_wallbox/service/runtime.py",
+                "shelly_wallbox/service/state_publish.py",
+                "shelly_wallbox/service/update.py",
             )
         )
         for method_name in sorted(UpdateCyclePort._ALLOWED_METHODS):
@@ -93,29 +93,34 @@ class TestWallboxPorts(unittest.TestCase):
             Path(file_name).read_text(encoding="utf-8")
             for file_name in (
                 "dbus_shelly_wallbox.py",
-                "dbus_shelly_wallbox_auto_logic.py",
-                "dbus_shelly_wallbox_auto_logic_samples.py",
-                "dbus_shelly_wallbox_auto_logic_gates.py",
-                "dbus_shelly_wallbox_auto_logic_decisions.py",
-                "dbus_shelly_wallbox_auto_policy.py",
-                "dbus_shelly_wallbox_bootstrap.py",
-                "dbus_shelly_wallbox_bootstrap_config.py",
-                "dbus_shelly_wallbox_bootstrap_runtime.py",
-                "dbus_shelly_wallbox_bootstrap_paths.py",
-                "dbus_shelly_wallbox_runtime_support.py",
-                "dbus_shelly_wallbox_runtime_setup.py",
-                "dbus_shelly_wallbox_runtime_audit.py",
-                "dbus_shelly_wallbox_runtime_health.py",
-                "dbus_shelly_wallbox_service_auto.py",
-                "dbus_shelly_wallbox_service_factory.py",
-                "dbus_shelly_wallbox_service_runtime.py",
-                "dbus_shelly_wallbox_service_state_publish.py",
-                "dbus_shelly_wallbox_service_update.py",
-                "dbus_shelly_wallbox_state.py",
-                "dbus_shelly_wallbox_update_cycle.py",
-                "dbus_shelly_wallbox_update_cycle_state.py",
-                "dbus_shelly_wallbox_update_cycle_relay.py",
-                "dbus_shelly_wallbox_update_cycle_learning.py",
+                "shelly_wallbox/auto/workflow.py",
+                "shelly_wallbox/auto/policy.py",
+                "shelly_wallbox/auto/logic_samples.py",
+                "shelly_wallbox/auto/logic_gates.py",
+                "shelly_wallbox/auto/logic_decisions.py",
+                "shelly_wallbox/bootstrap/controller.py",
+                "shelly_wallbox/bootstrap/config.py",
+                "shelly_wallbox/bootstrap/runtime.py",
+                "shelly_wallbox/bootstrap/paths.py",
+                "shelly_wallbox/runtime/support.py",
+                "shelly_wallbox/runtime/setup.py",
+                "shelly_wallbox/runtime/audit.py",
+                "shelly_wallbox/runtime/health.py",
+                "shelly_wallbox/service/auto.py",
+                "shelly_wallbox/service/factory.py",
+                "shelly_wallbox/service/runtime.py",
+                "shelly_wallbox/service/state_publish.py",
+                "shelly_wallbox/service/update.py",
+                "shelly_wallbox/inputs/dbus.py",
+                "shelly_wallbox/inputs/pv.py",
+                "shelly_wallbox/inputs/storage.py",
+                "shelly_wallbox/inputs/supervisor.py",
+                "shelly_wallbox/controllers/state.py",
+                "shelly_wallbox/update/controller.py",
+                "shelly_wallbox/update/state.py",
+                "shelly_wallbox/update/relay.py",
+                "shelly_wallbox/update/learning_support.py",
+                "shelly_wallbox/update/learning.py",
             )
         )
         declared_attrs: set[str] = set()

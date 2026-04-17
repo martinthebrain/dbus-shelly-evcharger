@@ -7,12 +7,12 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from dbus_shelly_wallbox_auto_controller import AutoDecisionController
-from dbus_shelly_wallbox_auto_policy import AutoStopEwmaPolicy, AutoThresholdProfile, AutoPolicy, validate_auto_policy
-from dbus_shelly_wallbox_auto_input_supervisor import AutoInputSupervisor
-from dbus_shelly_wallbox_runtime_support import RuntimeSupportController
-from dbus_shelly_wallbox_shared import write_text_atomically
-from dbus_shelly_wallbox_shelly_io import ShellyIoController
+from shelly_wallbox.controllers.auto import AutoDecisionController
+from shelly_wallbox.auto.policy import AutoStopEwmaPolicy, AutoThresholdProfile, AutoPolicy, validate_auto_policy
+from shelly_wallbox.inputs.supervisor import AutoInputSupervisor
+from shelly_wallbox.runtime.support import RuntimeSupportController
+from shelly_wallbox.core.shared import write_text_atomically
+from shelly_wallbox.backend.shelly_io import ShellyIoController
 from tests.wallbox_test_fixtures import make_auto_controller_service
 
 
@@ -414,7 +414,7 @@ class TestShellyWallboxStress(unittest.TestCase):
         for scenario in scenarios:
             service._last_grid_at = scenario["grid_at"]
             current_time[0] += 1.0
-            with patch("dbus_shelly_wallbox_auto_logic.time.time", return_value=current_time[0]):
+            with patch("shelly_wallbox.auto.workflow.time.time", return_value=current_time[0]):
                 result = controller.auto_decide_relay(
                     scenario["relay_on"],
                     scenario["pv"],
@@ -528,7 +528,7 @@ class TestShellyWallboxStress(unittest.TestCase):
             service.auto_startup_warmup_seconds = 0.0
             service.started_at = 0.0
             service._last_grid_at = 100.0
-            with patch("dbus_shelly_wallbox_auto_logic.time.time", return_value=101.0 + index):
+            with patch("shelly_wallbox.auto.workflow.time.time", return_value=101.0 + index):
                 result = controller.auto_decide_relay(False, 2600.0, 65.0, -2200.0)
             self.assertIsInstance(result, bool)
             self.assertLessEqual(service.auto_stop_surplus_watts, service.auto_start_surplus_watts)

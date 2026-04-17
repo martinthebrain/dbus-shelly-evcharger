@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
-from dbus_shelly_wallbox_auto_controller import AutoDecisionController
+from shelly_wallbox.controllers.auto import AutoDecisionController
 from tests.wallbox_test_fixtures import make_auto_controller_service
 
 
@@ -22,6 +22,7 @@ def _health_code(reason: str) -> int:
         "averaging": 9,
         "mode-transition": 10,
         "waiting-grid-recovery": 11,
+        "scheduled-night-charge": 12,
     }.get(reason, 99)
 
 
@@ -46,7 +47,7 @@ class TestAutoDecisionController(unittest.TestCase):
 
         self.assertIsNone(controller.average_auto_metric(1))
 
-        with patch("dbus_shelly_wallbox_auto_logic.time.time", return_value=123.0):
+        with patch("shelly_wallbox.auto.workflow.time.time", return_value=123.0):
             controller.mark_relay_changed(False)
 
         self.assertEqual(service.relay_last_changed_at, 123.0)
@@ -59,7 +60,7 @@ class TestAutoDecisionController(unittest.TestCase):
         service.auto_min_offtime_seconds = 20.0
         service.auto_samples = deque([(149.0, 2500.0, -2500.0)])
 
-        with patch("dbus_shelly_wallbox_auto_logic.time.time", return_value=999.0):
+        with patch("shelly_wallbox.auto.workflow.time.time", return_value=999.0):
             self.assertFalse(controller.auto_decide_relay(False, 2500.0, 60.0, -2500.0))
 
         self.assertEqual(service._last_health_reason, "waiting-offtime")
@@ -74,6 +75,60 @@ class TestAutoDecisionController(unittest.TestCase):
 
         self.assertTrue(controller.is_within_auto_daytime_window(datetime(2026, 4, 4, 8, 0)))
         self.assertTrue(controller.is_within_auto_daytime_window(datetime(2026, 5, 4, 2, 0)))
+
+    def test_scheduled_mode_starts_charging_one_hour_after_daytime_window_ends(self):
+        controller, service = self._make_controller()
+        service.virtual_mode = 2
+        service.virtual_autostart = 1
+        service.auto_month_windows = {4: ((7, 30), (19, 30))}
+        service.auto_scheduled_enabled_days = "Mon,Tue,Wed,Thu,Fri"
+        service.auto_scheduled_night_start_delay_seconds = 3600.0
+        service.auto_scheduled_latest_end_time = "06:30"
+        service._time_now = lambda: datetime(2026, 4, 20, 20, 45).timestamp()
+
+        self.assertTrue(controller.auto_decide_relay(False, None, None, None))
+        self.assertEqual(service._last_health_reason, "scheduled-night-charge")
+        self.assertEqual(service._last_auto_state, "charging")
+
+    def test_scheduled_mode_keeps_running_overnight_despite_missing_inputs(self):
+        controller, service = self._make_controller()
+        service.virtual_mode = 2
+        service.virtual_autostart = 1
+        service.auto_month_windows = {4: ((7, 30), (19, 30))}
+        service.auto_scheduled_enabled_days = "Mon,Tue,Wed,Thu,Fri"
+        service.auto_scheduled_night_start_delay_seconds = 3600.0
+        service.auto_scheduled_latest_end_time = "06:30"
+        service._time_now = lambda: datetime(2026, 4, 21, 3, 0).timestamp()
+
+        self.assertTrue(controller.auto_decide_relay(True, None, None, None))
+        self.assertEqual(service._last_health_reason, "scheduled-night-charge")
+        self.assertEqual(service._last_auto_state, "charging")
+
+    def test_scheduled_mode_respects_enabled_target_days(self):
+        controller, service = self._make_controller()
+        service.virtual_mode = 2
+        service.virtual_autostart = 1
+        service.auto_month_windows = {4: ((7, 30), (19, 30))}
+        service.auto_scheduled_enabled_days = "Mon,Tue,Wed,Thu,Fri"
+        service.auto_scheduled_night_start_delay_seconds = 3600.0
+        service.auto_scheduled_latest_end_time = "06:30"
+        service._time_now = lambda: datetime(2026, 4, 17, 21, 0).timestamp()
+
+        self.assertFalse(controller._scheduled_night_charge_active())
+        self.assertFalse(controller.auto_decide_relay(False, None, None, None))
+        self.assertNotEqual(service._last_health_reason, "scheduled-night-charge")
+
+    def test_scheduled_mode_stops_night_boost_after_latest_end_time(self):
+        controller, service = self._make_controller()
+        service.virtual_mode = 2
+        service.virtual_autostart = 1
+        service.auto_month_windows = {4: ((7, 30), (19, 30))}
+        service.auto_scheduled_enabled_days = "Mon,Tue,Wed,Thu,Fri"
+        service.auto_scheduled_night_start_delay_seconds = 3600.0
+        service.auto_scheduled_latest_end_time = "06:30"
+        service._time_now = lambda: datetime(2026, 4, 21, 6, 45).timestamp()
+
+        self.assertFalse(controller._scheduled_night_charge_active())
 
     def test_set_health_cached_updates_code_and_audit_log(self):
         controller, service = self._make_controller()
@@ -377,7 +432,7 @@ class TestAutoDecisionController(unittest.TestCase):
 
         delattr(service, "_time_now")
         service.learned_charge_power_updated_at = 995.0
-        with patch("dbus_shelly_wallbox_auto_logic.time.time", return_value=1000.0):
+        with patch("shelly_wallbox.auto.workflow.time.time", return_value=1000.0):
             self.assertEqual(controller._active_learned_charge_power(), 2280.0)
 
     def test_learned_charge_power_helpers_cover_invalid_state_and_defensive_none_paths(self):
@@ -514,7 +569,7 @@ class TestAutoDecisionController(unittest.TestCase):
         self.assertTrue(decision)
         self.assertIsNone(battery_soc)
 
-        with patch("dbus_shelly_wallbox_auto_logic.time.time", return_value=100.0):
+        with patch("shelly_wallbox.auto.workflow.time.time", return_value=100.0):
             with patch.object(controller, "_pre_average_decision", return_value=(controller._NO_DECISION, 55.0)):
                 with patch.object(controller, "_update_average_metrics", return_value=(None, None)):
                     self.assertTrue(controller.auto_decide_relay(True, 2200.0, 55.0, -2100.0))

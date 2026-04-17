@@ -2,13 +2,15 @@
 import unittest
 import sys
 import configparser
+import tempfile
+from pathlib import Path
 from types import ModuleType
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 sys.modules["vedbus"] = MagicMock()
 
-from dbus_shelly_wallbox_bootstrap import (
+from shelly_wallbox.bootstrap.controller import (
     MONTH_WINDOW_DEFAULTS,
     ServiceBootstrapController,
     _enable_fault_diagnostics,
@@ -19,7 +21,7 @@ from dbus_shelly_wallbox_bootstrap import (
     _seasonal_month_windows,
     run_service_main,
 )
-from dbus_shelly_wallbox_ports import AutoDecisionPort, UpdateCyclePort, WriteControllerPort
+from shelly_wallbox.ports import AutoDecisionPort, UpdateCyclePort, WriteControllerPort
 
 
 class _FakeDbusService:
@@ -78,16 +80,16 @@ class TestServiceBootstrapController(unittest.TestCase):
         def fake_signal(signum, handler):
             handlers[signum] = handler
 
-        with patch("dbus_shelly_wallbox_bootstrap.signal.SIGTERM", 15), patch(
-            "dbus_shelly_wallbox_bootstrap.signal.SIGINT", 2
-        ), patch("dbus_shelly_wallbox_bootstrap.signal.SIGHUP", None), patch(
-            "dbus_shelly_wallbox_bootstrap.signal.signal",
+        with patch("shelly_wallbox.bootstrap.controller.signal.SIGTERM", 15), patch(
+            "shelly_wallbox.bootstrap.controller.signal.SIGINT", 2
+        ), patch("shelly_wallbox.bootstrap.controller.signal.SIGHUP", None), patch(
+            "shelly_wallbox.bootstrap.controller.signal.signal",
             side_effect=fake_signal,
         ):
             _install_signal_logging(lambda: (_ for _ in ()).throw(RuntimeError("boom")))
 
         self.assertEqual(sorted(handlers), [2, 15])
-        with patch("dbus_shelly_wallbox_bootstrap.logging.debug") as debug_mock:
+        with patch("shelly_wallbox.bootstrap.controller.logging.debug") as debug_mock:
             handlers[15](15, None)
         debug_mock.assert_called_once()
 
@@ -109,6 +111,48 @@ class TestServiceBootstrapController(unittest.TestCase):
             virtual_mode=0,
             virtual_startstop=1,
             virtual_enable=1,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1",),
+            auto_start_surplus_watts=1850.0,
+            auto_stop_surplus_watts=1350.0,
+            auto_min_soc=40.0,
+            auto_resume_soc=50.0,
+            auto_start_delay_seconds=10.0,
+            auto_stop_delay_seconds=30.0,
+            auto_month_windows={4: ((7, 30), (19, 30))},
+            auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
+            auto_scheduled_night_start_delay_seconds=3600.0,
+            auto_scheduled_latest_end_time="06:30",
+            auto_scheduled_night_current_amps=13.0,
+            auto_dbus_backoff_base_seconds=5.0,
+            auto_dbus_backoff_max_seconds=60.0,
+            auto_grid_recovery_start_seconds=14.0,
+            auto_stop_surplus_delay_seconds=45.0,
+            auto_stop_surplus_volatility_low_watts=80.0,
+            auto_stop_surplus_volatility_high_watts=240.0,
+            auto_reference_charge_power_watts=2100.0,
+            auto_learn_charge_power_enabled=True,
+            auto_learn_charge_power_min_watts=1400.0,
+            auto_learn_charge_power_alpha=0.25,
+            auto_learn_charge_power_start_delay_seconds=12.0,
+            auto_learn_charge_power_window_seconds=180.0,
+            auto_learn_charge_power_max_age_seconds=21600.0,
+            auto_phase_switching_enabled=True,
+            auto_phase_prefer_lowest_when_idle=False,
+            auto_phase_upshift_delay_seconds=120.0,
+            auto_phase_downshift_delay_seconds=30.0,
+            auto_phase_upshift_headroom_watts=250.0,
+            auto_phase_downshift_margin_watts=150.0,
+            auto_phase_mismatch_retry_seconds=300.0,
+            auto_phase_mismatch_lockout_count=3,
+            auto_phase_mismatch_lockout_seconds=1800.0,
+            runtime_overrides_path="/run/wallbox-overrides.ini",
+            _runtime_overrides_active=True,
+            backend_mode="split",
+            meter_backend_type="shelly_meter",
+            switch_backend_type="template_switch",
+            charger_backend_type="template_charger",
             _last_health_reason="init",
             _last_health_code=0,
             _last_auto_state="idle",
@@ -121,13 +165,113 @@ class TestServiceBootstrapController(unittest.TestCase):
 
         self.assertEqual(service._dbusservice.paths["/Mgmt/ProcessName"]["value"], "/tmp/dbus_shelly_wallbox.py")
         self.assertEqual(service._dbusservice.paths["/Mode"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/PhaseSelection"]["value"], "P1")
+        self.assertEqual(service._dbusservice.paths["/Auto/StartSurplusWatts"]["value"], 1850.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledEnabledDays"]["value"], "Mon,Tue,Wed,Thu,Fri")
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledFallbackDelaySeconds"]["value"], 3600.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledLatestEndTime"]["value"], "06:30")
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledNightCurrent"]["value"], 13.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/DbusBackoffBaseSeconds"]["value"], 5.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/GridRecoveryStartSeconds"]["value"], 14.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/StopSurplusVolatilityLowWatts"]["value"], 80.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ReferenceChargePowerWatts"]["value"], 2100.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/LearnChargePowerEnabled"]["value"], 1)
+        self.assertEqual(service._dbusservice.paths["/Auto/LearnChargePowerWindowSeconds"]["value"], 180.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseSwitching"]["value"], 1)
+        self.assertEqual(service._dbusservice.paths["/Auto/PhasePreferLowestWhenIdle"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseUpshiftDelaySeconds"]["value"], 120.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseMismatchLockoutCount"]["value"], 3)
         self.assertEqual(service._dbusservice.paths["/Auto/State"]["value"], "idle")
         self.assertEqual(service._dbusservice.paths["/Auto/StateCode"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledState"]["value"], "disabled")
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledStateCode"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledReason"]["value"], "disabled")
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledReasonCode"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledNightBoostActive"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledTargetDayEnabled"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledTargetDay"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledTargetDate"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledFallbackStart"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledBoostUntil"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/RecoveryActive"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/StatusSource"]["value"], "unknown")
+        self.assertEqual(service._dbusservice.paths["/Auto/FaultActive"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/FaultReason"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/BackendMode"]["value"], "split")
+        self.assertEqual(service._dbusservice.paths["/Auto/MeterBackend"]["value"], "shelly_meter")
+        self.assertEqual(service._dbusservice.paths["/Auto/SwitchBackend"]["value"], "template_switch")
+        self.assertEqual(service._dbusservice.paths["/Auto/ChargerBackend"]["value"], "template_charger")
+        self.assertEqual(service._dbusservice.paths["/Auto/ChargerFaultActive"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ChargerTransportActive"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ChargerTransportReason"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/ChargerTransportSource"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/ChargerTransportDetail"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/RuntimeOverridesActive"]["value"], 1)
+        self.assertEqual(service._dbusservice.paths["/Auto/RuntimeOverridesPath"]["value"], "/run/wallbox-overrides.ini")
+        self.assertEqual(service._dbusservice.paths["/Auto/ChargerRetryActive"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ChargerRetryReason"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/ChargerRetrySource"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/ChargerCurrentTarget"]["value"], -1.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseCurrent"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseObserved"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseTarget"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseReason"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseMismatchActive"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseLockoutActive"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseLockoutTarget"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseLockoutReason"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseSupportedConfigured"]["value"], "P1")
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseSupportedEffective"]["value"], "P1")
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseDegradedActive"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/SwitchFeedbackClosed"]["value"], -1)
+        self.assertEqual(service._dbusservice.paths["/Auto/SwitchInterlockOk"]["value"], -1)
+        self.assertEqual(service._dbusservice.paths["/Auto/SwitchFeedbackMismatch"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ContactorSuspectedOpen"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ContactorSuspectedWelded"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ContactorFaultCount"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ContactorLockoutActive"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/ContactorLockoutReason"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/ContactorLockoutSource"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/ContactorLockoutReset"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseLockoutReset"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseThresholdWatts"]["value"], -1.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseCandidate"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseCandidateAge"]["value"], -1)
+        self.assertEqual(service._dbusservice.paths["/Auto/PhaseLockoutAge"]["value"], -1)
+        self.assertEqual(service._dbusservice.paths["/Auto/ContactorLockoutAge"]["value"], -1)
+        self.assertEqual(service._dbusservice.paths["/Auto/LastSwitchFeedbackAge"]["value"], -1)
+        self.assertEqual(service._dbusservice.paths["/Auto/LastChargerTransportAge"]["value"], -1)
+        self.assertEqual(service._dbusservice.paths["/Auto/ChargerRetryRemaining"]["value"], -1)
         self.assertTrue(service._dbusservice.paths["/Mode"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/PhaseSelection"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/StartSurplusWatts"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/ScheduledEnabledDays"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/ScheduledFallbackDelaySeconds"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/ScheduledLatestEndTime"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/ScheduledNightCurrent"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/DbusBackoffBaseSeconds"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/LearnChargePowerEnabled"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/PhasePreferLowestWhenIdle"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/PhaseSwitching"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/PhaseMismatchLockoutCount"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/PhaseLockoutReset"]["writeable"])
+        self.assertTrue(service._dbusservice.paths["/Auto/ContactorLockoutReset"]["writeable"])
         self.assertTrue(service._dbusservice.register_called)
 
     def test_initialize_controllers_uses_port_wrappers_for_bound_controllers(self):
-        service = SimpleNamespace()
+        service = SimpleNamespace(
+            backend_mode="combined",
+            meter_backend_type="shelly_combined",
+            switch_backend_type="shelly_combined",
+            charger_backend_type=None,
+            meter_backend_config_path="",
+            switch_backend_config_path="",
+            charger_backend_config_path="",
+            phase="L1",
+            pm_component="Switch",
+            pm_id=0,
+            max_current=16.0,
+        )
         controller = self._controller(service)
 
         controller.initialize_controllers()
@@ -135,6 +279,83 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertIsInstance(service._auto_controller.service, AutoDecisionPort)
         self.assertIsInstance(service._write_controller.port, WriteControllerPort)
         self.assertIsInstance(service._update_controller.service, UpdateCyclePort)
+        self.assertEqual(service._backend_selection.mode, "combined")
+        self.assertEqual(service._backend_selection.meter_type, "shelly_combined")
+        self.assertEqual(service._backend_selection.switch_type, "shelly_combined")
+        self.assertIsNotNone(service._meter_backend)
+        self.assertIsNotNone(service._switch_backend)
+        self.assertIsNone(service._charger_backend)
+
+    def test_initialize_controllers_supports_meterless_split_charger_setup(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            charger_path = Path(temp_dir) / "charger.ini"
+            charger_path.write_text(
+                "[Adapter]\nType=template_charger\nBaseUrl=http://adapter.local\n"
+                "[EnableRequest]\nUrl=/charger/enable\n"
+                "[CurrentRequest]\nUrl=/charger/current\n",
+                encoding="utf-8",
+            )
+            service = SimpleNamespace(
+                backend_mode="split",
+                meter_backend_type="none",
+                switch_backend_type="shelly_combined",
+                charger_backend_type="template_charger",
+                meter_backend_config_path="",
+                switch_backend_config_path="",
+                charger_backend_config_path=str(charger_path),
+                phase="L1",
+                pm_component="Switch",
+                pm_id=0,
+                max_current=16.0,
+                host="192.168.1.20",
+                session=MagicMock(),
+            )
+            controller = self._controller(service)
+
+            controller.initialize_controllers()
+
+            self.assertEqual(service._backend_selection.mode, "split")
+            self.assertEqual(service._backend_selection.meter_type, "none")
+            self.assertIsNone(service._meter_backend)
+            self.assertIsNotNone(service._switch_backend)
+            self.assertIsNotNone(service._charger_backend)
+
+    def test_initialize_controllers_supports_switchless_split_charger_setup(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            charger_path = Path(temp_dir) / "charger.ini"
+            charger_path.write_text(
+                "[Adapter]\nType=template_charger\nBaseUrl=http://adapter.local\n"
+                "[Capabilities]\nSupportedPhaseSelections=P1,P1_P2\n"
+                "[EnableRequest]\nUrl=/charger/enable\n"
+                "[CurrentRequest]\nUrl=/charger/current\n"
+                "[PhaseRequest]\nUrl=/charger/phase\n",
+                encoding="utf-8",
+            )
+            service = SimpleNamespace(
+                backend_mode="split",
+                meter_backend_type="none",
+                switch_backend_type="none",
+                charger_backend_type="template_charger",
+                meter_backend_config_path="",
+                switch_backend_config_path="",
+                charger_backend_config_path=str(charger_path),
+                phase="L1",
+                pm_component="Switch",
+                pm_id=0,
+                max_current=16.0,
+                host="192.168.1.20",
+                session=MagicMock(),
+                config={"DEFAULT": {}},
+            )
+            controller = self._controller(service)
+
+            controller.initialize_controllers()
+            controller.initialize_virtual_state()
+
+            self.assertEqual(service._backend_selection.switch_type, "none")
+            self.assertIsNone(service._switch_backend)
+            self.assertIsNotNone(service._charger_backend)
+            self.assertEqual(service.supported_phase_selections, ("P1", "P1_P2"))
 
     def test_initialize_virtual_state_uses_config_defaults(self):
         service = SimpleNamespace(
@@ -145,9 +366,13 @@ class TestServiceBootstrapController(unittest.TestCase):
                     "StartStop": "1",
                     "Enable": "0",
                     "SetCurrent": "12.5",
+                    "PhaseSelection": "P1_P2",
                 }
             },
             max_current=16.0,
+            _switch_backend=SimpleNamespace(
+                capabilities=MagicMock(return_value=SimpleNamespace(supported_phase_selections=("P1", "P1_P2")))
+            ),
         )
         controller = self._controller(service)
 
@@ -169,6 +394,9 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service.learned_charge_power_signature_mismatch_sessions, 0)
         self.assertIsNone(service.learned_charge_power_signature_checked_session_started_at)
         self.assertIsNone(service.relay_last_changed_at)
+        self.assertEqual(service.supported_phase_selections, ("P1", "P1_P2"))
+        self.assertEqual(service.requested_phase_selection, "P1_P2")
+        self.assertEqual(service.active_phase_selection, "P1_P2")
         self.assertFalse(service._auto_mode_cutover_pending)
 
     def test_restore_runtime_state_sets_manual_startup_target_only_outside_auto_mode(self):
@@ -272,7 +500,7 @@ class TestServiceBootstrapController(unittest.TestCase):
         service = SimpleNamespace(service_name="com.victronenergy.evcharger", deviceinstance=60)
         controller = self._controller(service)
 
-        with patch("dbus_shelly_wallbox_bootstrap.VeDbusService", return_value="dbus-service") as factory:
+        with patch("shelly_wallbox.bootstrap.controller.VeDbusService", return_value="dbus-service") as factory:
             controller.initialize_dbus_service()
 
         factory.assert_called_once_with("com.victronenergy.evcharger.http_60", register=False)
@@ -508,6 +736,13 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service.service_name, "com.example.ev")
         self.assertEqual(service.connection_name, "Custom RPC")
         self.assertEqual(service.runtime_state_path, "/tmp/runtime.json")
+        self.assertEqual(service.backend_mode, "combined")
+        self.assertEqual(service.meter_backend_type, "shelly_combined")
+        self.assertEqual(service.switch_backend_type, "shelly_combined")
+        self.assertIsNone(service.charger_backend_type)
+        self.assertIsNone(service.meter_backend_config_path)
+        self.assertIsNone(service.switch_backend_config_path)
+        self.assertIsNone(service.charger_backend_config_path)
         self.assertEqual(service.auto_pv_service, "com.example.pv")
         self.assertEqual(service.auto_pv_service_prefix, "com.example.pvprefix")
         self.assertEqual(service.auto_pv_path, "/Pv/Power")
@@ -547,6 +782,56 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service.shelly_request_timeout_seconds, 4.5)
         self.assertEqual(service.dbus_method_timeout_seconds, 2.5)
         service._validate_runtime_config.assert_called_once_with()
+
+    def test_load_runtime_configuration_reads_backend_section_when_present(self):
+        parser = configparser.ConfigParser()
+        parser.read_dict(
+            {
+                "DEFAULT": {"Host": "192.168.1.20"},
+                "Backends": {
+                    "Mode": "split",
+                    "MeterType": "shelly_combined",
+                    "SwitchType": "shelly_combined",
+                    "ChargerType": "",
+                    "MeterConfigPath": "/data/meter.ini",
+                    "SwitchConfigPath": "/data/switch.ini",
+                    "ChargerConfigPath": "",
+                },
+            }
+        )
+        service = SimpleNamespace(_load_config=MagicMock(return_value=parser), _validate_runtime_config=MagicMock())
+        controller = self._controller(service)
+
+        controller.load_runtime_configuration()
+
+        self.assertEqual(service.backend_mode, "split")
+        self.assertEqual(service.meter_backend_type, "shelly_combined")
+        self.assertEqual(service.switch_backend_type, "shelly_combined")
+        self.assertIsNone(service.charger_backend_type)
+        self.assertEqual(service.meter_backend_config_path, Path("/data/meter.ini"))
+        self.assertEqual(service.switch_backend_config_path, Path("/data/switch.ini"))
+        self.assertIsNone(service.charger_backend_config_path)
+
+    def test_load_runtime_configuration_rejects_invalid_meterless_backend_combo_early(self):
+        parser = configparser.ConfigParser()
+        parser.read_dict(
+            {
+                "DEFAULT": {"Host": "192.168.1.20"},
+                "Backends": {
+                    "Mode": "split",
+                    "MeterType": "none",
+                    "SwitchType": "shelly_combined",
+                    "ChargerType": "",
+                },
+            }
+        )
+        service = SimpleNamespace(_load_config=MagicMock(return_value=parser), _validate_runtime_config=MagicMock())
+        controller = self._controller(service)
+
+        with self.assertRaisesRegex(ValueError, "MeterType=none requires a configured charger backend"):
+            controller.load_runtime_configuration()
+
+        service._validate_runtime_config.assert_not_called()
 
     def test_logging_level_and_seasonal_windows_helpers(self):
         parser = configparser.ConfigParser()
@@ -595,7 +880,7 @@ class TestServiceBootstrapController(unittest.TestCase):
         gobject_module.MainLoop.return_value = mainloop
         service_factory = MagicMock()
 
-        with patch("dbus_shelly_wallbox_bootstrap._install_signal_logging") as install_signal_logging:
+        with patch("shelly_wallbox.bootstrap.controller._install_signal_logging") as install_signal_logging:
             _run_service_loop(service_factory, gobject_module)
 
         service_factory.assert_called_once_with()
@@ -603,7 +888,7 @@ class TestServiceBootstrapController(unittest.TestCase):
         mainloop.run.assert_called_once_with()
 
     def test_enable_fault_diagnostics_swallows_failures(self):
-        with patch("dbus_shelly_wallbox_bootstrap.faulthandler.enable", side_effect=RuntimeError("nope")):
+        with patch("shelly_wallbox.bootstrap.controller.faulthandler.enable", side_effect=RuntimeError("nope")):
             _enable_fault_diagnostics()
 
     def test_setup_dbus_mainloop_initializes_threads_and_tolerates_missing_threads_init(self):
@@ -626,7 +911,7 @@ class TestServiceBootstrapController(unittest.TestCase):
 
             imported_dbus.mainloop = mainloop_module
             mainloop_module.glib = glib_module
-            from dbus_shelly_wallbox_bootstrap import _setup_dbus_mainloop
+            from shelly_wallbox.bootstrap.controller import _setup_dbus_mainloop
 
             _setup_dbus_mainloop()
 
@@ -655,17 +940,17 @@ class TestServiceBootstrapController(unittest.TestCase):
 
     def test_run_service_main_runs_loop_and_logs_critical_on_failure(self):
         gobject_module = MagicMock()
-        with patch("dbus_shelly_wallbox_bootstrap._enable_fault_diagnostics") as enable_faults:
-            with patch("dbus_shelly_wallbox_bootstrap._setup_dbus_mainloop") as setup_loop:
-                with patch("dbus_shelly_wallbox_bootstrap._run_service_loop") as run_loop:
+        with patch("shelly_wallbox.bootstrap.controller._enable_fault_diagnostics") as enable_faults:
+            with patch("shelly_wallbox.bootstrap.controller._setup_dbus_mainloop") as setup_loop:
+                with patch("shelly_wallbox.bootstrap.controller._run_service_loop") as run_loop:
                     run_service_main(lambda: None, "/tmp/does-not-matter.ini", gobject_module)
 
         enable_faults.assert_called_once_with()
         setup_loop.assert_called_once_with()
         run_loop.assert_called_once()
 
-        with patch("dbus_shelly_wallbox_bootstrap._setup_dbus_mainloop", side_effect=RuntimeError("boom")):
-            with patch("dbus_shelly_wallbox_bootstrap.logging.critical") as critical_mock:
+        with patch("shelly_wallbox.bootstrap.controller._setup_dbus_mainloop", side_effect=RuntimeError("boom")):
+            with patch("shelly_wallbox.bootstrap.controller.logging.critical") as critical_mock:
                 run_service_main(lambda: None, "/tmp/does-not-matter.ini", gobject_module)
         critical_mock.assert_called_once()
 
@@ -676,7 +961,7 @@ class TestServiceBootstrapController(unittest.TestCase):
         def _capture_handler(signum, handler):
             handlers[signum] = handler
 
-        with patch("dbus_shelly_wallbox_bootstrap.signal.signal", side_effect=_capture_handler):
+        with patch("shelly_wallbox.bootstrap.controller.signal.signal", side_effect=_capture_handler):
             _install_signal_logging(lambda: quit_calls.append("quit"))
 
         self.assertTrue(handlers)
@@ -691,14 +976,14 @@ class TestServiceBootstrapController(unittest.TestCase):
                 raise RuntimeError("nope")
             handlers[signum] = handler
 
-        with patch("dbus_shelly_wallbox_bootstrap.signal.signal", side_effect=_capture_handler):
-            with patch("dbus_shelly_wallbox_bootstrap.logging.debug") as debug_mock:
+        with patch("shelly_wallbox.bootstrap.controller.signal.signal", side_effect=_capture_handler):
+            with patch("shelly_wallbox.bootstrap.controller.logging.debug") as debug_mock:
                 _install_signal_logging()
 
         debug_mock.assert_called()
 
         handlers = {}
-        with patch("dbus_shelly_wallbox_bootstrap.signal.signal", side_effect=lambda signum, handler: handlers.setdefault(signum, handler)):
+        with patch("shelly_wallbox.bootstrap.controller.signal.signal", side_effect=lambda signum, handler: handlers.setdefault(signum, handler)):
             _install_signal_logging(None)
 
         self.assertTrue(handlers)
@@ -712,8 +997,8 @@ class TestServiceBootstrapController(unittest.TestCase):
         )
         controller = self._controller(service)
 
-        with patch("dbus_shelly_wallbox_bootstrap.time.sleep") as sleep_mock:
-            with patch("dbus_shelly_wallbox_bootstrap.logging.warning") as warning_mock:
+        with patch("shelly_wallbox.bootstrap.controller.time.sleep") as sleep_mock:
+            with patch("shelly_wallbox.bootstrap.controller.logging.warning") as warning_mock:
                 result = controller.fetch_device_info_with_fallback()
 
         self.assertEqual(result, {"mac": "ABC"})
@@ -750,7 +1035,7 @@ class TestServiceBootstrapController(unittest.TestCase):
         )
         controller = self._controller(service)
 
-        with patch("dbus_shelly_wallbox_bootstrap.logging.error") as error_mock:
+        with patch("shelly_wallbox.bootstrap.controller.logging.error") as error_mock:
             with self.assertRaises(RuntimeError):
                 controller.register_paths()
 

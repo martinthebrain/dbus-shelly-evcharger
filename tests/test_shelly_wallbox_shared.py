@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from dbus_shelly_wallbox_shared import (
+from shelly_wallbox.core.shared import (
     _coerce_scalar_numeric,
     _iter_numeric_container_items,
     coerce_dbus_numeric,

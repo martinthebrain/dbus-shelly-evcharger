@@ -3,8 +3,8 @@ import random
 import unittest
 from unittest.mock import patch
 
-from dbus_shelly_wallbox_auto_controller import AutoDecisionController
-from dbus_shelly_wallbox_auto_policy import (
+from shelly_wallbox.controllers.auto import AutoDecisionController
+from shelly_wallbox.auto.policy import (
     AutoLearnChargePowerPolicy,
     AutoPolicy,
     AutoStopEwmaPolicy,
@@ -113,7 +113,7 @@ class TestShellyWallboxInvariants(unittest.TestCase):
             now += float(step_seconds)
             service._last_grid_at = now
             service._time_now = lambda current=now: current
-            with patch("dbus_shelly_wallbox_auto_logic.time.time", return_value=now):
+            with patch("shelly_wallbox.auto.workflow.time.time", return_value=now):
                 desired_relay = controller.auto_decide_relay(relay_on, pv_power, battery_soc, grid_power)
             if desired_relay != relay_on:
                 relay_on = desired_relay
