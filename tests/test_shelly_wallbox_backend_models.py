@@ -3,6 +3,8 @@ import unittest
 
 from shelly_wallbox.backend.models import (
     effective_supported_phase_selections,
+    normalize_phase_selection,
+    normalize_phase_selection_tuple,
     phase_selection_count,
     phase_switch_lockout_active,
     switch_feedback_mismatch,
@@ -15,10 +17,15 @@ class TestBackendModelHelpers(unittest.TestCase):
         self.assertEqual(phase_selection_count("P1_P2"), 2)
         self.assertEqual(phase_selection_count("P1_P2_P3"), 3)
         self.assertEqual(phase_selection_count("3P"), 3)
+        self.assertEqual(normalize_phase_selection("unknown", "P1_P2"), "P1_P2")
+        self.assertEqual(normalize_phase_selection_tuple("", ("P1_P2",)), ("P1_P2",))
 
     def test_phase_switch_lockout_active_rejects_missing_or_expired_values(self) -> None:
         self.assertFalse(phase_switch_lockout_active(None, 200.0, now=100.0))
         self.assertFalse(phase_switch_lockout_active("P1_P2", None, now=100.0))
+        self.assertFalse(phase_switch_lockout_active("", 200.0, now=100.0))
+        self.assertFalse(phase_switch_lockout_active("P1_P2", object(), now=100.0))
+        self.assertFalse(phase_switch_lockout_active("P1_P2", "bad", now=100.0))
         self.assertFalse(phase_switch_lockout_active("P1_P2", 90.0, now=100.0))
         self.assertTrue(phase_switch_lockout_active("P1_P2", 120.0, now=100.0))
 

@@ -526,15 +526,27 @@ class ShellyIoController:
     def _store_runtime_switch_snapshot(self, switch_state: object | None, now: float | None = None) -> None:
         """Mirror optional switch feedback/interlock readback into runtime state."""
         svc = self.service
-        feedback_closed = self._optional_bool(None if switch_state is None else getattr(switch_state, "feedback_closed", None))
-        interlock_ok = self._optional_bool(None if switch_state is None else getattr(switch_state, "interlock_ok", None))
+        feedback_closed, interlock_ok = self._switch_snapshot_values(switch_state)
         svc._last_switch_feedback_closed = feedback_closed
         svc._last_switch_interlock_ok = interlock_ok
-        svc._last_switch_feedback_at = (
-            None
-            if feedback_closed is None and interlock_ok is None
-            else (self._runtime_now() if now is None else float(now))
-        )
+        svc._last_switch_feedback_at = self._switch_snapshot_timestamp(feedback_closed, interlock_ok, now)
+
+    def _switch_snapshot_values(self, switch_state: object | None) -> tuple[bool | None, bool | None]:
+        """Return normalized feedback/interlock values from one switch-state readback."""
+        feedback_value = None if switch_state is None else getattr(switch_state, "feedback_closed", None)
+        interlock_value = None if switch_state is None else getattr(switch_state, "interlock_ok", None)
+        return self._optional_bool(feedback_value), self._optional_bool(interlock_value)
+
+    def _switch_snapshot_timestamp(
+        self,
+        feedback_closed: bool | None,
+        interlock_ok: bool | None,
+        now: float | None,
+    ) -> float | None:
+        """Return the capture timestamp for one switch snapshot when it carried explicit data."""
+        if feedback_closed is None and interlock_ok is None:
+            return None
+        return self._runtime_now() if now is None else float(now)
 
     def _sync_charger_runtime_state(self, state: ChargerState, now: float | None = None) -> None:
         """Mirror one normalized charger readback into the service runtime state."""
@@ -597,12 +609,22 @@ class ShellyIoController:
 
     def _estimated_phase_voltage_v(self, selection: PhaseSelection) -> float:
         """Return the per-phase voltage used for meterless charger power estimation."""
-        svc = self.service
-        cached_voltage = finite_float_or_none(getattr(svc, "_last_voltage", None))
-        if cached_voltage is None or cached_voltage <= 0.0:
+        cached_voltage = self._cached_runtime_voltage()
+        if cached_voltage is None:
             return 230.0
+        return self._phase_voltage_for_selection(selection, cached_voltage)
+
+    def _cached_runtime_voltage(self) -> float | None:
+        """Return the last valid runtime voltage snapshot used for charger estimation."""
+        cached_voltage = finite_float_or_none(getattr(self.service, "_last_voltage", None))
+        if cached_voltage is None or cached_voltage <= 0.0:
+            return None
+        return float(cached_voltage)
+
+    def _phase_voltage_for_selection(self, selection: PhaseSelection, cached_voltage: float) -> float:
+        """Return the per-phase voltage derived from cached runtime voltage and layout."""
         phase_voltage = float(cached_voltage)
-        if selection != "P1" and str(getattr(svc, "voltage_mode", "phase")).strip().lower() != "phase":
+        if selection != "P1" and str(getattr(self.service, "voltage_mode", "phase")).strip().lower() != "phase":
             phase_voltage = phase_voltage / math.sqrt(3.0)
         return 230.0 if phase_voltage <= 0.0 else float(phase_voltage)
 
@@ -615,8 +637,19 @@ class ShellyIoController:
     @classmethod
     def _resolved_pm_charger_current(cls, state: ChargerState) -> float | None:
         """Return the best current value to expose on meterless synthesized PM status."""
-        if state.actual_current_amps is not None:
-            return float(state.actual_current_amps)
+        actual_current = cls._actual_pm_charger_current(state)
+        if actual_current is not None:
+            return actual_current
+        return cls._fallback_pm_charger_current(state)
+
+    @staticmethod
+    def _actual_pm_charger_current(state: ChargerState) -> float | None:
+        """Return the directly measured charger current when one is available."""
+        return None if state.actual_current_amps is None else float(state.actual_current_amps)
+
+    @classmethod
+    def _fallback_pm_charger_current(cls, state: ChargerState) -> float | None:
+        """Return the best synthesized charger current when no direct current readback exists."""
         if state.current_amps is None:
             return None
         if state.status_text is not None:
@@ -723,14 +756,20 @@ class ShellyIoController:
         svc = self.service
         captured_at = self._runtime_now() if now is None else float(now)
         delay_seconds = _charger_transport_retry_delay_seconds(svc, reason)
-        delay_retry = getattr(svc, "_delay_source_retry", None)
-        if callable(delay_retry):
-            delay_retry("charger", captured_at, delay_seconds)
-        elif isinstance(getattr(svc, "_source_retry_after", None), dict):
-            svc._source_retry_after["charger"] = captured_at + delay_seconds
+        self._schedule_charger_retry_backoff(svc, captured_at, delay_seconds)
         svc._charger_retry_reason = str(reason).strip() or None
         svc._charger_retry_source = str(source).strip() or None
         svc._charger_retry_until = captured_at + delay_seconds
+
+    @staticmethod
+    def _schedule_charger_retry_backoff(svc: Any, captured_at: float, delay_seconds: float) -> None:
+        """Store one charger retry deadline in the runtime backoff helpers."""
+        delay_retry = getattr(svc, "_delay_source_retry", None)
+        if callable(delay_retry):
+            delay_retry("charger", captured_at, delay_seconds)
+            return
+        if isinstance(getattr(svc, "_source_retry_after", None), dict):
+            svc._source_retry_after["charger"] = captured_at + delay_seconds
 
     def _clear_charger_retry(self) -> None:
         """Clear the remembered charger retry-backoff state after recovery."""
@@ -749,6 +788,23 @@ class ShellyIoController:
 
     def _read_charger_state_best_effort(self, now: float | None = None) -> ChargerState | None:
         """Read native charger state without letting charger issues break meter/switch polling."""
+        read_context = self._charger_read_context(now)
+        if read_context is None:
+            return None
+        svc, backend, current = read_context
+        try:
+            state = cast(ChargerState, cast(Any, backend).read_charger_state())
+        except Exception as error:  # pylint: disable=broad-except
+            self._handle_charger_state_read_error(svc, error, current)
+            return None
+        self._sync_charger_runtime_state(state, now=current)
+        self._clear_charger_transport_issue()
+        self._clear_charger_retry()
+        svc._mark_recovery("charger", "Charger state reads recovered")
+        return state
+
+    def _charger_read_context(self, now: float | None) -> tuple[Any, Any, float] | None:
+        """Return the service, backend, and current time for one charger-state read attempt."""
         svc = self.service
         backend = self._charger_state_backend()
         if backend is None:
@@ -756,27 +812,22 @@ class ShellyIoController:
         current = self._runtime_now() if now is None else float(now)
         if self._charger_retry_active(current):
             return None
-        try:
-            state = cast(ChargerState, cast(Any, backend).read_charger_state())
-        except Exception as error:  # pylint: disable=broad-except
-            transport_reason = modbus_transport_issue_reason(error)
-            if transport_reason is not None:
-                self._remember_charger_transport_issue(transport_reason, "read", error, current)
-                self._remember_charger_retry(transport_reason, "read", current)
-            svc._mark_failure("charger")
-            svc._warning_throttled(
-                "charger-state-failed",
-                svc.auto_shelly_soft_fail_seconds,
-                "Charger state read failed: %s",
-                error,
-                exc_info=error,
-            )
-            return None
-        self._sync_charger_runtime_state(state, now=current)
-        self._clear_charger_transport_issue()
-        self._clear_charger_retry()
-        svc._mark_recovery("charger", "Charger state reads recovered")
-        return state
+        return svc, backend, current
+
+    def _handle_charger_state_read_error(self, svc: Any, error: BaseException, current: float) -> None:
+        """Record one charger-state read failure without aborting the worker cycle."""
+        transport_reason = modbus_transport_issue_reason(error)
+        if transport_reason is not None:
+            self._remember_charger_transport_issue(transport_reason, "read", error, current)
+            self._remember_charger_retry(transport_reason, "read", current)
+        svc._mark_failure("charger")
+        svc._warning_throttled(
+            "charger-state-failed",
+            svc.auto_shelly_soft_fail_seconds,
+            "Charger state read failed: %s",
+            error,
+            exc_info=error,
+        )
 
     def _split_switch_supported_phase_selections(self) -> tuple[str, ...]:
         """Return one normalized supported-phase tuple for the configured split switch backend."""
@@ -968,47 +1019,72 @@ class ShellyIoController:
         current_time = self._runtime_now()
         phase_selection = self._resolved_pm_phase_selection(state, active_phase_selection)
         current_a = self._resolved_pm_charger_current(state)
-        power_w = finite_float_or_none(state.power_w)
-        power_estimated = False
-        if power_w is None:
-            power_w = self._estimated_charger_power_w(current_a, phase_selection)
-            power_estimated = power_w is not None
-        if power_w is None:
-            power_w = 0.0
-        energy_kwh = finite_float_or_none(state.energy_kwh)
-        energy_estimated = False
-        if energy_kwh is None:
-            energy_kwh = self._integrated_estimated_charger_energy_kwh(power_w, current_time)
-            energy_estimated = True
-        else:
-            self._sync_estimated_charger_energy_cache(energy_kwh, power_w, current_time)
-        voltage_v = finite_float_or_none(getattr(svc, "_last_voltage", None))
-        if voltage_v is None and (power_estimated or energy_estimated):
-            voltage_v = self._estimated_phase_voltage_v(phase_selection)
-        if power_estimated or energy_estimated:
-            self._remember_charger_estimate(
-                "current-voltage-phase" if power_estimated else "power-time",
-                current_time,
-            )
-        else:
-            self._clear_charger_estimate()
+        power_w, power_estimated = self._resolved_pm_power(state, current_a, phase_selection)
+        energy_kwh, energy_estimated = self._resolved_pm_energy(state, power_w, current_time)
+        voltage_v = self._resolved_pm_voltage(svc, phase_selection, power_estimated, energy_estimated)
+        self._sync_pm_estimate_marker(power_estimated, energy_estimated, current_time)
         pm_status = self._charger_pm_status_base(power_w, energy_kwh, phase_selection)
         self._apply_optional_pm_output(pm_status, relay_on)
         self._apply_optional_pm_current(pm_status, current_a)
         self._apply_optional_pm_voltage(pm_status, voltage_v)
-        phase_currents = _phase_currents_for_selection(
-            current_a,
-            phase_selection,
-            getattr(svc, "phase", "L1"),
-        )
+        self._apply_phase_projection(pm_status, current_a, power_w, phase_selection, getattr(svc, "phase", "L1"))
+        return pm_status
+
+    def _resolved_pm_power(
+        self,
+        state: ChargerState,
+        current_a: float | None,
+        phase_selection: PhaseSelection,
+    ) -> tuple[float, bool]:
+        """Return PM power and whether that power value had to be estimated."""
+        power_w = finite_float_or_none(state.power_w)
+        if power_w is not None:
+            return power_w, False
+        estimated_power = self._estimated_charger_power_w(current_a, phase_selection)
+        return (0.0 if estimated_power is None else estimated_power), estimated_power is not None
+
+    def _resolved_pm_energy(self, state: ChargerState, power_w: float, current_time: float) -> tuple[float, bool]:
+        """Return PM energy and whether that energy value had to be estimated."""
+        energy_kwh = finite_float_or_none(state.energy_kwh)
+        if energy_kwh is not None:
+            self._sync_estimated_charger_energy_cache(energy_kwh, power_w, current_time)
+            return energy_kwh, False
+        return self._integrated_estimated_charger_energy_kwh(power_w, current_time), True
+
+    def _resolved_pm_voltage(
+        self,
+        svc: Any,
+        phase_selection: PhaseSelection,
+        power_estimated: bool,
+        energy_estimated: bool,
+    ) -> float | None:
+        """Return PM voltage, falling back to one estimated phase voltage when needed."""
+        voltage_v = finite_float_or_none(getattr(svc, "_last_voltage", None))
+        if voltage_v is not None or not (power_estimated or energy_estimated):
+            return voltage_v
+        return self._estimated_phase_voltage_v(phase_selection)
+
+    def _sync_pm_estimate_marker(self, power_estimated: bool, energy_estimated: bool, current_time: float) -> None:
+        """Keep runtime estimate diagnostics aligned with synthesized PM values."""
+        if power_estimated or energy_estimated:
+            source = "current-voltage-phase" if power_estimated else "power-time"
+            self._remember_charger_estimate(source, current_time)
+            return
+        self._clear_charger_estimate()
+
+    def _apply_phase_projection(
+        self,
+        pm_status: ShellyPmStatus,
+        current_a: float | None,
+        power_w: float,
+        phase_selection: PhaseSelection,
+        display_phase: object,
+    ) -> None:
+        """Apply per-phase current and power projections to one synthesized PM payload."""
+        phase_currents = _phase_currents_for_selection(current_a, phase_selection, display_phase)
         if phase_currents is not None:
             pm_status["_phase_currents_a"] = phase_currents
-        pm_status["_phase_powers_w"] = _phase_powers_for_selection(
-            power_w,
-            phase_selection,
-            getattr(svc, "phase", "L1"),
-        )
-        return pm_status
+        pm_status["_phase_powers_w"] = _phase_powers_for_selection(power_w, phase_selection, display_phase)
 
     @staticmethod
     def _charger_pm_status_base(
@@ -1327,43 +1403,75 @@ class ShellyIoController:
 
     def worker_apply_pending_relay_command(self) -> None:
         """Execute queued relay writes in the Shelly worker thread."""
+        command_context = self._pending_relay_command_context()
+        if command_context is None:
+            return
+        svc, target_on, source_key, source_label, current = command_context
+        try:
+            self._apply_pending_relay_target(svc, bool(target_on))
+        except Exception as error:  # pylint: disable=broad-except
+            self._handle_pending_relay_command_error(svc, source_key, source_label, current, error)
+            return
+
+        self._finalize_pending_relay_command(svc, bool(target_on), source_key, source_label)
+
+    def _pending_relay_command_context(self) -> tuple[Any, bool, str, str, float] | None:
+        """Return the current queued relay command and its execution context."""
         svc = self.service
         target_on, _requested_at = svc._peek_pending_relay_command()
         if target_on is None:
-            return
+            return None
         source_key = self._split_enable_source_key()
-        source_label = self._split_enable_source_label()
         current = self._runtime_now()
         if source_key == "charger" and self._charger_retry_active(current):
-            return
-        try:
-            backend = self._split_enable_backend()
-            if backend is not None:
-                cast(Any, backend).set_enabled(bool(target_on))
-            else:
-                svc._rpc_call_with_session(
-                    svc._worker_session,
-                    "Switch.Set",
-                    id=svc.pm_id,
-                    on=bool(target_on),
-                )
-        except Exception as error:  # pylint: disable=broad-except
-            if source_key == "charger":
-                transport_reason = modbus_transport_issue_reason(error)
-                if transport_reason is not None:
-                    self._remember_charger_transport_issue(transport_reason, "enable", error, current)
-                    self._remember_charger_retry(transport_reason, "enable", current)
-            svc._mark_failure(source_key)
-            svc._warning_throttled(
-                f"worker-{source_key}-switch-failed",
-                svc.auto_shelly_soft_fail_seconds,
-                "%s switch failed: %s",
-                source_label,
-                error,
-                exc_info=error,
-            )
-            return
+            return None
+        return svc, bool(target_on), source_key, self._split_enable_source_label(), current
 
+    def _apply_pending_relay_target(self, svc: Any, target_on: bool) -> None:
+        """Apply one queued enable/disable command through the split backend or Shelly RPC."""
+        backend = self._split_enable_backend()
+        if backend is not None:
+            cast(Any, backend).set_enabled(bool(target_on))
+            return
+        svc._rpc_call_with_session(
+            svc._worker_session,
+            "Switch.Set",
+            id=svc.pm_id,
+            on=bool(target_on),
+        )
+
+    def _handle_pending_relay_command_error(
+        self,
+        svc: Any,
+        source_key: str,
+        source_label: str,
+        current: float,
+        error: BaseException,
+    ) -> None:
+        """Record one worker-side relay command failure without clearing the pending target."""
+        if source_key == "charger":
+            transport_reason = modbus_transport_issue_reason(error)
+            if transport_reason is not None:
+                self._remember_charger_transport_issue(transport_reason, "enable", error, current)
+                self._remember_charger_retry(transport_reason, "enable", current)
+        svc._mark_failure(source_key)
+        svc._warning_throttled(
+            f"worker-{source_key}-switch-failed",
+            svc.auto_shelly_soft_fail_seconds,
+            "%s switch failed: %s",
+            source_label,
+            error,
+            exc_info=error,
+        )
+
+    def _finalize_pending_relay_command(
+        self,
+        svc: Any,
+        target_on: bool,
+        source_key: str,
+        source_label: str,
+    ) -> None:
+        """Finalize one successful worker-side relay command."""
         completed_at = svc._time_now()
         svc._clear_pending_relay_command(bool(target_on))
         svc._mark_relay_changed(bool(target_on), completed_at)

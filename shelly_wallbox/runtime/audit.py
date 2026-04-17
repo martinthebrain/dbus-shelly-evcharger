@@ -77,16 +77,10 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
         """Return the last observed phase selection from PM status or charger readback."""
         confirmed_pm_status = getattr(svc, "_last_confirmed_pm_status", None)
         if isinstance(confirmed_pm_status, dict):
-            observed = confirmed_pm_status.get("_phase_selection")
+            observed = _normalized_optional_audit_text(confirmed_pm_status.get("_phase_selection"))
             if observed is not None:
-                normalized = str(observed).strip()
-                if normalized:
-                    return normalized
-        observed = getattr(svc, "_last_charger_state_phase_selection", None)
-        if observed is None:
-            return None
-        normalized = str(observed).strip()
-        return normalized or None
+                return observed
+        return _normalized_optional_audit_text(getattr(svc, "_last_charger_state_phase_selection", None))
 
     @staticmethod
     def _phase_mismatch_active_for_audit(svc: Any) -> bool:
@@ -175,8 +169,7 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
             return 0
         reason = cls._contactor_lockout_reason_for_audit(svc)
         if reason is None:
-            active_reason = str(getattr(svc, "_contactor_fault_active_reason", "") or "").strip()
-            reason = active_reason or None
+            reason = _normalized_optional_audit_text(getattr(svc, "_contactor_fault_active_reason", ""))
         return 0 if reason is None else int(counts.get(reason, 0))
 
     @staticmethod
@@ -610,6 +603,12 @@ class _RuntimeSupportAuditMixin(_ComposableControllerMixin):
             svc._last_auto_audit_event_at = now
         except Exception as error:  # pylint: disable=broad-except
             logging.debug("Unable to write auto audit log %s: %s", path, error)
+
+
+def _normalized_optional_audit_text(value: object) -> str | None:
+    """Return one stripped audit text or ``None`` when empty."""
+    normalized = "" if value is None else str(value).strip()
+    return normalized or None
 
 
 __all__ = ["_RuntimeSupportAuditMixin"]

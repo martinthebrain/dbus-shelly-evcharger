@@ -3,8 +3,9 @@ import os
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
+from shelly_wallbox.runtime.audit import _RuntimeSupportAuditMixin
 from shelly_wallbox.runtime.support import RuntimeSupportController
 from tests.wallbox_test_fixtures import make_auto_metrics, make_runtime_support_service
 
@@ -111,6 +112,54 @@ class TestRuntimeSupportController(unittest.TestCase):
         self.assertFalse(partial_controller.source_retry_ready("dbus", 100.0))
         self.assertEqual(partial_controller.source_retry_remaining("dbus", 102.0), 3)
         self.assertTrue(partial_controller.source_retry_ready("dbus", 106.0))
+
+    def test_runtime_support_setup_helpers_cover_uptime_and_local_version_edges(self) -> None:
+        controller = RuntimeSupportController(SimpleNamespace(), self._age_zero, self._health_zero)
+
+        with patch("builtins.open", side_effect=OSError("no uptime")):
+            self.assertIsNone(controller._system_uptime_seconds())
+        with patch("builtins.open", mock_open(read_data="bad value\n")):
+            self.assertIsNone(controller._system_uptime_seconds())
+        with patch("builtins.open", mock_open(read_data="12.5 0.0\n")):
+            self.assertEqual(controller._system_uptime_seconds(), 12.5)
+        self.assertIsNone(controller._boot_delayed_update_due_at(100.0, 10.0))
+        with patch.object(RuntimeSupportController, "_system_uptime_seconds", return_value=3.0):
+            self.assertEqual(controller._boot_delayed_update_due_at(100.0, 10.0), 107.0)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = temp_dir
+            state_dir = os.path.join(repo_root, ".bootstrap-state")
+            os.makedirs(state_dir, exist_ok=True)
+            with open(os.path.join(state_dir, "installed_version"), "w", encoding="utf-8") as handle:
+                handle.write("\n")
+            with open(os.path.join(repo_root, "version.txt"), "w", encoding="utf-8") as handle:
+                handle.write("2.3.4\n")
+            self.assertEqual(controller._read_local_version(repo_root), "2.3.4")
+
+        with patch("os.path.isfile", return_value=True), patch("builtins.open", side_effect=OSError("locked")):
+            self.assertEqual(controller._read_local_version("/tmp/repo"), "")
+
+    def test_runtime_audit_helpers_cover_remaining_scalar_edges(self) -> None:
+        service = SimpleNamespace(
+            _last_charger_state_phase_selection=0,
+            _time_now=lambda: "bad",
+            _phase_switch_lockout_selection=None,
+            _phase_switch_lockout_until=200.0,
+            _contactor_fault_counts=[],
+            _contactor_fault_active_reason="",
+        )
+
+        self.assertEqual(_RuntimeSupportAuditMixin._observed_phase_for_audit(service), "0")
+        self.assertFalse(_RuntimeSupportAuditMixin._phase_lockout_active_for_audit(service))
+        self.assertIsNone(_RuntimeSupportAuditMixin._phase_lockout_target_for_audit(service))
+        self.assertEqual(_RuntimeSupportAuditMixin._contactor_fault_count_for_audit(service), 0)
+        self.assertIsNone(_RuntimeSupportAuditMixin._callable_time_or_none(lambda: "bad"))
+
+    def test_runtime_audit_phase_lockout_target_returns_none_for_missing_selection_even_when_active(self) -> None:
+        service = SimpleNamespace(_phase_switch_lockout_selection=None)
+
+        with patch.object(_RuntimeSupportAuditMixin, "_phase_lockout_active_for_audit", return_value=True):
+            self.assertIsNone(_RuntimeSupportAuditMixin._phase_lockout_target_for_audit(service))
 
     def test_worker_snapshot_contract_normalizes_pm_invariants(self) -> None:
         partial_service = SimpleNamespace(poll_interval_ms=500, deviceinstance=61, _time_now=lambda: 100.0)

@@ -6,7 +6,14 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from shelly_wallbox.backend.modbus_transport import ModbusRequest
-from shelly_wallbox.backend.simpleevse_charger import SimpleEvseChargerBackend
+from shelly_wallbox.backend.simpleevse_charger import (
+    SimpleEvseChargerBackend,
+    _enabled,
+    _evse_status_text,
+    _fault_text,
+    _rounded_current_setting,
+    _status_text,
+)
 
 
 class _FakeSimpleEvseTransport:
@@ -166,3 +173,15 @@ class TestShellyWallboxBackendSimpleEvseCharger(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "requires exactly one fixed"):
                 SimpleEvseChargerBackend(self._service(), config_path=config_path)
+
+    def test_simpleevse_helper_edges_cover_fault_status_and_current_validation(self) -> None:
+        self.assertEqual(_evse_status_text(1), "idle")
+        self.assertEqual(_fault_text(0, 0x0004), "vent-required-fail")
+        self.assertEqual(_fault_text(0, 0x0008), "pilot-release-wait")
+        self.assertEqual(_fault_text(5, 0), "vehicle-failure")
+        self.assertFalse(_enabled(0x0001, 3))
+        self.assertEqual(_status_text(99, 2, None), "ready")
+        with self.assertRaisesRegex(ValueError, "Unsupported charger current"):
+            _rounded_current_setting(81.0)
+        with self.assertRaises(FileNotFoundError):
+            SimpleEvseChargerBackend(self._service(), config_path="/definitely/missing.ini")

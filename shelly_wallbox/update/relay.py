@@ -338,17 +338,44 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         if current_index >= (len(supported) - 1):
             return None
         next_selection = supported[current_index + 1]
+        threshold = cls._phase_upshift_threshold(svc, phase_policy, next_selection, voltage)
+        if threshold is None:
+            return None
+        if surplus_watts < threshold:
+            return None
+        block_reason = cls._phase_upshift_block_reason(svc, current_selection, next_selection, now)
+        if block_reason is not None:
+            return None, block_reason, threshold
+        return next_selection, "phase-upshift", threshold
+
+    @classmethod
+    def _phase_upshift_threshold(
+        cls,
+        svc: Any,
+        phase_policy: Any,
+        next_selection: PhaseSelection,
+        voltage: float,
+    ) -> float | None:
+        """Return the surplus threshold required to upshift to the next phase layout."""
         next_min_surplus = cls._phase_selection_min_surplus_watts(svc, next_selection, voltage)
         if next_min_surplus is None:
             return None
-        threshold = next_min_surplus + float(getattr(phase_policy, "upshift_headroom_watts", 250.0))
-        if surplus_watts < threshold:
-            return None
+        return next_min_surplus + float(getattr(phase_policy, "upshift_headroom_watts", 250.0))
+
+    @classmethod
+    def _phase_upshift_block_reason(
+        cls,
+        svc: Any,
+        current_selection: PhaseSelection,
+        next_selection: PhaseSelection,
+        now: float,
+    ) -> str | None:
+        """Return the outward reason that currently blocks one Auto phase upshift."""
         if cls._phase_switch_lockout_active(svc, now, next_selection):
-            return None, "phase-upshift-blocked-lockout", threshold
+            return "phase-upshift-blocked-lockout"
         if cls._phase_switch_mismatch_retry_active(svc, current_selection, next_selection, now):
-            return None, "phase-upshift-blocked-mismatch", threshold
-        return next_selection, "phase-upshift", threshold
+            return "phase-upshift-blocked-mismatch"
+        return None
 
     @classmethod
     def _phase_switch_mismatch_retry_active(
@@ -361,13 +388,7 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         """Return whether one recent mismatch should temporarily suppress this upshift."""
         if not cls._phase_selection_is_upshift(current_selection, target_selection):
             return False
-        mismatch_selection = getattr(svc, "_phase_switch_last_mismatch_selection", None)
-        if mismatch_selection is None:
-            return False
-        normalized_mismatch_selection = normalize_phase_selection(mismatch_selection, "P1")
-        if normalized_mismatch_selection != target_selection:
-            return False
-        mismatch_at = finite_float_or_none(getattr(svc, "_phase_switch_last_mismatch_at", None))
+        mismatch_at = cls._phase_switch_mismatch_timestamp(svc, target_selection)
         if mismatch_at is None:
             return False
         retry_seconds = cls._phase_switch_mismatch_retry_seconds(svc)
@@ -375,6 +396,16 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
             return False
         elapsed_seconds = max(0.0, float(now) - mismatch_at)
         return elapsed_seconds < retry_seconds
+
+    @staticmethod
+    def _phase_switch_mismatch_timestamp(svc: Any, target_selection: PhaseSelection) -> float | None:
+        """Return the timestamp of the last mismatch that matches the given target selection."""
+        mismatch_selection = getattr(svc, "_phase_switch_last_mismatch_selection", None)
+        if mismatch_selection is None:
+            return None
+        if normalize_phase_selection(mismatch_selection, "P1") != target_selection:
+            return None
+        return finite_float_or_none(getattr(svc, "_phase_switch_last_mismatch_at", None))
 
     @classmethod
     def _phase_switch_mismatch_retry_seconds(cls, svc: Any) -> float:
@@ -1179,16 +1210,9 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
             cls._clear_contactor_fault_active_state(svc)
             return None
         current = cls._charger_readback_now(svc, now)
-        active_reason = cls._base_contactor_fault_reason(getattr(svc, "_contactor_fault_active_reason", None))
-        active_since = finite_float_or_none(getattr(svc, "_contactor_fault_active_since", None))
-        if active_reason != normalized or active_since is None:
-            counts = cls._contactor_fault_counts(svc)
-            counts[normalized] = cls._contactor_fault_count(svc, normalized) + 1
-            cls._set_runtime_attr(svc, "_contactor_fault_active_reason", normalized)
-            cls._set_runtime_attr(svc, "_contactor_fault_active_since", current)
-            active_since = current
+        active_since = cls._activate_contactor_fault_reason(svc, normalized, current)
         current_count = cls._contactor_fault_count(svc, normalized)
-        if cls._contactor_lockout_threshold(svc) > 0 and current_count >= cls._contactor_lockout_threshold(svc):
+        if cls._contactor_fault_exceeds_count_threshold(svc, current_count):
             cls._engage_contactor_lockout(svc, normalized, current, "count-threshold")
             return cls._active_contactor_lockout_health(svc)
         persistence_seconds = cls._contactor_lockout_persistence_seconds(svc)
@@ -1196,6 +1220,25 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
             cls._engage_contactor_lockout(svc, normalized, current, "persistent")
             return cls._active_contactor_lockout_health(svc)
         return normalized
+
+    @classmethod
+    def _activate_contactor_fault_reason(cls, svc: Any, normalized: str, current: float) -> float:
+        """Return the active-since timestamp after recording one active contactor-fault reason."""
+        active_reason = cls._base_contactor_fault_reason(getattr(svc, "_contactor_fault_active_reason", None))
+        active_since = finite_float_or_none(getattr(svc, "_contactor_fault_active_since", None))
+        if active_reason == normalized and active_since is not None:
+            return active_since
+        counts = cls._contactor_fault_counts(svc)
+        counts[normalized] = cls._contactor_fault_count(svc, normalized) + 1
+        cls._set_runtime_attr(svc, "_contactor_fault_active_reason", normalized)
+        cls._set_runtime_attr(svc, "_contactor_fault_active_since", current)
+        return current
+
+    @classmethod
+    def _contactor_fault_exceeds_count_threshold(cls, svc: Any, current_count: int) -> bool:
+        """Return whether one contactor-fault counter has reached the lockout threshold."""
+        threshold = cls._contactor_lockout_threshold(svc)
+        return threshold > 0 and current_count >= threshold
 
     @classmethod
     def charger_health_override(cls, svc: Any, now: float | None = None) -> str | None:
@@ -1227,33 +1270,50 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         pm_confirmed: bool = False,
     ) -> str | None:
         """Return one switch-feedback health override for contactor/interlock setups."""
-        interlock_ok = cls._fresh_switch_interlock_ok(svc, now)
-        if interlock_ok is False and (bool(desired_relay) or bool(relay_on)):
-            cls._clear_contactor_fault_active_state(svc)
-            cls._set_runtime_attr(svc, "_contactor_suspected_open_since", None)
-            cls._set_runtime_attr(svc, "_contactor_suspected_welded_since", None)
-            return "contactor-interlock"
-        feedback_closed = cls._fresh_switch_feedback_closed(svc, now)
-        if switch_feedback_mismatch(relay_on, feedback_closed):
-            cls._clear_contactor_fault_active_state(svc)
-            cls._set_runtime_attr(svc, "_contactor_suspected_open_since", None)
-            cls._set_runtime_attr(svc, "_contactor_suspected_welded_since", None)
-            return "contactor-feedback-mismatch"
+        safety_override = cls._switch_feedback_safety_override(svc, desired_relay, relay_on, now)
+        if safety_override is not None:
+            return safety_override
         latched_lockout = cls._active_contactor_lockout_health(svc)
         if latched_lockout is not None:
             return latched_lockout
-        observed_load = cls._observed_load_active(svc, power, current, pm_confirmed, now)
-        demand_active = cls._charger_requests_load(svc, now)
-        suspected_open_age = cls._heuristic_condition_age(
+        return cls._switch_feedback_heuristic_override(svc, relay_on, power, current, pm_confirmed, now)
+
+    @classmethod
+    def _switch_feedback_safety_override(
+        cls,
+        svc: Any,
+        desired_relay: bool,
+        relay_on: bool,
+        now: float | None,
+    ) -> str | None:
+        """Return immediate interlock/feedback safety overrides that outrank heuristics."""
+        interlock_ok = cls._fresh_switch_interlock_ok(svc, now)
+        if interlock_ok is False and (bool(desired_relay) or bool(relay_on)):
+            cls._clear_contactor_suspicions(svc)
+            return "contactor-interlock"
+        feedback_closed = cls._fresh_switch_feedback_closed(svc, now)
+        if switch_feedback_mismatch(relay_on, feedback_closed):
+            cls._clear_contactor_suspicions(svc)
+            return "contactor-feedback-mismatch"
+        return None
+
+    @classmethod
+    def _switch_feedback_heuristic_override(
+        cls,
+        svc: Any,
+        relay_on: bool,
+        power: float | None,
+        current: float | None,
+        pm_confirmed: bool,
+        now: float | None,
+    ) -> str | None:
+        """Return heuristic contactor overrides when feedback is absent but behavior looks wrong."""
+        suspected_open_age, suspected_welded_age = cls._contactor_suspected_ages(
             svc,
-            "_contactor_suspected_open_since",
-            bool(relay_on) and demand_active and not observed_load,
-            now,
-        )
-        suspected_welded_age = cls._heuristic_condition_age(
-            svc,
-            "_contactor_suspected_welded_since",
-            not bool(relay_on) and observed_load,
+            relay_on,
+            power,
+            current,
+            pm_confirmed,
             now,
         )
         delay_seconds = cls._contactor_heuristic_delay_seconds(svc)
@@ -1263,6 +1323,41 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
             return cls._remember_contactor_fault(svc, "contactor-suspected-open", now)
         cls._clear_contactor_fault_active_state(svc)
         return None
+
+    @classmethod
+    def _contactor_suspected_ages(
+        cls,
+        svc: Any,
+        relay_on: bool,
+        power: float | None,
+        current: float | None,
+        pm_confirmed: bool,
+        now: float | None,
+    ) -> tuple[float | None, float | None]:
+        """Return the ages of the current suspected-open and suspected-welded heuristics."""
+        observed_load = cls._observed_load_active(svc, power, current, pm_confirmed, now)
+        demand_active = cls._charger_requests_load(svc, now)
+        return (
+            cls._heuristic_condition_age(
+                svc,
+                "_contactor_suspected_open_since",
+                bool(relay_on) and demand_active and not observed_load,
+                now,
+            ),
+            cls._heuristic_condition_age(
+                svc,
+                "_contactor_suspected_welded_since",
+                not bool(relay_on) and observed_load,
+                now,
+            ),
+        )
+
+    @classmethod
+    def _clear_contactor_suspicions(cls, svc: Any) -> None:
+        """Clear heuristic contactor suspicion state when explicit safety feedback takes over."""
+        cls._clear_contactor_fault_active_state(svc)
+        cls._set_runtime_attr(svc, "_contactor_suspected_open_since", None)
+        cls._set_runtime_attr(svc, "_contactor_suspected_welded_since", None)
 
     @classmethod
     def _charger_status_override(
@@ -1491,9 +1586,7 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         auto_mode_active: bool,
     ) -> float | None:
         """Return one charger current target for the current Auto cycle."""
-        if not auto_mode_active or not bool(desired_relay):
-            return None
-        if cls._charger_current_backend(svc) is None:
+        if not cls._charger_current_target_allowed(svc, desired_relay, auto_mode_active):
             return None
         if cls._scheduled_night_charge_active(svc, now):
             return cls._clamped_charger_current_target(svc, cls._scheduled_night_current_amps(svc))
@@ -1502,6 +1595,13 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
             return learned_target
         fallback_target = finite_float_or_none(getattr(svc, "virtual_set_current", None))
         return cls._clamped_charger_current_target(svc, fallback_target)
+
+    @classmethod
+    def _charger_current_target_allowed(cls, svc: Any, desired_relay: bool, auto_mode_active: bool) -> bool:
+        """Return whether Auto is currently allowed to derive one native charger current target."""
+        if not auto_mode_active or not bool(desired_relay):
+            return False
+        return cls._charger_current_backend(svc) is not None
 
     @classmethod
     def apply_charger_current_target(
@@ -2186,35 +2286,105 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         auto_mode_active: bool,
     ) -> tuple[bool, float, float, bool, bool | None]:
         """Advance one phase switch while the new phase selection stabilizes."""
+        observed_selection = self._remember_observed_phase_selection(svc, pm_status, now)
+        if self._phase_switch_still_stabilizing(svc, now):
+            return False, 0.0, 0.0, False, False
+        mismatch_result = self._stabilizing_phase_switch_mismatch_result(
+            svc,
+            pending_selection,
+            observed_selection,
+            relay_on,
+            power,
+            current,
+            pm_confirmed,
+            now,
+            auto_mode_active,
+        )
+        if mismatch_result is not None:
+            return mismatch_result
+        return self._complete_stabilized_phase_switch(
+            svc,
+            pending_selection,
+            relay_on,
+            power,
+            current,
+            pm_confirmed,
+            now,
+            auto_mode_active,
+        )
+
+    def _remember_observed_phase_selection(
+        self,
+        svc: Any,
+        pm_status: dict[str, Any],
+        now: float,
+    ) -> PhaseSelection | None:
+        """Return the observed phase selection and mirror it into runtime state when present."""
         observed_selection = self._observed_phase_selection(svc, pm_status, now)
         if observed_selection is not None:
             svc.active_phase_selection = observed_selection
-        stable_until = getattr(svc, "_phase_switch_stable_until", None)
-        if stable_until is not None and float(now) < float(stable_until):
-            return False, 0.0, 0.0, False, False
-        if observed_selection != pending_selection:
-            if self._phase_switch_verification_expired(svc, now):
-                self._report_phase_switch_mismatch(svc, pending_selection, observed_selection, now)
-                relay_on, power, current, pm_confirmed = self._abort_phase_switch_after_mismatch(
-                    svc,
-                    pending_selection,
-                    observed_selection,
-                    relay_on,
-                    power,
-                    current,
-                    pm_confirmed,
-                    now,
-                    auto_mode_active,
-                )
-                return relay_on, power, current, pm_confirmed, None
-            return False, 0.0, 0.0, False, False
+        return observed_selection
+
+    def _complete_stabilized_phase_switch(
+        self,
+        svc: Any,
+        pending_selection: PhaseSelection,
+        relay_on: bool,
+        power: float,
+        current: float,
+        pm_confirmed: bool,
+        now: float,
+        auto_mode_active: bool,
+    ) -> tuple[bool, float, float, bool, bool | None]:
+        """Return the result after the requested phase selection stabilized successfully."""
         svc.active_phase_selection = pending_selection
         self._clear_phase_switch_mismatch_tracking(svc, pending_selection)
+        self._clear_matching_phase_switch_lockout(svc, pending_selection)
+        relay_on, power, current, pm_confirmed = self._resume_after_phase_switch_pause(
+            svc,
+            relay_on,
+            power,
+            current,
+            pm_confirmed,
+            now,
+            auto_mode_active,
+        )
+        return relay_on, power, current, pm_confirmed, None
+
+    def _clear_matching_phase_switch_lockout(self, svc: Any, pending_selection: PhaseSelection) -> None:
+        """Clear a lockout that targeted the phase selection that just stabilized successfully."""
         lockout_selection = getattr(svc, "_phase_switch_lockout_selection", None)
         if lockout_selection is not None and normalize_phase_selection(lockout_selection, "P1") == pending_selection:
             self._clear_phase_switch_lockout(svc)
-        relay_on, power, current, pm_confirmed = self._resume_after_phase_switch_pause(
+
+    @staticmethod
+    def _phase_switch_still_stabilizing(svc: Any, now: float) -> bool:
+        """Return whether the phase switch is still inside its stabilization delay window."""
+        stable_until = getattr(svc, "_phase_switch_stable_until", None)
+        return stable_until is not None and float(now) < float(stable_until)
+
+    def _stabilizing_phase_switch_mismatch_result(
+        self,
+        svc: Any,
+        pending_selection: PhaseSelection,
+        observed_selection: PhaseSelection | None,
+        relay_on: bool,
+        power: float,
+        current: float,
+        pm_confirmed: bool,
+        now: float,
+        auto_mode_active: bool,
+    ) -> tuple[bool, float, float, bool, bool | None] | None:
+        """Return the next result while waiting for the requested phase selection to appear."""
+        if observed_selection == pending_selection:
+            return None
+        if not self._phase_switch_verification_expired(svc, now):
+            return False, 0.0, 0.0, False, False
+        self._report_phase_switch_mismatch(svc, pending_selection, observed_selection, now)
+        relay_on, power, current, pm_confirmed = self._abort_phase_switch_after_mismatch(
             svc,
+            pending_selection,
+            observed_selection,
             relay_on,
             power,
             current,
@@ -2240,22 +2410,56 @@ class _UpdateCycleRelayMixin(_ComposableControllerMixin):
         if self._relay_decision_noop(svc, desired_relay, relay_on):
             return relay_on, power, current, pm_confirmed
 
+        self._log_auto_relay_change_if_needed(svc, desired_relay, auto_mode_active)
+
+        pending_result = self._unsuccessful_relay_decision_result(
+            svc,
+            desired_relay,
+            relay_on,
+            power,
+            current,
+            pm_confirmed,
+            now,
+        )
+        if pending_result is not None:
+            return pending_result
+
+        return self._successful_relay_decision_result(desired_relay, now)
+
+    def _log_auto_relay_change_if_needed(self, svc: Any, desired_relay: bool, auto_mode_active: bool) -> None:
+        """Append one Auto audit entry before a relay transition when audit logging is enabled."""
         if auto_mode_active and svc.auto_audit_log:
             self.log_auto_relay_change(svc, desired_relay)
 
+    def _unsuccessful_relay_decision_result(
+        self,
+        svc: Any,
+        desired_relay: bool,
+        relay_on: bool,
+        power: float,
+        current: float,
+        pm_confirmed: bool,
+        now: float,
+    ) -> tuple[bool, float, float, bool] | None:
+        """Return the unchanged runtime state when the relay write failed or was deferred."""
+        applied = self._apply_relay_target_best_effort(svc, desired_relay, now)
+        if applied:
+            return None
+        return relay_on, power, current, pm_confirmed
+
+    def _successful_relay_decision_result(self, desired_relay: bool, now: float) -> tuple[bool, float, float, bool]:
+        """Return the optimistic runtime state after a relay write was queued successfully."""
+        relay_on = bool(desired_relay)
+        self._publish_local_pm_status_best_effort(relay_on, now)
+        return relay_on, 0.0, 0.0, False
+
+    def _apply_relay_target_best_effort(self, svc: Any, desired_relay: bool, now: float) -> bool | None:
+        """Apply one relay target and return ``None`` when the write failed."""
         try:
-            applied = self._apply_enabled_target(svc, desired_relay, now)
+            return self._apply_enabled_target(svc, desired_relay, now)
         except Exception as error:  # pylint: disable=broad-except
             self._handle_relay_decision_failure(svc, error)
-            return relay_on, power, current, pm_confirmed
-        if not applied:
-            return relay_on, power, current, pm_confirmed
-
-        relay_on = desired_relay
-        power = 0.0
-        current = 0.0
-        self._publish_local_pm_status_best_effort(relay_on, now)
-        return relay_on, power, current, False
+            return None
 
     @classmethod
     def _relay_decision_noop(cls, svc: Any, desired_relay: bool, relay_on: bool) -> bool:

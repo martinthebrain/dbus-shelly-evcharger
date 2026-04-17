@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+import configparser
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+from shelly_wallbox.backend.shelly_support import (
+    ShellyBackendBase,
+    _config,
+    _mapping_path_value,
+    _optional_signal_readback_settings,
+    _parse_switch_channel_ids,
+    _phase_switch_targets,
+    _switch_channel_id,
+    normalize_switching_mode,
+    phase_currents_for_selection,
+    phase_powers_for_selection,
+    resolve_shelly_profile,
+    validate_shelly_profile_role,
+)
+
+
+class TestShellyWallboxBackendShellySupport(unittest.TestCase):
+    @staticmethod
+    def _section(name: str, values: dict[str, object] | None = None) -> configparser.SectionProxy:
+        parser = configparser.ConfigParser()
+        parser.read_dict({name: {key: str(value) for key, value in (values or {}).items()}})
+        return parser[name]
+
+    def test_shelly_support_scalar_helpers_cover_validation_edges(self) -> None:
+        self.assertEqual(normalize_switching_mode("weird", "contactor"), "contactor")
+        self.assertEqual(_parse_switch_channel_ids("", (5,)), (5,))
+        self.assertEqual(_parse_switch_channel_ids("0,0,1", (9,)), (0, 1))
+        self.assertIsNone(_switch_channel_id(""))
+        with self.assertRaisesRegex(ValueError, "Invalid Shelly switch channel id 'x'"):
+            _switch_channel_id("x")
+        with self.assertRaisesRegex(ValueError, "Invalid Shelly switch channel id '-1'"):
+            _switch_channel_id("-1")
+
+        phase_map = self._section("PhaseMap", {"Bogus": "0"})
+        with self.assertRaisesRegex(ValueError, "Unsupported PhaseMap key"):
+            _phase_switch_targets(phase_map, 0, ("P1",))
+
+        phase_map = self._section("PhaseMap", {"P1_P2": "1,2"})
+        self.assertEqual(_phase_switch_targets(phase_map, 0, ("P1",))["P1"], (0,))
+
+        self.assertEqual(phase_powers_for_selection(2000.0, "P1_P2"), (1000.0, 1000.0, 0.0))
+        self.assertEqual(phase_currents_for_selection(12.0, "P1_P2", "L3"), (6.0, 6.0, 0.0))
+        self.assertEqual(phase_powers_for_selection(900.0, "P1", "L3"), (0.0, 0.0, 900.0))
+
+    def test_shelly_support_profile_and_path_helpers_cover_errors(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unsupported ShellyProfile"):
+            resolve_shelly_profile("unknown")
+        with self.assertRaisesRegex(ValueError, "is not valid for switch backends"):
+            validate_shelly_profile_role("pm1_meter", "switch")
+        with self.assertRaises(FileNotFoundError):
+            _config("/definitely/missing.ini")
+
+        section = self._section("Feedback", {"Component": "Input", "ValuePath": ""})
+        with self.assertRaisesRegex(ValueError, "requires ValuePath"):
+            _optional_signal_readback_settings(section)
+
+        section = self._section("Feedback", {"Component": "Temperature"})
+        settings = _optional_signal_readback_settings(section)
+        self.assertIsNotNone(settings)
+        self.assertEqual(settings.value_path, "state")
+        section = self._section("Feedback", {"Component": "Switch"})
+        settings = _optional_signal_readback_settings(section)
+        self.assertIsNotNone(settings)
+        self.assertEqual(settings.value_path, "output")
+
+        with self.assertRaisesRegex(ValueError, "Missing Shelly signal response path"):
+            _mapping_path_value({"outer": {}}, "outer.missing")
+        self.assertEqual(_mapping_path_value({"outer": {"x": 1}}, "outer..x"), 1)
+
+    def test_shelly_backend_base_auth_and_rpc_helpers_cover_remaining_branches(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "shelly.ini"
+            config_path.write_text(
+                "[Adapter]\nHost=192.168.1.20\nUsername=user\nPassword=secret\nDigestAuth=1\n",
+                encoding="utf-8",
+            )
+            session = MagicMock()
+            response = MagicMock()
+            response.json.return_value = {}
+            session.get.return_value = response
+            backend = ShellyBackendBase(SimpleNamespace(session=session), str(config_path))
+
+            with patch("shelly_wallbox.backend.shelly_support.HTTPDigestAuth", return_value="digest-auth"):
+                self.assertEqual(backend._auth(), "digest-auth")
+                self.assertEqual(backend._rpc_url("Switch.GetStatus"), "http://192.168.1.20/rpc/Switch.GetStatus")
+                backend._request_json("http://192.168.1.20/rpc/Test")
+                session.get.assert_called_once_with(
+                    url="http://192.168.1.20/rpc/Test",
+                    timeout=2.0,
+                    auth="digest-auth",
+                )
+
+            backend.settings = SimpleNamespace(username="user", password="secret", use_digest_auth=False, timeout_seconds=2.0)
+            self.assertEqual(backend._auth(), ("user", "secret"))

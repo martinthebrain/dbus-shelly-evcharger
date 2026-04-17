@@ -207,6 +207,100 @@ class TestDbusPublishController(unittest.TestCase):
         self.assertEqual(values["/Auto/PhaseMismatchLockoutCount"], 3)
         self.assertEqual(values["/Auto/PhaseMismatchLockoutSeconds"], 1800.0)
 
+    def test_learned_display_helpers_cover_empty_scalar_and_fault_paths(self) -> None:
+        service = SimpleNamespace(
+            _charger_backend=object(),
+            learned_charge_power_state="stable",
+            learned_charge_power_watts=None,
+            learned_charge_power_updated_at=None,
+            learned_charge_power_phase="L1",
+            learned_charge_power_voltage=230.0,
+            auto_learn_charge_power_max_age_seconds=0.0,
+            phase="L1",
+            voltage_mode="phase",
+            _last_charger_state_current_amps=0.0,
+            _last_health_reason="contactor-lockout-open",
+            _last_charger_state_fault="contactor-lockout-open",
+            _last_charger_state_at=100.0,
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        self.assertIsNone(controller._charger_current_readback(100.0))
+        self.assertFalse(controller._learned_charge_power_expired_for_display(100.0))
+        service.auto_learn_charge_power_max_age_seconds = 60.0
+        self.assertTrue(controller._learned_charge_power_expired_for_display(100.0))
+        self.assertIsNone(controller._validated_learned_display_scalars(None, 230.0))
+        self.assertIsNone(controller._validated_learned_display_scalars(2000.0, None))
+        self.assertIsNone(controller._raw_learned_display_values())
+        self.assertIsNone(controller._stable_learned_display_inputs(100.0))
+        self.assertIsNone(controller._rounded_display_current(0.4))
+        self.assertIsNone(controller._derived_learned_set_current(100.0))
+        self.assertEqual(controller._fault_active(service), 1)
+
+    def test_publish_helpers_cover_delete_failure_and_display_fallback_edges(self) -> None:
+        class _DeleteFailingDbusService(dict[str, object]):
+            def __delitem__(self, key: str) -> None:
+                raise RuntimeError("cannot delete")
+
+        service = SimpleNamespace(
+            _dbusservice=_DeleteFailingDbusService({"/Ghost": 1}),
+            _dbus_publish_state={"/Ghost": {"value": 1, "updated_at": 1.0}},
+            _dbus_live_publish_interval_seconds=1.0,
+            _dbus_slow_publish_interval_seconds=5.0,
+            _charger_backend=None,
+            virtual_set_current=16.0,
+            learned_charge_power_state="stable",
+            learned_charge_power_watts=230.0,
+            learned_charge_power_updated_at=100.0,
+            learned_charge_power_phase="L1",
+            learned_charge_power_voltage=230.0,
+            auto_learn_charge_power_max_age_seconds=21600.0,
+            min_current=6.0,
+            max_current=16.0,
+            voltage_mode="phase",
+            phase="L1",
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        self.assertTrue(controller.publish_path("/Ghost", None, now=10.0, force=True))
+        self.assertEqual(controller._display_set_current(100.0), 6.0)
+
+    def test_publish_helpers_cover_remaining_restore_and_learned_display_edges(self) -> None:
+        class _DeleteFailingDbusService(dict[str, object]):
+            def __delitem__(self, key: str) -> None:
+                raise RuntimeError("cannot delete")
+
+        service = SimpleNamespace(
+            _dbusservice=_DeleteFailingDbusService({"/Ghost": 1}),
+            _dbus_publish_state={},
+            _dbus_live_publish_interval_seconds=1.0,
+            _dbus_slow_publish_interval_seconds=5.0,
+            min_current=6.0,
+            max_current=16.0,
+            voltage_mode="phase",
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        controller._restore_service_values(["/Ghost"], {})
+
+        with patch.object(controller, "_learned_display_current_allowed", return_value=True):
+            with patch.object(controller, "_raw_learned_display_values", return_value=None):
+                self.assertIsNone(controller._stable_learned_display_inputs(100.0))
+            with (
+                patch.object(controller, "_raw_learned_display_values", return_value=(2300.0, 230.0, "L1")),
+                patch.object(controller, "_phase_voltage_for_display_current", return_value=None),
+            ):
+                self.assertIsNone(controller._stable_learned_display_inputs(100.0))
+            with (
+                patch.object(
+                    controller,
+                    "_stable_learned_display_inputs",
+                    return_value=SimpleNamespace(power_w=1.0, phase_voltage_v=230.0, phase_count=1.0),
+                ),
+                patch.object(controller, "_rounded_display_current", return_value=None),
+            ):
+                self.assertIsNone(controller._derived_learned_set_current(100.0))
+
     def test_config_values_can_disable_learned_current_display(self) -> None:
         service = SimpleNamespace(
             virtual_mode=1,

@@ -4,6 +4,7 @@ import runpy
 import sys
 import tempfile
 import unittest
+from importlib import import_module, reload
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -181,3 +182,53 @@ class TestShellyWallboxEntrypoints(unittest.TestCase):
                     runpy.run_path(helper_path, run_name="__main__")
 
         self.assertEqual(raised.exception.code, 0)
+
+    def test_package_facades_reexport_expected_symbols(self) -> None:
+        with patch.dict(
+            sys.modules,
+            {
+                "vedbus": MagicMock(),
+                "dbus": MagicMock(),
+                "dbus.mainloop.glib": MagicMock(),
+                "gi": MagicMock(),
+                "gi.repository": MagicMock(),
+                "gi.repository.GLib": MagicMock(),
+            },
+            clear=False,
+        ):
+            bootstrap_facade = import_module("shelly_wallbox.app.bootstrap")
+            main_facade = import_module("shelly_wallbox.app.main")
+            helper_facade = import_module("shelly_wallbox.inputs.helper.main")
+            runtime_module = import_module("shelly_wallbox.runtime")
+
+            self.assertTrue(hasattr(bootstrap_facade, "ServiceBootstrapController"))
+            self.assertTrue(hasattr(main_facade, "ShellyWallboxService"))
+            self.assertTrue(hasattr(helper_facade, "AutoInputHelper"))
+            self.assertTrue(hasattr(helper_facade, "main"))
+            self.assertTrue(hasattr(runtime_module, "RuntimeSupportController"))
+
+            with self.assertRaises(AttributeError):
+                getattr(runtime_module, "DoesNotExist")
+
+    def test_type_checking_only_import_paths_can_be_executed(self) -> None:
+        module_path = self._repo_file("dbus_shelly_wallbox.py")
+        fake_modules, _bootstrap_module = self._fake_main_module_dependencies()
+        with patch.dict(
+            sys.modules,
+            {
+                **fake_modules,
+                "vedbus": MagicMock(),
+            },
+            clear=False,
+        ):
+            import typing
+            import shelly_wallbox.runtime as runtime_module
+            import shelly_wallbox.service.factory as factory_module
+
+            with patch.object(typing, "TYPE_CHECKING", True):
+                module_globals = runpy.run_path(module_path, run_name="dbus_shelly_wallbox_type_checking_test")
+                reload(runtime_module)
+                reload(factory_module)
+
+            self.assertIn("FormatterMap", module_globals)
+            self.assertTrue(hasattr(runtime_module, "RuntimeSupportController"))

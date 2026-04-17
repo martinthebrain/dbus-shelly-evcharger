@@ -876,6 +876,159 @@ class DbusPublishController:
         self.ensure_state()
         return self._publish_values_transactional("config", self._config_values(startstop_display, now), now)
 
+    @staticmethod
+    def _scheduled_counter_values_from_snapshot(scheduled_snapshot: Any) -> dict[str, str | int]:
+        """Return normalized outward scheduled-state diagnostics."""
+        if scheduled_snapshot is None:
+            return DbusPublishController._disabled_scheduled_counter_values()
+        return DbusPublishController._active_scheduled_counter_values(scheduled_snapshot)
+
+    @staticmethod
+    def _disabled_scheduled_counter_values() -> dict[str, str | int]:
+        """Return outward scheduled-state diagnostics when no schedule is active."""
+        scheduled_state, scheduled_state_code, scheduled_reason, scheduled_reason_code, scheduled_night_boost = (
+            normalized_scheduled_state_fields(False, "disabled", 0, "disabled", 0, 0)
+        )
+        return {
+            "/Auto/ScheduledState": scheduled_state,
+            "/Auto/ScheduledStateCode": scheduled_state_code,
+            "/Auto/ScheduledReason": scheduled_reason,
+            "/Auto/ScheduledReasonCode": scheduled_reason_code,
+            "/Auto/ScheduledNightBoostActive": scheduled_night_boost,
+            "/Auto/ScheduledTargetDayEnabled": 0,
+            "/Auto/ScheduledTargetDay": "",
+            "/Auto/ScheduledTargetDate": "",
+            "/Auto/ScheduledFallbackStart": "",
+            "/Auto/ScheduledBoostUntil": "",
+        }
+
+    @staticmethod
+    def _active_scheduled_counter_values(scheduled_snapshot: Any) -> dict[str, str | int]:
+        """Return outward scheduled-state diagnostics for one active snapshot."""
+        scheduled_state, scheduled_state_code, scheduled_reason, scheduled_reason_code, scheduled_night_boost = (
+            normalized_scheduled_state_fields(
+                True,
+                scheduled_snapshot.state,
+                scheduled_snapshot.state_code,
+                scheduled_snapshot.reason,
+                scheduled_snapshot.reason_code,
+                int(bool(scheduled_snapshot.night_boost_active)),
+            )
+        )
+        return {
+            "/Auto/ScheduledState": scheduled_state,
+            "/Auto/ScheduledStateCode": scheduled_state_code,
+            "/Auto/ScheduledReason": scheduled_reason,
+            "/Auto/ScheduledReasonCode": scheduled_reason_code,
+            "/Auto/ScheduledNightBoostActive": scheduled_night_boost,
+            "/Auto/ScheduledTargetDayEnabled": int(bool(scheduled_snapshot.target_day_enabled)),
+            "/Auto/ScheduledTargetDay": scheduled_snapshot.target_day_label,
+            "/Auto/ScheduledTargetDate": scheduled_snapshot.target_date_text,
+            "/Auto/ScheduledFallbackStart": scheduled_snapshot.fallback_start_text,
+            "/Auto/ScheduledBoostUntil": scheduled_snapshot.boost_until_text,
+        }
+
+    def _software_update_counter_values(self) -> dict[str, str | int]:
+        """Return normalized outward software-update diagnostics."""
+        state, state_code, available, no_update = normalized_software_update_state_fields(
+            getattr(self.service, "_software_update_state", "idle"),
+            getattr(self.service, "_software_update_available", False),
+            getattr(self.service, "_software_update_no_update_active", False),
+        )
+        return {
+            "/Auto/SoftwareUpdateAvailable": available,
+            "/Auto/SoftwareUpdateState": state,
+            "/Auto/SoftwareUpdateStateCode": state_code,
+            "/Auto/SoftwareUpdateDetail": str(getattr(self.service, "_software_update_detail", "") or ""),
+            "/Auto/SoftwareUpdateCurrentVersion": str(getattr(self.service, "_software_update_current_version", "") or ""),
+            "/Auto/SoftwareUpdateAvailableVersion": str(
+                getattr(self.service, "_software_update_available_version", "") or ""
+            ),
+            "/Auto/SoftwareUpdateNoUpdateActive": no_update,
+        }
+
+    def _backend_counter_values(self) -> dict[str, str | int]:
+        """Return backend-composition and runtime-override diagnostics."""
+        return {
+            "/Auto/BackendMode": self._backend_mode_value(self.service),
+            "/Auto/MeterBackend": self._backend_type_value(self.service, "meter_backend_type", "shelly_combined"),
+            "/Auto/SwitchBackend": self._backend_type_value(self.service, "switch_backend_type", "shelly_combined"),
+            "/Auto/ChargerBackend": self._backend_type_value(self.service, "charger_backend_type"),
+            "/Auto/RuntimeOverridesActive": int(bool(getattr(self.service, "_runtime_overrides_active", False))),
+            "/Auto/RuntimeOverridesPath": str(getattr(self.service, "runtime_overrides_path", "") or ""),
+        }
+
+    def _charger_counter_values(self, now: float) -> dict[str, str | int | float]:
+        """Return charger, transport, and retry diagnostics."""
+        return {
+            "/Auto/ChargerStatus": self._charger_text_observed("_last_charger_state_status"),
+            "/Auto/ChargerFault": self._charger_text_observed("_last_charger_state_fault"),
+            "/Auto/ChargerFaultActive": int(bool(getattr(self.service, "_last_charger_fault_active", 0))),
+            "/Auto/ChargerEstimateActive": self._charger_estimate_active(),
+            "/Auto/ChargerEstimateSource": self._charger_estimate_source(),
+            "/Auto/ChargerTransportActive": self._charger_transport_active(now),
+            "/Auto/ChargerTransportReason": self._charger_transport_reason(now),
+            "/Auto/ChargerTransportSource": self._charger_transport_source(now),
+            "/Auto/ChargerTransportDetail": self._charger_transport_detail(now),
+            "/Auto/ChargerRetryActive": self._charger_retry_active(now),
+            "/Auto/ChargerRetryReason": self._charger_retry_reason(now),
+            "/Auto/ChargerRetrySource": self._charger_retry_source(now),
+            "/Auto/ChargerCurrentTarget": self._charger_current_target_value(self.service),
+        }
+
+    def _error_counter_values(self, error_state: Mapping[str, Any]) -> dict[str, int]:
+        """Return aggregate error counters sourced from the runtime error state."""
+        error_count = int(
+            error_state.get("dbus", 0)
+            + error_state.get("shelly", 0)
+            + error_state.get("charger", 0)
+            + error_state.get("pv", 0)
+            + error_state.get("battery", 0)
+            + error_state.get("grid", 0)
+        )
+        return {
+            "/Auto/ErrorCount": error_count,
+            "/Auto/DbusReadErrors": int(error_state.get("dbus", 0)),
+            "/Auto/ShellyReadErrors": int(error_state.get("shelly", 0)),
+            "/Auto/ChargerWriteErrors": int(error_state.get("charger", 0)),
+            "/Auto/PvReadErrors": int(error_state.get("pv", 0)),
+            "/Auto/BatteryReadErrors": int(error_state.get("battery", 0)),
+            "/Auto/GridReadErrors": int(error_state.get("grid", 0)),
+            "/Auto/InputCacheHits": int(error_state.get("cache_hits", 0)),
+        }
+
+    def _phase_counter_values(self, now: float) -> dict[str, str | int | float]:
+        """Return outward phase diagnostics and supported-layout information."""
+        return {
+            "/Auto/PhaseCurrent": self._auto_phase_metric_text(self.service, "phase_current"),
+            "/Auto/PhaseObserved": self._observed_phase_value(self.service),
+            "/Auto/PhaseTarget": self._auto_phase_metric_text(self.service, "phase_target"),
+            "/Auto/PhaseReason": self._auto_phase_metric_text(self.service, "phase_reason"),
+            "/Auto/PhaseMismatchActive": self._phase_switch_mismatch_active(self.service),
+            "/Auto/PhaseLockoutActive": self._phase_switch_lockout_active(self.service, now),
+            "/Auto/PhaseLockoutTarget": self._phase_switch_lockout_target(self.service, now),
+            "/Auto/PhaseLockoutReason": self._phase_switch_lockout_reason(self.service, now),
+            "/Auto/PhaseSupportedConfigured": self._phase_supported_configured(self.service),
+            "/Auto/PhaseSupportedEffective": self._phase_supported_effective(self.service, now),
+            "/Auto/PhaseDegradedActive": self._phase_degraded_active(self.service, now),
+            "/Auto/PhaseThresholdWatts": self._auto_phase_metric_float(self.service, "phase_threshold_watts"),
+            "/Auto/PhaseCandidate": self._auto_phase_metric_text(self.service, "phase_candidate"),
+        }
+
+    def _contactor_counter_values(self) -> dict[str, str | int]:
+        """Return switch-feedback and contactor diagnostics."""
+        return {
+            "/Auto/SwitchFeedbackClosed": self._switch_feedback_closed(self.service),
+            "/Auto/SwitchInterlockOk": self._switch_interlock_ok(self.service),
+            "/Auto/SwitchFeedbackMismatch": self._switch_feedback_mismatch(self.service),
+            "/Auto/ContactorSuspectedOpen": self._contactor_suspected_open(self.service),
+            "/Auto/ContactorSuspectedWelded": self._contactor_suspected_welded(self.service),
+            "/Auto/ContactorFaultCount": self._contactor_fault_count(self.service),
+            "/Auto/ContactorLockoutActive": self._contactor_lockout_active(self.service),
+            "/Auto/ContactorLockoutReason": self._contactor_lockout_reason(self.service),
+            "/Auto/ContactorLockoutSource": self._contactor_lockout_source(self.service),
+        }
+
     def _diagnostic_counter_values(self, now: float) -> dict[str, str | int | float]:
         """Return change-driven diagnostic counters keyed by DBus path.
 
@@ -894,120 +1047,26 @@ class DbusPublishController:
             getattr(self.service, "_last_auto_state", "idle"),
             getattr(self.service, "_last_auto_state_code", 0),
         )
-        # Scheduled diagnostics are published through one normalized tuple so
-        # the text labels, numeric codes, and active-boost flag always agree.
-        scheduled_state, scheduled_state_code, scheduled_reason, scheduled_reason_code, scheduled_night_boost = (
-            normalized_scheduled_state_fields(
-                scheduled_snapshot is not None,
-                "disabled" if scheduled_snapshot is None else scheduled_snapshot.state,
-                0 if scheduled_snapshot is None else scheduled_snapshot.state_code,
-                "disabled" if scheduled_snapshot is None else scheduled_snapshot.reason,
-                0 if scheduled_snapshot is None else scheduled_snapshot.reason_code,
-                0 if scheduled_snapshot is None else int(bool(scheduled_snapshot.night_boost_active)),
-            )
-        )
-        # Fault text and fault-active are also derived together so downstream
-        # consumers never have to guess whether one of the two is authoritative.
         fault_reason, fault_active = normalized_fault_state(self._fault_reason(self.service))
-        software_update_state, software_update_state_code, software_update_available, software_update_no_update = (
-            normalized_software_update_state_fields(
-                getattr(self.service, "_software_update_state", "idle"),
-                getattr(self.service, "_software_update_available", False),
-                getattr(self.service, "_software_update_no_update_active", False),
-            )
-        )
-        error_count = int(
-            error_state.get("dbus", 0)
-            + error_state.get("shelly", 0)
-            + error_state.get("charger", 0)
-            + error_state.get("pv", 0)
-            + error_state.get("battery", 0)
-            + error_state.get("grid", 0)
-        )
         return {
             "/Status": int(self.service.last_status),
             "/Auto/Health": str(self.service._last_health_reason),
             "/Auto/HealthCode": int(self.service._last_health_code),
             "/Auto/State": auto_state,
             "/Auto/StateCode": auto_state_code,
-            "/Auto/ScheduledState": scheduled_state,
-            "/Auto/ScheduledStateCode": scheduled_state_code,
-            "/Auto/ScheduledReason": scheduled_reason,
-            "/Auto/ScheduledReasonCode": scheduled_reason_code,
-            "/Auto/ScheduledNightBoostActive": scheduled_night_boost,
-            "/Auto/ScheduledTargetDayEnabled": (
-                0 if scheduled_snapshot is None else int(bool(scheduled_snapshot.target_day_enabled))
-            ),
-            "/Auto/ScheduledTargetDay": "" if scheduled_snapshot is None else scheduled_snapshot.target_day_label,
-            "/Auto/ScheduledTargetDate": "" if scheduled_snapshot is None else scheduled_snapshot.target_date_text,
-            "/Auto/ScheduledFallbackStart": "" if scheduled_snapshot is None else scheduled_snapshot.fallback_start_text,
-            "/Auto/ScheduledBoostUntil": "" if scheduled_snapshot is None else scheduled_snapshot.boost_until_text,
             "/Auto/RecoveryActive": self._recovery_active(self.service),
             "/Auto/StatusSource": normalized_status_source(getattr(self.service, "_last_status_source", "unknown")),
             "/Auto/FaultActive": fault_active,
             "/Auto/FaultReason": fault_reason,
-            "/Auto/BackendMode": self._backend_mode_value(self.service),
-            "/Auto/MeterBackend": self._backend_type_value(self.service, "meter_backend_type", "shelly_combined"),
-            "/Auto/SwitchBackend": self._backend_type_value(self.service, "switch_backend_type", "shelly_combined"),
-            "/Auto/ChargerBackend": self._backend_type_value(self.service, "charger_backend_type"),
-            "/Auto/ChargerStatus": self._charger_text_observed("_last_charger_state_status"),
-            "/Auto/ChargerFault": self._charger_text_observed("_last_charger_state_fault"),
-            "/Auto/ChargerFaultActive": int(bool(getattr(self.service, "_last_charger_fault_active", 0))),
-            "/Auto/ChargerEstimateActive": self._charger_estimate_active(),
-            "/Auto/ChargerEstimateSource": self._charger_estimate_source(),
-            "/Auto/RuntimeOverridesActive": int(bool(getattr(self.service, "_runtime_overrides_active", False))),
-            "/Auto/RuntimeOverridesPath": str(getattr(self.service, "runtime_overrides_path", "") or ""),
-            "/Auto/SoftwareUpdateAvailable": software_update_available,
-            "/Auto/SoftwareUpdateState": software_update_state,
-            "/Auto/SoftwareUpdateStateCode": software_update_state_code,
-            "/Auto/SoftwareUpdateDetail": str(getattr(self.service, "_software_update_detail", "") or ""),
-            "/Auto/SoftwareUpdateCurrentVersion": str(
-                getattr(self.service, "_software_update_current_version", "") or ""
-            ),
-            "/Auto/SoftwareUpdateAvailableVersion": str(
-                getattr(self.service, "_software_update_available_version", "") or ""
-            ),
-            "/Auto/SoftwareUpdateNoUpdateActive": software_update_no_update,
-            "/Auto/ChargerTransportActive": self._charger_transport_active(now),
-            "/Auto/ChargerTransportReason": self._charger_transport_reason(now),
-            "/Auto/ChargerTransportSource": self._charger_transport_source(now),
-            "/Auto/ChargerTransportDetail": self._charger_transport_detail(now),
-            "/Auto/ChargerRetryActive": self._charger_retry_active(now),
-            "/Auto/ChargerRetryReason": self._charger_retry_reason(now),
-            "/Auto/ChargerRetrySource": self._charger_retry_source(now),
-            "/Auto/ErrorCount": error_count,
-            "/Auto/DbusReadErrors": int(error_state.get("dbus", 0)),
-            "/Auto/ShellyReadErrors": int(error_state.get("shelly", 0)),
-            "/Auto/ChargerWriteErrors": int(error_state.get("charger", 0)),
-            "/Auto/PvReadErrors": int(error_state.get("pv", 0)),
-            "/Auto/BatteryReadErrors": int(error_state.get("battery", 0)),
-            "/Auto/GridReadErrors": int(error_state.get("grid", 0)),
-            "/Auto/InputCacheHits": int(error_state.get("cache_hits", 0)),
-            "/Auto/ChargerCurrentTarget": self._charger_current_target_value(self.service),
-            "/Auto/PhaseCurrent": self._auto_phase_metric_text(self.service, "phase_current"),
-            "/Auto/PhaseObserved": self._observed_phase_value(self.service),
-            "/Auto/PhaseTarget": self._auto_phase_metric_text(self.service, "phase_target"),
-            "/Auto/PhaseReason": self._auto_phase_metric_text(self.service, "phase_reason"),
-            "/Auto/PhaseMismatchActive": self._phase_switch_mismatch_active(self.service),
-            "/Auto/PhaseLockoutActive": self._phase_switch_lockout_active(self.service, now),
-            "/Auto/PhaseLockoutTarget": self._phase_switch_lockout_target(self.service, now),
-            "/Auto/PhaseLockoutReason": self._phase_switch_lockout_reason(self.service, now),
-            "/Auto/PhaseSupportedConfigured": self._phase_supported_configured(self.service),
-            "/Auto/PhaseSupportedEffective": self._phase_supported_effective(self.service, now),
-            "/Auto/PhaseDegradedActive": self._phase_degraded_active(self.service, now),
-            "/Auto/SwitchFeedbackClosed": self._switch_feedback_closed(self.service),
-            "/Auto/SwitchInterlockOk": self._switch_interlock_ok(self.service),
-            "/Auto/SwitchFeedbackMismatch": self._switch_feedback_mismatch(self.service),
-            "/Auto/ContactorSuspectedOpen": self._contactor_suspected_open(self.service),
-            "/Auto/ContactorSuspectedWelded": self._contactor_suspected_welded(self.service),
-            "/Auto/ContactorFaultCount": self._contactor_fault_count(self.service),
-            "/Auto/ContactorLockoutActive": self._contactor_lockout_active(self.service),
-            "/Auto/ContactorLockoutReason": self._contactor_lockout_reason(self.service),
-            "/Auto/ContactorLockoutSource": self._contactor_lockout_source(self.service),
-            "/Auto/PhaseThresholdWatts": self._auto_phase_metric_float(self.service, "phase_threshold_watts"),
-            "/Auto/PhaseCandidate": self._auto_phase_metric_text(self.service, "phase_candidate"),
             "/Auto/Stale": 1 if self.service._is_update_stale(now) else 0,
             "/Auto/RecoveryAttempts": int(self.service._recovery_attempts),
+            **self._scheduled_counter_values_from_snapshot(scheduled_snapshot),
+            **self._backend_counter_values(),
+            **self._software_update_counter_values(),
+            **self._charger_counter_values(now),
+            **self._error_counter_values(error_state),
+            **self._phase_counter_values(now),
+            **self._contactor_counter_values(),
         }
 
     def _diagnostic_age_values(self, now: float) -> dict[str, float]:

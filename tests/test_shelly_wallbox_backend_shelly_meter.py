@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from shelly_wallbox.backend.shelly_meter import ShellyMeterBackend
+from shelly_wallbox.backend.shelly_meter import ShellyMeterBackend, _average_nonzero
 
 
 class _FakeResponse:
@@ -137,3 +137,7 @@ class TestShellyWallboxBackendShellyMeter(unittest.TestCase):
                 [call.kwargs["url"] for call in session.get.call_args_list],
                 ["http://192.168.1.52/rpc/EM.GetStatus?id=0"],
             )
+
+    def test_average_nonzero_handles_none_and_zero_only_inputs(self) -> None:
+        self.assertIsNone(_average_nonzero(None))
+        self.assertIsNone(_average_nonzero((0.0, 0.0, 0.0)))

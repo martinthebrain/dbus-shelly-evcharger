@@ -89,20 +89,31 @@ def _phase_members(group_config_path: str, members: configparser.SectionProxy) -
     """Return the configured phase-to-child-adapter mapping."""
     phase_members: dict[str, SwitchGroupMember] = {}
     for raw_key, raw_value in members.items():
-        phase_label = _normalized_phase_label(raw_key)
-        if phase_label is None:
-            raise ValueError(f"Unsupported switch-group member key '{raw_key}'")
+        phase_label = _required_phase_label(raw_key)
         config_path = _resolved_member_path(group_config_path, raw_value)
         phase_members[phase_label] = SwitchGroupMember(
             phase_label=phase_label,
             backend_type=_member_backend_type(config_path),
             config_path=config_path,
         )
+    _validate_phase_members(phase_members)
+    return phase_members
+
+
+def _required_phase_label(raw_key: object) -> str:
+    """Return one validated phase label from a member-config key."""
+    phase_label = _normalized_phase_label(raw_key)
+    if phase_label is None:
+        raise ValueError(f"Unsupported switch-group member key '{raw_key}'")
+    return phase_label
+
+
+def _validate_phase_members(phase_members: Mapping[str, SwitchGroupMember]) -> None:
+    """Validate required member combinations for switch-group backends."""
     if "P1" not in phase_members:
         raise ValueError("Switch group requires a member config for P1")
     if "P3" in phase_members and "P2" not in phase_members:
         raise ValueError("Switch group requires P2 when P3 is configured")
-    return phase_members
 
 
 def _available_supported_phase_selections(phase_members: Mapping[str, SwitchGroupMember]) -> tuple[PhaseSelection, ...]:
@@ -126,15 +137,28 @@ def _supported_phase_selections(
     )
     normalized: list[PhaseSelection] = []
     for selection in requested:
-        if selection not in available:
-            raise ValueError(
-                f"Switch group requested unsupported phase selection '{selection}' for configured members"
-            )
+        _validate_requested_phase_selection(selection, available)
         if selection not in normalized:
             normalized.append(selection)
+    _validate_supported_phase_selection_list(normalized)
+    return tuple(normalized) or available
+
+
+def _validate_requested_phase_selection(
+    selection: PhaseSelection,
+    available: tuple[PhaseSelection, ...],
+) -> None:
+    """Validate one requested supported phase selection."""
+    if selection not in available:
+        raise ValueError(
+            f"Switch group requested unsupported phase selection '{selection}' for configured members"
+        )
+
+
+def _validate_supported_phase_selection_list(normalized: list[PhaseSelection]) -> None:
+    """Ensure the normalized supported phase-selection list remains usable."""
     if "P1" not in normalized:
         raise ValueError("Switch group SupportedPhaseSelections must include P1")
-    return tuple(normalized) or available
 
 
 def _phase_switch_targets(
@@ -191,12 +215,17 @@ def _aggregated_max_direct_switch_power_w(
     """Return the most conservative direct-switch power limit across child members."""
     if switching_mode == "contactor":
         return None
-    limits = [
+    limits = _direct_switch_power_limits(capabilities)
+    return min(limits) if limits else None
+
+
+def _direct_switch_power_limits(capabilities: Mapping[str, SwitchCapabilities]) -> list[float]:
+    """Return explicit direct-switch power limits from all child capabilities."""
+    return [
         float(limit)
         for limit in (cap.max_direct_switch_power_w for cap in capabilities.values())
         if limit is not None
     ]
-    return min(limits) if limits else None
 
 
 def load_switch_group_settings(service: Any, config_path: str = "") -> SwitchGroupSettings:
@@ -264,11 +293,7 @@ class SwitchGroupBackend:
         active_labels: frozenset[str],
     ) -> bool | None:
         """Return one conservative group-level feedback flag when child feedback is explicit."""
-        explicit = {
-            label: bool(state.feedback_closed)
-            for label, state in states.items()
-            if state.feedback_closed is not None
-        }
+        explicit = SwitchGroupBackend._explicit_feedback_states(states)
         if not explicit:
             return None
         for label, feedback_closed in explicit.items():
@@ -280,13 +305,18 @@ class SwitchGroupBackend:
         return bool(active_labels)
 
     @staticmethod
+    def _explicit_feedback_states(states: Mapping[str, SwitchState]) -> dict[str, bool]:
+        """Return explicit child feedback states only."""
+        return {
+            label: bool(state.feedback_closed)
+            for label, state in states.items()
+            if state.feedback_closed is not None
+        }
+
+    @staticmethod
     def _aggregate_interlock_ok(states: Mapping[str, SwitchState]) -> bool | None:
         """Return one conservative group-level interlock flag across child members."""
-        explicit = [
-            bool(state.interlock_ok)
-            for state in states.values()
-            if state.interlock_ok is not None
-        ]
+        explicit = SwitchGroupBackend._explicit_interlock_states(states)
         if not explicit:
             return None
         if not all(explicit):
@@ -294,6 +324,15 @@ class SwitchGroupBackend:
         if len(explicit) != len(states):
             return None
         return True
+
+    @staticmethod
+    def _explicit_interlock_states(states: Mapping[str, SwitchState]) -> list[bool]:
+        """Return explicit child interlock states only."""
+        return [
+            bool(state.interlock_ok)
+            for state in states.values()
+            if state.interlock_ok is not None
+        ]
 
     def capabilities(self) -> SwitchCapabilities:
         """Return the aggregated logical switch capabilities."""

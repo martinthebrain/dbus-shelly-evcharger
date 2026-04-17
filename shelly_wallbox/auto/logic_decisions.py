@@ -236,14 +236,30 @@ class _AutoDecisionDecisionMixin(_ComposableControllerMixin):
             return decision
         if relay_on:
             return cast(bool, self._running_result_with_health("scheduled-night-charge", cached_inputs))
+        return self._scheduled_night_start_result(svc, now, cached_inputs)
+
+    def _scheduled_night_start_result(self, svc: Any, now: float, cached_inputs: bool) -> bool:
+        """Return the off-to-on decision while scheduled night charging is active."""
+        blocked_health = self._scheduled_night_blocked_health(svc, now)
+        if blocked_health is not None:
+            return cast(bool, self._idle_result_with_health(blocked_health, cached_inputs))
+        self._clear_scheduled_night_stop_tracking(svc)
+        return cast(bool, self._running_result_with_health("scheduled-night-charge", cached_inputs))
+
+    def _scheduled_night_blocked_health(self, svc: Any, now: float) -> str | None:
+        """Return the blocking health reason before scheduled night charging may start."""
         if not svc.virtual_autostart:
-            return cast(bool, self._idle_result_with_health("autostart-disabled", cached_inputs))
+            return "autostart-disabled"
         if not self._minimum_offtime_elapsed(now):
-            return cast(bool, self._idle_result_with_health("waiting-offtime", cached_inputs))
+            return "waiting-offtime"
+        return None
+
+    @staticmethod
+    def _clear_scheduled_night_stop_tracking(svc: Any) -> None:
+        """Clear Auto start/stop tracking when scheduled night charging takes over."""
         svc.auto_start_condition_since = None
         svc.auto_stop_condition_since = None
         svc.auto_stop_condition_reason = None
-        return cast(bool, self._running_result_with_health("scheduled-night-charge", cached_inputs))
 
     def _pre_average_decision(
         self,

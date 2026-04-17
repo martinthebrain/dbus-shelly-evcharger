@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from .models import MeterReading
+from .models import MeterReading, PhaseSelection, normalize_phase_selection
 from .shelly_support import (
     ShellyBackendBase,
     phase_currents_for_selection,
@@ -41,16 +41,24 @@ def _phase_values(
     suffixes: tuple[str, ...],
 ) -> tuple[float, float, float] | None:
     """Return per-phase values when the payload exposes them explicitly."""
-    values: list[float] = []
-    found = False
-    for prefix in ("a", "b", "c"):
-        value = _payload_float(payload, *(f"{prefix}_{suffix}" for suffix in suffixes))
-        if value is not None:
-            found = True
-        values.append(0.0 if value is None else float(value))
-    if not found:
+    values = (
+        _phase_value(payload, "a", suffixes),
+        _phase_value(payload, "b", suffixes),
+        _phase_value(payload, "c", suffixes),
+    )
+    if not _phase_values_found(values):
         return None
-    return float(values[0]), float(values[1]), float(values[2])
+    return float(values[0] or 0.0), float(values[1] or 0.0), float(values[2] or 0.0)
+
+
+def _phase_value(payload: Mapping[str, object], prefix: str, suffixes: tuple[str, ...]) -> float | None:
+    """Return one per-phase value from a Shelly meter payload."""
+    return _payload_float(payload, *(f"{prefix}_{suffix}" for suffix in suffixes))
+
+
+def _phase_values_found(values: tuple[float | None, float | None, float | None]) -> bool:
+    """Return whether any per-phase payload value is present."""
+    return any(value is not None for value in values)
 
 
 def _average_nonzero(values: tuple[float, float, float] | None) -> float | None:
@@ -74,40 +82,14 @@ class ShellyMeterBackend(ShellyBackendBase):
         """Return one normalized Shelly meter reading."""
         pm_status = self._pm_status()
         relay_on = bool(pm_status.get("output", False)) if "output" in pm_status else None
-
-        phase_powers = _phase_values(pm_status, suffixes=("act_power", "apower", "power"))
-        phase_currents = _phase_values(pm_status, suffixes=("current",))
-        phase_voltages = _phase_values(pm_status, suffixes=("voltage",))
-        phase_energies_wh = _phase_values(pm_status, suffixes=("total_act_energy", "total_energy"))
-
-        power_w = _payload_float(pm_status, "apower", "total_act_power", "act_power", "power")
-        if power_w is None and phase_powers is not None:
-            power_w = sum(phase_powers)
-
-        current_a = _payload_float(pm_status, "current", "total_current")
-        if current_a is None and phase_currents is not None:
-            current_a = sum(phase_currents)
-
-        voltage_v = _payload_float(pm_status, "voltage")
-        if voltage_v is None:
-            voltage_v = _average_nonzero(phase_voltages)
-
-        total_wh = _payload_float(pm_status, "aenergy.total", "total_act_energy", "total_energy")
-        if total_wh is None and phase_energies_wh is not None:
-            total_wh = sum(phase_energies_wh)
-        energy_kwh = 0.0 if total_wh is None else float(total_wh) / 1000.0
-
+        phase_powers, phase_currents, phase_voltages, phase_energies_wh = self._phase_measurements(pm_status)
+        power_w = self._total_power_w(pm_status, phase_powers)
+        current_a = self._total_current_a(pm_status, phase_currents)
+        voltage_v = self._voltage_v(pm_status, phase_voltages)
+        energy_kwh = self._energy_kwh(pm_status, phase_energies_wh)
         selection = self.settings.phase_selection
-        normalized_phase_powers = (
-            phase_powers
-            if phase_powers is not None
-            else phase_powers_for_selection(power_w or 0.0, selection, getattr(self.service, "phase", "L1"))
-        )
-        normalized_phase_currents = (
-            phase_currents
-            if phase_currents is not None
-            else phase_currents_for_selection(current_a, selection, getattr(self.service, "phase", "L1"))
-        )
+        normalized_phase_powers = self._normalized_phase_powers(selection, phase_powers, power_w)
+        normalized_phase_currents = self._normalized_phase_currents(selection, phase_currents, current_a)
         return MeterReading(
             relay_on=relay_on,
             power_w=float(power_w or 0.0),
@@ -118,3 +100,81 @@ class ShellyMeterBackend(ShellyBackendBase):
             phase_powers_w=normalized_phase_powers,
             phase_currents_a=normalized_phase_currents,
         )
+
+    @staticmethod
+    def _phase_measurements(
+        pm_status: Mapping[str, object],
+    ) -> tuple[
+        tuple[float, float, float] | None,
+        tuple[float, float, float] | None,
+        tuple[float, float, float] | None,
+        tuple[float, float, float] | None,
+    ]:
+        """Return explicit per-phase Shelly meter measurements from one payload."""
+        return (
+            _phase_values(pm_status, suffixes=("act_power", "apower", "power")),
+            _phase_values(pm_status, suffixes=("current",)),
+            _phase_values(pm_status, suffixes=("voltage",)),
+            _phase_values(pm_status, suffixes=("total_act_energy", "total_energy")),
+        )
+
+    @staticmethod
+    def _total_power_w(pm_status: Mapping[str, object], phase_powers: tuple[float, float, float] | None) -> float | None:
+        """Return total Shelly power from direct or per-phase readings."""
+        power_w = _payload_float(pm_status, "apower", "total_act_power", "act_power", "power")
+        return sum(phase_powers) if power_w is None and phase_powers is not None else power_w
+
+    @staticmethod
+    def _total_current_a(
+        pm_status: Mapping[str, object],
+        phase_currents: tuple[float, float, float] | None,
+    ) -> float | None:
+        """Return total Shelly current from direct or per-phase readings."""
+        current_a = _payload_float(pm_status, "current", "total_current")
+        return sum(phase_currents) if current_a is None and phase_currents is not None else current_a
+
+    @staticmethod
+    def _voltage_v(pm_status: Mapping[str, object], phase_voltages: tuple[float, float, float] | None) -> float | None:
+        """Return representative Shelly voltage from direct or averaged phase readings."""
+        voltage_v = _payload_float(pm_status, "voltage")
+        return _average_nonzero(phase_voltages) if voltage_v is None else voltage_v
+
+    @staticmethod
+    def _energy_kwh(
+        pm_status: Mapping[str, object],
+        phase_energies_wh: tuple[float, float, float] | None,
+    ) -> float:
+        """Return total Shelly energy in kWh from direct or per-phase counters."""
+        total_wh = _payload_float(pm_status, "aenergy.total", "total_act_energy", "total_energy")
+        if total_wh is None and phase_energies_wh is not None:
+            total_wh = sum(phase_energies_wh)
+        return 0.0 if total_wh is None else float(total_wh) / 1000.0
+
+    def _normalized_phase_powers(
+        self,
+        selection: object,
+        phase_powers: tuple[float, float, float] | None,
+        power_w: float | None,
+    ) -> tuple[float, float, float]:
+        """Return explicit or derived normalized phase powers."""
+        if phase_powers is not None:
+            return phase_powers
+        normalized_selection = self._meter_phase_selection(selection)
+        return phase_powers_for_selection(power_w or 0.0, normalized_selection, getattr(self.service, "phase", "L1"))
+
+    def _normalized_phase_currents(
+        self,
+        selection: object,
+        phase_currents: tuple[float, float, float] | None,
+        current_a: float | None,
+    ) -> tuple[float, float, float] | None:
+        """Return explicit or derived normalized phase currents."""
+        if phase_currents is not None:
+            return phase_currents
+        normalized_selection = self._meter_phase_selection(selection)
+        return phase_currents_for_selection(current_a, normalized_selection, getattr(self.service, "phase", "L1"))
+
+    @staticmethod
+    def _meter_phase_selection(selection: object) -> PhaseSelection:
+        """Return one normalized phase selection for derived meter projections."""
+        return normalize_phase_selection(selection, "P1")

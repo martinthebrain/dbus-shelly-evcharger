@@ -74,7 +74,9 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service._mark_failure("dbus")
         service._mark_recovery("dbus", "recovered %s", "ok")
         service._source_retry_ready("dbus", 12.0)
+        service._source_retry_remaining("dbus", 12.0)
         service._delay_source_retry("dbus", 12.0)
+        service._delay_source_retry("dbus", 12.0, 7.0)
         service._stop_auto_input_helper(force=True)
         service._spawn_auto_input_helper(12.0)
         service._ensure_auto_input_helper_process(12.0)
@@ -96,6 +98,8 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service.fetch_rpc("Shelly.GetDeviceInfo")
         service.fetch_pm_status()
         service.set_relay(True)
+        service._phase_selection_requires_pause()
+        service._apply_phase_selection("P1_P2")
 
         runtime = service._runtime_support_controller
         runtime.reset_system_bus.assert_called_once_with()
@@ -116,7 +120,9 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         runtime.mark_failure.assert_called_once_with("dbus")
         runtime.mark_recovery.assert_called_once_with("dbus", "recovered %s", "ok")
         runtime.source_retry_ready.assert_called_once_with("dbus", 12.0)
-        runtime.delay_source_retry.assert_called_once_with("dbus", 12.0)
+        runtime.source_retry_remaining.assert_called_once_with("dbus", 12.0)
+        runtime.delay_source_retry.assert_any_call("dbus", 12.0)
+        runtime.delay_source_retry.assert_any_call("dbus", 12.0, 7.0)
         service._auto_input_supervisor.stop_helper.assert_called_once_with(True)
         service._auto_input_supervisor.spawn_helper.assert_called_once_with(12.0)
         service._auto_input_supervisor.ensure_helper_process.assert_called_once_with(12.0)
@@ -139,6 +145,8 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         io.rpc_call.assert_any_call("Shelly.GetDeviceInfo")
         io.fetch_pm_status.assert_called_once_with()
         io.set_relay.assert_called_once_with(True)
+        io.phase_selection_requires_pause.assert_called_once_with()
+        io.set_phase_selection.assert_called_once_with("P1_P2")
 
     def test_update_cycle_mixin_delegates_all_calls(self):
         service = _UpdateService()
@@ -213,6 +221,8 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service._current_runtime_state()
         service._load_runtime_state()
         service._save_runtime_state()
+        service._save_runtime_overrides()
+        service._flush_runtime_overrides(100.0)
         service._validate_runtime_config()
         service._load_config()
         service._ensure_dbus_publish_state()
@@ -228,6 +238,8 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         state.current_runtime_state.assert_called_once_with()
         state.load_runtime_state.assert_called_once_with()
         state.save_runtime_state.assert_called_once_with()
+        state.save_runtime_overrides.assert_called_once_with()
+        state.flush_runtime_overrides.assert_called_once_with(100.0)
         state.validate_runtime_config.assert_called_once_with()
         state.load_config.assert_called_once_with()
         publisher = service._dbus_publisher

@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from shelly_wallbox.ports import AutoDecisionPort, DbusInputPort, UpdateCyclePort, WriteControllerPort
 
@@ -330,6 +330,62 @@ class TestWallboxPorts(unittest.TestCase):
         port = WriteControllerPort(service)
 
         self.assertFalse(port.relay_may_be_on_for_cutover())
+
+    def test_write_controller_port_covers_runtime_override_and_charger_error_paths(self) -> None:
+        service = SimpleNamespace(
+            virtual_mode=0,
+            virtual_autostart=1,
+            virtual_startstop=1,
+            virtual_enable=1,
+            virtual_set_current=16.0,
+            min_current=6.0,
+            max_current=16.0,
+            supported_phase_selections=("P1",),
+            auto_start_condition_since=None,
+            auto_stop_condition_since=None,
+            manual_override_until=0.0,
+            auto_manual_override_seconds=300.0,
+            _auto_mode_cutover_pending=False,
+            _ignore_min_offtime_once=False,
+            _clear_auto_samples=MagicMock(),
+            _queue_relay_command=MagicMock(),
+            _publish_local_pm_status=MagicMock(),
+            _get_worker_snapshot=MagicMock(return_value={"pm_status": {"output": False}, "pm_confirmed": True}),
+            _update_worker_snapshot=MagicMock(),
+            _publish_dbus_path=MagicMock(),
+            _time_now=MagicMock(return_value=100.0),
+            _normalize_mode=MagicMock(return_value=1),
+            _mode_uses_auto_logic=MagicMock(return_value=True),
+            _state_summary=MagicMock(return_value="state"),
+            _save_runtime_state=MagicMock(),
+            _peek_pending_relay_command=MagicMock(return_value=(None, None)),
+            _last_pm_status={"output": False},
+            _last_pm_status_confirmed=True,
+            _last_pm_status_at=True,
+        )
+
+        port = WriteControllerPort(service)
+        port.supported_phase_selections = ("P1_P2", "P1")
+        port._software_update_run_requested_at = "42.5"
+        self.assertEqual(service.supported_phase_selections, ("P1_P2", "P1"))
+        self.assertEqual(service._software_update_run_requested_at, 42.5)
+        self.assertEqual(port._software_update_run_requested_at, 42.5)
+        with patch.object(WriteControllerPort, "_relay_output_timestamp", return_value=None):
+            self.assertIsNone(
+                port._fresh_snapshot_output(
+                    {"pm_status": {"output": False}, "pm_confirmed": True, "pm_captured_at": 99.5},
+                    100.0,
+                    2.0,
+                )
+            )
+        self.assertIsNone(port._fresh_last_output(100.0, 2.0))
+        self.assertIsNone(port._relay_output_timestamp(True))
+
+        with self.assertRaisesRegex(RuntimeError, "set_enabled configured"):
+            port.charger_set_enabled(True)
+        with self.assertRaisesRegex(RuntimeError, "set_current configured"):
+            port.charger_set_current(12.0)
+        self.assertIsNone(port.validate_runtime_config())
 
     def test_write_controller_port_treats_stale_confirmed_off_as_potentially_on(self) -> None:
         service = SimpleNamespace(

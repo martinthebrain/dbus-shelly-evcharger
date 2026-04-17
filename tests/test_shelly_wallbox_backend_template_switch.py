@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from shelly_wallbox.backend.template_switch import TemplateSwitchBackend
+from shelly_wallbox.backend.template_switch import TemplateSwitchBackend, _normalize_switching_mode
 
 
 class _FakeResponse:
@@ -170,3 +170,65 @@ class TestShellyWallboxBackendTemplateSwitch(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 TemplateSwitchBackend(self._service(MagicMock()), config_path=config_path)
+
+    def test_template_switch_helper_edges_cover_defaults_invalid_states_and_fallbacks(self) -> None:
+        self.assertEqual(_normalize_switching_mode("weird", "contactor"), "contactor")
+        self.assertTrue(TemplateSwitchBackend._enabled_state("enabled"))
+        self.assertFalse(TemplateSwitchBackend._enabled_state("disabled"))
+        self.assertFalse(TemplateSwitchBackend._enabled_state(0))
+        self.assertTrue(TemplateSwitchBackend._enabled_state(1))
+        with self.assertRaisesRegex(ValueError, "Unsupported enabled-state value"):
+            TemplateSwitchBackend._enabled_state("maybe")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=template_switch\nBaseUrl=http://adapter.local\nRequestTimeoutSeconds=0\n"
+                "[Capabilities]\nSupportedPhaseSelections=P1,P1_P2\n"
+                "[StateRequest]\nMethod=GET\nUrl=/switch/state\n"
+                "[StateResponse]\nEnabledPath=data.enabled\nPhaseSelectionPath=data.phase_selection\n"
+                "[CommandRequest]\nMethod=POST\nUrl=/switch/control\n"
+                "[PhaseRequest]\nMethod=PUT\nUrl=/switch/phase\n",
+            )
+            session = MagicMock()
+            session.get.return_value = _FakeResponse({"data": {"enabled": True, "phase_selection": "P1_P2_P3"}})
+            backend = TemplateSwitchBackend(self._service(session), config_path=config_path)
+
+            self.assertEqual(backend.settings.timeout_seconds, 2.0)
+            state = backend.read_switch_state()
+            self.assertEqual(state.phase_selection, "P1")
+            with self.assertRaisesRegex(ValueError, "Unsupported phase selection"):
+                backend.set_phase_selection("P1_P2_P3")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_state = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=template_switch\nBaseUrl=http://adapter.local\n"
+                "[StateRequest]\nMethod=GET\n"
+                "[StateResponse]\nEnabledPath=enabled\n"
+                "[CommandRequest]\nMethod=POST\nUrl=/switch/control\n",
+            )
+            with self.assertRaisesRegex(ValueError, r"requires \[StateRequest\] Url"):
+                TemplateSwitchBackend(self._service(MagicMock()), config_path=missing_state)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_command = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=template_switch\nBaseUrl=http://adapter.local\n"
+                "[StateRequest]\nMethod=GET\nUrl=/switch/state\n"
+                "[StateResponse]\nEnabledPath=enabled\n"
+                "[CommandRequest]\nMethod=POST\n",
+            )
+            with self.assertRaisesRegex(ValueError, r"requires \[CommandRequest\] Url"):
+                TemplateSwitchBackend(self._service(MagicMock()), config_path=missing_command)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_enabled = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=template_switch\nBaseUrl=http://adapter.local\n"
+                "[StateRequest]\nMethod=GET\nUrl=/switch/state\n"
+                "[StateResponse]\nEnabledPath=\n"
+                "[CommandRequest]\nMethod=POST\nUrl=/switch/control\n",
+            )
+            with self.assertRaisesRegex(ValueError, r"requires \[StateResponse\] EnabledPath"):
+                TemplateSwitchBackend(self._service(MagicMock()), config_path=missing_enabled)

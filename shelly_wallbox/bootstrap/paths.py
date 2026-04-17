@@ -29,6 +29,150 @@ from shelly_wallbox.core.split_mixins import ComposableControllerMixin as _Compo
 PathSpec = tuple[Any, Callable[[Any, Any], str] | None]
 PathMap = dict[str, PathSpec]
 
+
+def _scheduled_diagnostic_defaults(snapshot: Any) -> PathMap:
+    """Return scheduled-mode diagnostic paths with normalized disabled defaults."""
+    if snapshot is None:
+        return _disabled_scheduled_diagnostic_defaults()
+    return _active_scheduled_diagnostic_defaults(snapshot)
+
+
+def _disabled_scheduled_diagnostic_defaults() -> PathMap:
+    """Return scheduled diagnostics for instances where scheduled mode is inactive."""
+    return {
+        "/Auto/ScheduledState": ("disabled", None),
+        "/Auto/ScheduledStateCode": (0, None),
+        "/Auto/ScheduledReason": ("disabled", None),
+        "/Auto/ScheduledReasonCode": (0, None),
+        "/Auto/ScheduledNightBoostActive": (0, None),
+        "/Auto/ScheduledTargetDayEnabled": (0, None),
+        "/Auto/ScheduledTargetDay": ("", None),
+        "/Auto/ScheduledTargetDate": ("", None),
+        "/Auto/ScheduledFallbackStart": ("", None),
+        "/Auto/ScheduledBoostUntil": ("", None),
+    }
+
+
+def _active_scheduled_diagnostic_defaults(snapshot: Any) -> PathMap:
+    """Return scheduled diagnostics for one active scheduled-mode snapshot."""
+    return {
+        "/Auto/ScheduledState": (snapshot.state, None),
+        "/Auto/ScheduledStateCode": (snapshot.state_code, None),
+        "/Auto/ScheduledReason": (snapshot.reason, None),
+        "/Auto/ScheduledReasonCode": (snapshot.reason_code, None),
+        "/Auto/ScheduledNightBoostActive": (int(bool(snapshot.night_boost_active)), None),
+        "/Auto/ScheduledTargetDayEnabled": (int(bool(snapshot.target_day_enabled)), None),
+        "/Auto/ScheduledTargetDay": (snapshot.target_day_label, None),
+        "/Auto/ScheduledTargetDate": (snapshot.target_date_text, None),
+        "/Auto/ScheduledFallbackStart": (snapshot.fallback_start_text, None),
+        "/Auto/ScheduledBoostUntil": (snapshot.boost_until_text, None),
+    }
+
+
+def _software_update_diagnostic_defaults(svc: Any) -> PathMap:
+    """Return software-update diagnostic paths and their initial defaults."""
+    return {
+        "/Auto/SoftwareUpdateAvailable": (int(bool(getattr(svc, "_software_update_available", False))), None),
+        "/Auto/SoftwareUpdateState": (str(getattr(svc, "_software_update_state", "idle")), None),
+        "/Auto/SoftwareUpdateStateCode": (0, None),
+        "/Auto/SoftwareUpdateDetail": (str(getattr(svc, "_software_update_detail", "")), None),
+        "/Auto/SoftwareUpdateCurrentVersion": (str(getattr(svc, "_software_update_current_version", "")), None),
+        "/Auto/SoftwareUpdateAvailableVersion": (str(getattr(svc, "_software_update_available_version", "")), None),
+        "/Auto/SoftwareUpdateNoUpdateActive": (int(bool(getattr(svc, "_software_update_no_update_active", False))), None),
+        "/Auto/SoftwareUpdateRun": (0, None),
+        "/Auto/SoftwareUpdateLastCheckAge": (-1, None),
+        "/Auto/SoftwareUpdateLastRunAge": (-1, None),
+    }
+
+
+def _backend_diagnostic_defaults(svc: Any) -> PathMap:
+    """Return backend-composition diagnostic paths and their defaults."""
+    return {
+        "/Auto/BackendMode": (str(getattr(svc, "backend_mode", "combined")), None),
+        "/Auto/MeterBackend": (str(getattr(svc, "meter_backend_type", "shelly_combined")), None),
+        "/Auto/SwitchBackend": (str(getattr(svc, "switch_backend_type", "shelly_combined")), None),
+        "/Auto/ChargerBackend": (str(getattr(svc, "charger_backend_type", "") or ""), None),
+        "/Auto/ChargerStatus": ("", None),
+        "/Auto/ChargerFault": ("", None),
+        "/Auto/ChargerFaultActive": (0, None),
+        "/Auto/ChargerEstimateActive": (0, None),
+        "/Auto/ChargerEstimateSource": ("", None),
+        "/Auto/RuntimeOverridesActive": (int(bool(getattr(svc, "_runtime_overrides_active", False))), None),
+        "/Auto/RuntimeOverridesPath": (str(getattr(svc, "runtime_overrides_path", "")), None),
+        "/Auto/ChargerTransportActive": (0, None),
+        "/Auto/ChargerTransportReason": ("", None),
+        "/Auto/ChargerTransportSource": ("", None),
+        "/Auto/ChargerTransportDetail": ("", None),
+        "/Auto/ChargerRetryActive": (0, None),
+        "/Auto/ChargerRetryReason": ("", None),
+        "/Auto/ChargerRetrySource": ("", None),
+        "/Auto/ChargerCurrentTarget": (-1.0, None),
+        "/Auto/LastChargerReadAge": (-1, None),
+        "/Auto/LastChargerEstimateAge": (-1, None),
+        "/Auto/LastChargerTransportAge": (-1, None),
+        "/Auto/ChargerRetryRemaining": (-1, None),
+    }
+
+
+def _phase_diagnostic_defaults(svc: Any) -> PathMap:
+    """Return phase, switch-feedback, and contactor diagnostic path defaults."""
+    supported = ",".join(getattr(svc, "supported_phase_selections", ("P1",)))
+    return {
+        "/Auto/PhaseCurrent": ("", None),
+        "/Auto/PhaseObserved": ("", None),
+        "/Auto/PhaseTarget": ("", None),
+        "/Auto/PhaseReason": ("", None),
+        "/Auto/PhaseMismatchActive": (0, None),
+        "/Auto/PhaseLockoutActive": (0, None),
+        "/Auto/PhaseLockoutTarget": ("", None),
+        "/Auto/PhaseLockoutReason": ("", None),
+        "/Auto/PhaseSupportedConfigured": (supported, None),
+        "/Auto/PhaseSupportedEffective": (supported, None),
+        "/Auto/PhaseDegradedActive": (0, None),
+        "/Auto/SwitchFeedbackClosed": (-1, None),
+        "/Auto/SwitchInterlockOk": (-1, None),
+        "/Auto/SwitchFeedbackMismatch": (0, None),
+        "/Auto/ContactorSuspectedOpen": (0, None),
+        "/Auto/ContactorSuspectedWelded": (0, None),
+        "/Auto/ContactorFaultCount": (0, None),
+        "/Auto/ContactorLockoutActive": (0, None),
+        "/Auto/ContactorLockoutReason": ("", None),
+        "/Auto/ContactorLockoutSource": ("", None),
+        "/Auto/ContactorLockoutReset": (0, None),
+        "/Auto/PhaseLockoutReset": (0, None),
+        "/Auto/PhaseThresholdWatts": (-1.0, None),
+        "/Auto/PhaseCandidate": ("", None),
+        "/Auto/PhaseCandidateAge": (-1, None),
+        "/Auto/PhaseLockoutAge": (-1, None),
+        "/Auto/ContactorLockoutAge": (-1, None),
+        "/Auto/LastSwitchFeedbackAge": (-1, None),
+    }
+
+
+def _age_counter_diagnostic_defaults() -> PathMap:
+    """Return age-like and aggregate diagnostic counters initialized to sentinel values."""
+    return {
+        "/Auto/ErrorCount": (0, None),
+        "/Auto/DbusReadErrors": (0, None),
+        "/Auto/ShellyReadErrors": (0, None),
+        "/Auto/ChargerWriteErrors": (0, None),
+        "/Auto/PvReadErrors": (0, None),
+        "/Auto/BatteryReadErrors": (0, None),
+        "/Auto/GridReadErrors": (0, None),
+        "/Auto/InputCacheHits": (0, None),
+        "/Auto/LastShellyReadAge": (-1, None),
+        "/Auto/LastPvReadAge": (-1, None),
+        "/Auto/LastBatteryReadAge": (-1, None),
+        "/Auto/LastGridReadAge": (-1, None),
+        "/Auto/LastDbusReadAge": (-1, None),
+        "/Auto/ChargerCurrentTargetAge": (-1, None),
+        "/Auto/LastSuccessfulUpdateAge": (-1, None),
+        "/Auto/Stale": (0, None),
+        "/Auto/StaleSeconds": (0, None),
+        "/Auto/RecoveryAttempts": (0, None),
+    }
+
+
 class _ServiceBootstrapPathMixin(_ComposableControllerMixin):
     def register_paths(self) -> None:
         """Register all DBus paths exposed by the emulated EV charger."""
@@ -182,114 +326,15 @@ class _ServiceBootstrapPathMixin(_ComposableControllerMixin):
             "/Auto/HealthCode": (svc._last_health_code, None),
             "/Auto/State": (getattr(svc, "_last_auto_state", "idle"), None),
             "/Auto/StateCode": (getattr(svc, "_last_auto_state_code", 0), None),
-            "/Auto/ScheduledState": ("disabled" if scheduled_snapshot is None else scheduled_snapshot.state, None),
-            "/Auto/ScheduledStateCode": (0 if scheduled_snapshot is None else scheduled_snapshot.state_code, None),
-            "/Auto/ScheduledReason": ("disabled" if scheduled_snapshot is None else scheduled_snapshot.reason, None),
-            "/Auto/ScheduledReasonCode": (0 if scheduled_snapshot is None else scheduled_snapshot.reason_code, None),
-            "/Auto/ScheduledNightBoostActive": (
-                0 if scheduled_snapshot is None else int(bool(scheduled_snapshot.night_boost_active)),
-                None,
-            ),
-            "/Auto/ScheduledTargetDayEnabled": (
-                0 if scheduled_snapshot is None else int(bool(scheduled_snapshot.target_day_enabled)),
-                None,
-            ),
-            "/Auto/ScheduledTargetDay": ("" if scheduled_snapshot is None else scheduled_snapshot.target_day_label, None),
-            "/Auto/ScheduledTargetDate": ("" if scheduled_snapshot is None else scheduled_snapshot.target_date_text, None),
-            "/Auto/ScheduledFallbackStart": ("" if scheduled_snapshot is None else scheduled_snapshot.fallback_start_text, None),
-            "/Auto/ScheduledBoostUntil": ("" if scheduled_snapshot is None else scheduled_snapshot.boost_until_text, None),
             "/Auto/RecoveryActive": (0, None),
             "/Auto/StatusSource": (str(getattr(svc, "_last_status_source", "unknown")), None),
             "/Auto/FaultActive": (0, None),
             "/Auto/FaultReason": ("", None),
-            "/Auto/BackendMode": (str(getattr(svc, "backend_mode", "combined")), None),
-            "/Auto/MeterBackend": (str(getattr(svc, "meter_backend_type", "shelly_combined")), None),
-            "/Auto/SwitchBackend": (str(getattr(svc, "switch_backend_type", "shelly_combined")), None),
-            "/Auto/ChargerBackend": (str(getattr(svc, "charger_backend_type", "") or ""), None),
-            "/Auto/ChargerStatus": ("", None),
-            "/Auto/ChargerFault": ("", None),
-            "/Auto/ChargerFaultActive": (0, None),
-            "/Auto/ChargerEstimateActive": (0, None),
-            "/Auto/ChargerEstimateSource": ("", None),
-            "/Auto/RuntimeOverridesActive": (int(bool(getattr(svc, "_runtime_overrides_active", False))), None),
-            "/Auto/RuntimeOverridesPath": (str(getattr(svc, "runtime_overrides_path", "")), None),
-            "/Auto/SoftwareUpdateAvailable": (int(bool(getattr(svc, "_software_update_available", False))), None),
-            "/Auto/SoftwareUpdateState": (str(getattr(svc, "_software_update_state", "idle")), None),
-            "/Auto/SoftwareUpdateStateCode": (0, None),
-            "/Auto/SoftwareUpdateDetail": (str(getattr(svc, "_software_update_detail", "")), None),
-            "/Auto/SoftwareUpdateCurrentVersion": (
-                str(getattr(svc, "_software_update_current_version", "")),
-                None,
-            ),
-            "/Auto/SoftwareUpdateAvailableVersion": (
-                str(getattr(svc, "_software_update_available_version", "")),
-                None,
-            ),
-            "/Auto/SoftwareUpdateNoUpdateActive": (
-                int(bool(getattr(svc, "_software_update_no_update_active", False))),
-                None,
-            ),
-            "/Auto/SoftwareUpdateRun": (0, None),
-            "/Auto/ChargerTransportActive": (0, None),
-            "/Auto/ChargerTransportReason": ("", None),
-            "/Auto/ChargerTransportSource": ("", None),
-            "/Auto/ChargerTransportDetail": ("", None),
-            "/Auto/ChargerRetryActive": (0, None),
-            "/Auto/ChargerRetryReason": ("", None),
-            "/Auto/ChargerRetrySource": ("", None),
-            "/Auto/ErrorCount": (0, None),
-            "/Auto/DbusReadErrors": (0, None),
-            "/Auto/ShellyReadErrors": (0, None),
-            "/Auto/ChargerWriteErrors": (0, None),
-            "/Auto/PvReadErrors": (0, None),
-            "/Auto/BatteryReadErrors": (0, None),
-            "/Auto/GridReadErrors": (0, None),
-            "/Auto/InputCacheHits": (0, None),
-            "/Auto/ChargerCurrentTarget": (-1.0, None),
-            "/Auto/PhaseCurrent": ("", None),
-            "/Auto/PhaseObserved": ("", None),
-            "/Auto/PhaseTarget": ("", None),
-            "/Auto/PhaseReason": ("", None),
-            "/Auto/PhaseMismatchActive": (0, None),
-            "/Auto/PhaseLockoutActive": (0, None),
-            "/Auto/PhaseLockoutTarget": ("", None),
-            "/Auto/PhaseLockoutReason": ("", None),
-            "/Auto/PhaseSupportedConfigured": (",".join(getattr(svc, "supported_phase_selections", ("P1",))), None),
-            "/Auto/PhaseSupportedEffective": (",".join(getattr(svc, "supported_phase_selections", ("P1",))), None),
-            "/Auto/PhaseDegradedActive": (0, None),
-            "/Auto/SwitchFeedbackClosed": (-1, None),
-            "/Auto/SwitchInterlockOk": (-1, None),
-            "/Auto/SwitchFeedbackMismatch": (0, None),
-            "/Auto/ContactorSuspectedOpen": (0, None),
-            "/Auto/ContactorSuspectedWelded": (0, None),
-            "/Auto/ContactorFaultCount": (0, None),
-            "/Auto/ContactorLockoutActive": (0, None),
-            "/Auto/ContactorLockoutReason": ("", None),
-            "/Auto/ContactorLockoutSource": ("", None),
-            "/Auto/ContactorLockoutReset": (0, None),
-            "/Auto/PhaseLockoutReset": (0, None),
-            "/Auto/PhaseThresholdWatts": (-1.0, None),
-            "/Auto/PhaseCandidate": ("", None),
-            "/Auto/LastShellyReadAge": (-1, None),
-            "/Auto/LastPvReadAge": (-1, None),
-            "/Auto/LastBatteryReadAge": (-1, None),
-            "/Auto/LastGridReadAge": (-1, None),
-            "/Auto/LastDbusReadAge": (-1, None),
-            "/Auto/ChargerCurrentTargetAge": (-1, None),
-            "/Auto/PhaseCandidateAge": (-1, None),
-            "/Auto/PhaseLockoutAge": (-1, None),
-            "/Auto/ContactorLockoutAge": (-1, None),
-            "/Auto/LastSwitchFeedbackAge": (-1, None),
-            "/Auto/LastChargerReadAge": (-1, None),
-            "/Auto/LastChargerEstimateAge": (-1, None),
-            "/Auto/LastChargerTransportAge": (-1, None),
-            "/Auto/ChargerRetryRemaining": (-1, None),
-            "/Auto/LastSuccessfulUpdateAge": (-1, None),
-            "/Auto/SoftwareUpdateLastCheckAge": (-1, None),
-            "/Auto/SoftwareUpdateLastRunAge": (-1, None),
-            "/Auto/Stale": (0, None),
-            "/Auto/StaleSeconds": (0, None),
-            "/Auto/RecoveryAttempts": (0, None),
+            **_scheduled_diagnostic_defaults(scheduled_snapshot),
+            **_backend_diagnostic_defaults(svc),
+            **_software_update_diagnostic_defaults(svc),
+            **_phase_diagnostic_defaults(svc),
+            **_age_counter_diagnostic_defaults(),
         }
 
     def _all_service_paths(self) -> PathMap:

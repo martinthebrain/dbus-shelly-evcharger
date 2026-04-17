@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import mock_open, patch
 
 from shelly_wallbox.core.contracts import (
+    _resolved_snapshot_captured_at,
     cutover_confirmed_off,
     displayable_confirmed_read_timestamp,
     finite_float_or_none,
@@ -31,6 +32,10 @@ from shelly_wallbox.core.common import (
     _a,
     _age_seconds,
     _auto_state_code,
+    _charger_transport_max_age_seconds,
+    _charger_transport_now,
+    _charger_transport_retry_delay_seconds,
+    _fresh_charger_transport_timestamp,
     _confirmed_relay_state_max_age_seconds,
     _derive_auto_state,
     _fresh_confirmed_relay_output,
@@ -45,11 +50,13 @@ from shelly_wallbox.core.common import (
     month_window,
     normalize_mode,
     normalize_phase,
+    normalize_scheduled_enabled_days,
     parse_hhmm,
     phase_values,
     read_version,
     scheduled_enabled_days_text,
     scheduled_mode_snapshot,
+    scheduled_night_window_active,
 )
 
 
@@ -122,6 +129,10 @@ class TestShellyWallboxCommon(unittest.TestCase):
             ("disabled", 0, "disabled", 0, 0),
         )
         self.assertEqual(
+            normalized_scheduled_state_fields(True, "weird", 4, "odd", 4, 1),
+            ("disabled", 0, "disabled", 0, 0),
+        )
+        self.assertEqual(
             normalized_software_update_state_fields("available", 1, 0),
             ("available", 3, 1, 0),
         )
@@ -163,6 +174,7 @@ class TestShellyWallboxCommon(unittest.TestCase):
                 now=100.0,
             )
         )
+        self.assertEqual(_resolved_snapshot_captured_at(None, 91.0, None), 91.0)
         self.assertEqual(sanitized_auto_metrics(["bad"]), {})
         sanitized = sanitized_auto_metrics(
             {
@@ -332,6 +344,66 @@ class TestShellyWallboxCommon(unittest.TestCase):
         self.assertEqual(_health_code("contactor-suspected-welded"), 31)
         self.assertEqual(_health_code("contactor-lockout-open"), 32)
         self.assertEqual(_health_code("contactor-lockout-welded"), 33)
+
+    def test_charger_transport_and_scheduled_helpers_cover_remaining_policy_paths(self):
+        transport_service = type(
+            "TransportService",
+            (),
+            {
+                "_worker_poll_interval_seconds": 3.0,
+                "_dbus_live_publish_interval_seconds": 2.0,
+                "auto_shelly_soft_fail_seconds": 12.0,
+                "_last_charger_transport_at": "bad",
+                "_time_now": staticmethod(lambda: "bad"),
+                "auto_dbus_backoff_base_seconds": 4.0,
+            },
+        )()
+        self.assertEqual(_charger_transport_max_age_seconds(transport_service), 2.0)
+        with patch("shelly_wallbox.core.common.time.time", return_value=123.0):
+            self.assertEqual(_charger_transport_now(transport_service), 123.0)
+        self.assertIsNone(_fresh_charger_transport_timestamp(transport_service, 100.0))
+        transport_service._last_charger_transport_at = 98.0
+        self.assertEqual(_fresh_charger_transport_timestamp(transport_service, 100.0), 98.0)
+        self.assertEqual(_charger_transport_retry_delay_seconds(transport_service, "busy"), 4.0)
+        self.assertEqual(_charger_transport_retry_delay_seconds(transport_service, "ownership"), 8.0)
+        self.assertEqual(_charger_transport_retry_delay_seconds(transport_service, "timeout"), 6.0)
+        self.assertEqual(_charger_transport_retry_delay_seconds(transport_service, "offline"), 16.0)
+        self.assertEqual(_charger_transport_retry_delay_seconds(transport_service, "response"), 8.0)
+        self.assertEqual(_charger_transport_retry_delay_seconds(transport_service, "other"), 8.0)
+
+        self.assertEqual(normalize_scheduled_enabled_days(None), (0, 1, 2, 3, 4))
+        self.assertEqual(normalize_scheduled_enabled_days(""), (0, 1, 2, 3, 4))
+        self.assertEqual(normalize_scheduled_enabled_days("all"), (0, 1, 2, 3, 4, 5, 6))
+        self.assertEqual(normalize_scheduled_enabled_days("Mon-Wed"), (0, 1, 2))
+        self.assertEqual(normalize_scheduled_enabled_days("Mon-bogus"), (0, 1, 2, 3, 4))
+        self.assertEqual(normalize_scheduled_enabled_days("foo"), (0, 1, 2, 3, 4))
+
+        auto_window = scheduled_mode_snapshot(
+            datetime(2026, 4, 20, 8, 0),
+            {4: ((7, 30), (19, 30))},
+            "Mon,Tue,Wed,Thu,Fri",
+            delay_seconds=3600.0,
+            latest_end_time="06:30",
+        )
+        self.assertEqual(auto_window.state, "auto-window")
+        self.assertEqual(auto_window.reason, "daytime-auto")
+        self.assertTrue(
+            scheduled_night_window_active(
+                datetime(2026, 4, 19, 21, 0),
+                {4: ((7, 30), (19, 30))},
+                delay_seconds=3600.0,
+            )
+        )
+        with patch("shelly_wallbox.core.common._scheduled_target_day", return_value=datetime(2026, 4, 20).date()):
+            after_boost = scheduled_mode_snapshot(
+                datetime(2026, 4, 20, 21, 0),
+                {4: ((7, 30), (19, 30))},
+                "Mon,Tue,Wed,Thu,Fri",
+                delay_seconds=3600.0,
+                latest_end_time="06:30",
+            )
+        self.assertEqual(after_boost.state, "auto-window")
+        self.assertEqual(after_boost.reason, "daytime-auto")
         self.assertEqual(_health_code("unknown"), 99)
         self.assertEqual(_auto_state_code("charging"), 3)
         self.assertEqual(_auto_state_code("invalid"), 0)

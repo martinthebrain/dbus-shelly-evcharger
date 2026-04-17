@@ -235,18 +235,23 @@ def normalized_scheduled_state_fields(
     """
     if not bool(scheduled_active):
         return "disabled", 0, "disabled", 0, 0
-
-    normalized_state = str(state).strip().lower() if state is not None else "disabled"
-    if normalized_state not in SCHEDULED_STATE_CODES:
-        normalized_state = "disabled"
-    normalized_reason = str(reason).strip().lower() if reason is not None else "disabled"
-    if normalized_reason not in SCHEDULED_REASON_CODES:
-        normalized_reason = "disabled"
-
+    normalized_state = _normalized_scheduled_label(state, SCHEDULED_STATE_CODES)
+    normalized_reason = _normalized_scheduled_label(reason, SCHEDULED_REASON_CODES)
     normalized_state_code = SCHEDULED_STATE_CODES[normalized_state]
     normalized_reason_code = SCHEDULED_REASON_CODES[normalized_reason]
-    boost_active = int(bool(night_boost_active) and normalized_state == "night-boost")
+    boost_active = _normalized_scheduled_boost_active(night_boost_active, normalized_state)
     return normalized_state, normalized_state_code, normalized_reason, normalized_reason_code, boost_active
+
+
+def _normalized_scheduled_label(value: Any, allowed_codes: dict[str, int]) -> str:
+    """Return one normalized scheduled text label from a fixed vocabulary."""
+    normalized = str(value).strip().lower() if value is not None else "disabled"
+    return normalized if normalized in allowed_codes else "disabled"
+
+
+def _normalized_scheduled_boost_active(night_boost_active: Any, normalized_state: str) -> int:
+    """Return the normalized scheduled night-boost flag."""
+    return int(bool(night_boost_active) and normalized_state == "night-boost")
 
 
 def normalized_software_update_state_fields(
@@ -264,15 +269,52 @@ def normalized_software_update_state_fields(
     """
     normalized_available = normalize_binary_flag(available)
     normalized_no_update_active = normalize_binary_flag(no_update_active)
-    normalized_state = str(state).strip().lower() if state is not None else "idle"
-    if normalized_state not in SOFTWARE_UPDATE_STATE_CODES:
-        normalized_state = "idle"
-    if normalized_available and normalized_no_update_active and normalized_state == "available":
-        normalized_state = "available-blocked"
-    if normalized_state == "available-blocked" and not normalized_no_update_active:
-        normalized_state = "available" if normalized_available else "up-to-date"
+    normalized_state = _normalized_software_update_state_label(state)
+    normalized_state = _resolved_software_update_available_state(
+        normalized_state,
+        normalized_available,
+        normalized_no_update_active,
+    )
     normalized_state_code = SOFTWARE_UPDATE_STATE_CODES[normalized_state]
     return normalized_state, normalized_state_code, normalized_available, normalized_no_update_active
+
+
+def _normalized_software_update_state_label(value: Any) -> str:
+    """Return one normalized software-update lifecycle label."""
+    normalized = str(value).strip().lower() if value is not None else "idle"
+    return normalized if normalized in SOFTWARE_UPDATE_STATE_CODES else "idle"
+
+
+def _resolved_software_update_available_state(
+    normalized_state: str,
+    normalized_available: int,
+    normalized_no_update_active: int,
+) -> str:
+    """Return the final software-update state after availability policy rules."""
+    if _software_update_should_report_blocked(normalized_state, normalized_available, normalized_no_update_active):
+        return "available-blocked"
+    if _software_update_should_clear_blocked(normalized_state, normalized_no_update_active):
+        return _software_update_unblocked_state(normalized_available)
+    return normalized_state
+
+
+def _software_update_should_report_blocked(
+    normalized_state: str,
+    normalized_available: int,
+    normalized_no_update_active: int,
+) -> bool:
+    """Return whether availability should surface as ``available-blocked``."""
+    return bool(normalized_available and normalized_no_update_active and normalized_state == "available")
+
+
+def _software_update_should_clear_blocked(normalized_state: str, normalized_no_update_active: int) -> bool:
+    """Return whether a previously blocked state should collapse back to normal."""
+    return normalized_state == "available-blocked" and not normalized_no_update_active
+
+
+def _software_update_unblocked_state(normalized_available: int) -> str:
+    """Return the outward state after a blocked update becomes unblocked."""
+    return "available" if normalized_available else "up-to-date"
 
 
 def _displayable_timestamp_candidates(

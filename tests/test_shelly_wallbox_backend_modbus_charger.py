@@ -151,3 +151,32 @@ class TestShellyWallboxBackendModbusCharger(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 ModbusChargerBackend(self._service(), config_path=config_path)
+
+    def test_modbus_charger_covers_missing_config_phase_fallback_and_invalid_set_selection(self) -> None:
+        with self.assertRaises(FileNotFoundError):
+            ModbusChargerBackend(self._service(), config_path="/tmp/does-not-exist.ini")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nType=modbus_charger\nProfile=generic\nTransport=tcp\n"
+                "[Transport]\nHost=192.168.1.40\nPort=502\nUnitId=7\n"
+                "[Capabilities]\nSupportedPhaseSelections=P1,P1_P2\n"
+                "[EnableWrite]\nRegisterType=coil\nAddress=20\nTrueValue=1\nFalseValue=0\n"
+                "[CurrentWrite]\nRegisterType=holding\nAddress=30\nDataType=uint16\nScale=10\n"
+                "[PhaseWrite]\nRegisterType=holding\nAddress=31\nDataType=uint16\nMap=P1:1,P1_P2:2\n",
+            )
+            fake_transport = _FakeModbusTransport()
+            service = SimpleNamespace(
+                shelly_request_timeout_seconds=2.0,
+                requested_phase_selection="P1_P2_P3",
+            )
+            with patch(
+                "shelly_wallbox.backend.modbus_charger.create_modbus_transport",
+                return_value=fake_transport,
+            ):
+                backend = ModbusChargerBackend(service, config_path=config_path)
+
+                self.assertEqual(backend._phase_selection_cache, "P1")
+                with self.assertRaisesRegex(ValueError, "Unsupported phase selection"):
+                    backend.set_phase_selection("P1_P2_P3")

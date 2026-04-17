@@ -419,12 +419,16 @@ class ServiceStateController:
         counts = getattr(svc, "_contactor_fault_counts", None)
         if not isinstance(counts, dict):
             return "0"
-        reason = str(getattr(svc, "_contactor_lockout_reason", "") or "")
-        if not reason:
-            reason = str(getattr(svc, "_contactor_fault_active_reason", "") or "")
+        reason = ServiceStateController._summary_contactor_count_reason(svc)
         if not reason:
             return "0"
         return str(int(counts.get(reason, 0)))
+
+    @staticmethod
+    def _summary_contactor_count_reason(svc: Any) -> str:
+        """Return the contactor reason that should source the summary counter."""
+        lockout_reason = str(getattr(svc, "_contactor_lockout_reason", "") or "")
+        return lockout_reason or str(getattr(svc, "_contactor_fault_active_reason", "") or "")
 
     @staticmethod
     def _summary_contactor_suspected_open(svc: Any) -> str:
@@ -497,60 +501,129 @@ class ServiceStateController:
             latest_end_time=getattr(svc, "auto_scheduled_latest_end_time", "06:30"),
         )
 
+    @classmethod
+    def _summary_parts(cls, svc: Any, scheduled_snapshot: Any | None, current_time: float) -> tuple[str, ...]:
+        """Return the ordered debug summary fragments for one runtime snapshot."""
+        return (
+            cls._summary_mode_parts(svc)
+            + cls._summary_phase_parts(svc)
+            + cls._summary_contactor_parts(svc)
+            + cls._summary_backend_parts(svc, current_time)
+            + cls._summary_status_parts(svc)
+            + cls._summary_scheduled_parts(scheduled_snapshot)
+            + cls._summary_tail_parts(svc)
+        )
+
+    @classmethod
+    def _summary_mode_parts(cls, svc: Any) -> tuple[str, ...]:
+        """Return debug summary parts for mode-level runtime flags."""
+        return (
+            f"mode={getattr(svc, 'virtual_mode', 'na')}",
+            f"enable={getattr(svc, 'virtual_enable', 'na')}",
+            f"startstop={getattr(svc, 'virtual_startstop', 'na')}",
+            f"autostart={getattr(svc, 'virtual_autostart', 'na')}",
+            f"cutover={cls._summary_flag(getattr(svc, '_auto_mode_cutover_pending', False))}",
+            f"ignore_offtime={cls._summary_flag(getattr(svc, '_ignore_min_offtime_once', False))}",
+        )
+
+    @classmethod
+    def _summary_phase_parts(cls, svc: Any) -> tuple[str, ...]:
+        """Return debug summary parts for phase-switch runtime state."""
+        return (
+            f"phase={getattr(svc, 'active_phase_selection', 'na')}",
+            f"phase_req={getattr(svc, 'requested_phase_selection', 'na')}",
+            f"phase_obs={cls._summary_observed_phase(svc)}",
+            f"phase_switch={cls._summary_text(getattr(svc, '_phase_switch_state', 'na'), 'idle')}",
+            f"phase_mismatch={cls._summary_phase_mismatch_active(svc)}",
+            f"phase_lockout={cls._summary_phase_lockout_active(svc)}",
+            f"phase_lockout_target={cls._summary_phase_lockout_target(svc)}",
+            f"phase_effective={cls._summary_phase_supported_effective(svc)}",
+            f"phase_degraded={cls._summary_phase_degraded_active(svc)}",
+        )
+
+    @classmethod
+    def _summary_contactor_parts(cls, svc: Any) -> tuple[str, ...]:
+        """Return debug summary parts for switch feedback and contactor state."""
+        return (
+            f"switch_feedback={cls._summary_switch_feedback_closed(svc)}",
+            f"switch_interlock={cls._summary_switch_interlock_ok(svc)}",
+            f"switch_feedback_mismatch={cls._summary_switch_feedback_mismatch(svc)}",
+            f"contactor_fault_count={cls._summary_contactor_fault_count(svc)}",
+            f"contactor_suspected_open={cls._summary_contactor_suspected_open(svc)}",
+            f"contactor_suspected_welded={cls._summary_contactor_suspected_welded(svc)}",
+            f"contactor_lockout={cls._summary_contactor_lockout_active(svc)}",
+            f"contactor_lockout_reason={cls._summary_contactor_lockout_reason(svc)}",
+        )
+
+    @classmethod
+    def _summary_backend_parts(cls, svc: Any, current_time: float) -> tuple[str, ...]:
+        """Return debug summary parts for backend and charger health state."""
+        return (
+            f"backend={getattr(svc, 'backend_mode', 'combined')}",
+            f"meter_backend={getattr(svc, 'meter_backend_type', 'shelly_combined')}",
+            f"switch_backend={getattr(svc, 'switch_backend_type', 'shelly_combined')}",
+            f"charger_backend={cls._summary_text(getattr(svc, 'charger_backend_type', None), 'na')}",
+            f"charger_target={cls._summary_float(getattr(svc, '_charger_target_current_amps', None))}",
+            f"charger_status={cls._summary_text(getattr(svc, '_last_charger_state_status', ''), 'na')}",
+            f"charger_fault={cls._summary_text(getattr(svc, '_last_charger_state_fault', ''), 'na')}",
+            f"charger_transport={cls._summary_charger_transport_reason(svc)}",
+            f"charger_transport_source={cls._summary_charger_transport_source(svc)}",
+            f"charger_retry={cls._summary_charger_retry_reason(svc)}",
+            f"charger_retry_source={cls._summary_charger_retry_source(svc)}",
+            f"charger_retry_remaining={_charger_retry_remaining_seconds(svc, current_time)}",
+        )
+
+    @classmethod
+    def _summary_status_parts(cls, svc: Any) -> tuple[str, ...]:
+        """Return debug summary parts for outward state and faults."""
+        return (
+            f"status_source={cls._summary_text(getattr(svc, '_last_status_source', ''), 'unknown')}",
+            f"fault={cls._summary_fault_active(svc)}",
+            f"fault_reason={cls._summary_fault_reason(svc)}",
+            f"auto_state={getattr(svc, '_last_auto_state', 'na')}",
+        )
+
+    @classmethod
+    def _summary_scheduled_parts(cls, scheduled_snapshot: Any | None) -> tuple[str, ...]:
+        """Return debug summary parts for scheduled-mode diagnostics."""
+        scheduled_state, scheduled_reason, target_day, boost_active, boost_until = cls._summary_scheduled_snapshot_values(
+            scheduled_snapshot
+        )
+        return (
+            f"scheduled_state={scheduled_state}",
+            f"scheduled_reason={scheduled_reason}",
+            f"scheduled_target_day={target_day}",
+            f"scheduled_boost={boost_active}",
+            f"scheduled_boost_until={boost_until}",
+        )
+
+    @classmethod
+    def _summary_scheduled_snapshot_values(cls, scheduled_snapshot: Any | None) -> tuple[str, str, str, str, str]:
+        """Return normalized scheduled snapshot summary values."""
+        if scheduled_snapshot is None:
+            return ("na", "na", "na", "0", "na")
+        return (
+            cls._summary_text(scheduled_snapshot.state, "na"),
+            cls._summary_text(scheduled_snapshot.reason, "na"),
+            cls._summary_text(scheduled_snapshot.target_day_label, "na"),
+            cls._summary_flag(scheduled_snapshot.night_boost_active),
+            cls._summary_text(scheduled_snapshot.boost_until_text, "na"),
+        )
+
+    @classmethod
+    def _summary_tail_parts(cls, svc: Any) -> tuple[str, ...]:
+        """Return trailing debug summary parts."""
+        return (
+            f"recovery={cls._summary_recovery_active(svc)}",
+            f"health={getattr(svc, '_last_health_reason', 'na')}",
+        )
+
     def state_summary(self) -> str:
         """Return a compact runtime state summary for debug logging."""
         svc = self.service
         current_time = time.time()
         scheduled_snapshot = self._scheduled_snapshot(svc, current_time)
-        parts = (
-            f"mode={getattr(svc, 'virtual_mode', 'na')}",
-            f"enable={getattr(svc, 'virtual_enable', 'na')}",
-            f"startstop={getattr(svc, 'virtual_startstop', 'na')}",
-            f"autostart={getattr(svc, 'virtual_autostart', 'na')}",
-            f"cutover={self._summary_flag(getattr(svc, '_auto_mode_cutover_pending', False))}",
-            f"ignore_offtime={self._summary_flag(getattr(svc, '_ignore_min_offtime_once', False))}",
-            f"phase={getattr(svc, 'active_phase_selection', 'na')}",
-            f"phase_req={getattr(svc, 'requested_phase_selection', 'na')}",
-            f"phase_obs={self._summary_observed_phase(svc)}",
-            f"phase_switch={self._summary_text(getattr(svc, '_phase_switch_state', 'na'), 'idle')}",
-            f"phase_mismatch={self._summary_phase_mismatch_active(svc)}",
-            f"phase_lockout={self._summary_phase_lockout_active(svc)}",
-            f"phase_lockout_target={self._summary_phase_lockout_target(svc)}",
-            f"phase_effective={self._summary_phase_supported_effective(svc)}",
-            f"phase_degraded={self._summary_phase_degraded_active(svc)}",
-            f"switch_feedback={self._summary_switch_feedback_closed(svc)}",
-            f"switch_interlock={self._summary_switch_interlock_ok(svc)}",
-            f"switch_feedback_mismatch={self._summary_switch_feedback_mismatch(svc)}",
-            f"contactor_fault_count={self._summary_contactor_fault_count(svc)}",
-            f"contactor_suspected_open={self._summary_contactor_suspected_open(svc)}",
-            f"contactor_suspected_welded={self._summary_contactor_suspected_welded(svc)}",
-            f"contactor_lockout={self._summary_contactor_lockout_active(svc)}",
-            f"contactor_lockout_reason={self._summary_contactor_lockout_reason(svc)}",
-            f"backend={getattr(svc, 'backend_mode', 'combined')}",
-            f"meter_backend={getattr(svc, 'meter_backend_type', 'shelly_combined')}",
-            f"switch_backend={getattr(svc, 'switch_backend_type', 'shelly_combined')}",
-            f"charger_backend={self._summary_text(getattr(svc, 'charger_backend_type', None), 'na')}",
-            f"charger_target={self._summary_float(getattr(svc, '_charger_target_current_amps', None))}",
-            f"charger_status={self._summary_text(getattr(svc, '_last_charger_state_status', ''), 'na')}",
-            f"charger_fault={self._summary_text(getattr(svc, '_last_charger_state_fault', ''), 'na')}",
-            f"charger_transport={self._summary_charger_transport_reason(svc)}",
-            f"charger_transport_source={self._summary_charger_transport_source(svc)}",
-            f"charger_retry={self._summary_charger_retry_reason(svc)}",
-            f"charger_retry_source={self._summary_charger_retry_source(svc)}",
-            f"charger_retry_remaining={_charger_retry_remaining_seconds(svc, time.time())}",
-            f"status_source={self._summary_text(getattr(svc, '_last_status_source', ''), 'unknown')}",
-            f"fault={self._summary_fault_active(svc)}",
-            f"fault_reason={self._summary_fault_reason(svc)}",
-            f"auto_state={getattr(svc, '_last_auto_state', 'na')}",
-            f"scheduled_state={self._summary_text(None if scheduled_snapshot is None else scheduled_snapshot.state, 'na')}",
-            f"scheduled_reason={self._summary_text(None if scheduled_snapshot is None else scheduled_snapshot.reason, 'na')}",
-            f"scheduled_target_day={self._summary_text(None if scheduled_snapshot is None else scheduled_snapshot.target_day_label, 'na')}",
-            f"scheduled_boost={self._summary_flag(False if scheduled_snapshot is None else scheduled_snapshot.night_boost_active)}",
-            f"scheduled_boost_until={self._summary_text(None if scheduled_snapshot is None else scheduled_snapshot.boost_until_text, 'na')}",
-            f"recovery={self._summary_recovery_active(svc)}",
-            f"health={getattr(svc, '_last_health_reason', 'na')}",
-        )
-        return " ".join(parts)
+        return " ".join(self._summary_parts(svc, scheduled_snapshot, current_time))
 
     @staticmethod
     def coerce_runtime_int(value: object, default: int = 0) -> int:
@@ -570,9 +643,8 @@ class ServiceStateController:
         normalized = finite_float_or_none(value)
         return float(default) if normalized is None else normalized
 
-    def current_runtime_state(self) -> dict[str, object]:
-        """Return the volatile runtime state that should survive service restarts."""
-        svc = self.service
+    def _base_runtime_state(self, svc: Any) -> dict[str, object]:
+        """Return the non-phase runtime state that survives service restarts."""
         return {
             "mode": int(svc.virtual_mode),
             "autostart": int(svc.virtual_autostart),
@@ -580,6 +652,14 @@ class ServiceStateController:
             "startstop": int(svc.virtual_startstop),
             "manual_override_until": float(svc.manual_override_until),
             "auto_mode_cutover_pending": 1 if svc._auto_mode_cutover_pending else 0,
+            "relay_last_changed_at": svc.relay_last_changed_at,
+            "relay_last_off_at": svc.relay_last_off_at,
+        }
+
+    @staticmethod
+    def _learned_charge_power_runtime_state(svc: Any) -> dict[str, object]:
+        """Return learned-charge-power runtime state as a separate persistence block."""
+        return {
             "learned_charge_power_watts": getattr(svc, "learned_charge_power_watts", None),
             "learned_charge_power_updated_at": getattr(svc, "learned_charge_power_updated_at", None),
             "learned_charge_power_state": getattr(svc, "learned_charge_power_state", "unknown"),
@@ -595,6 +675,11 @@ class ServiceStateController:
                 "learned_charge_power_signature_checked_session_started_at",
                 None,
             ),
+        }
+
+    def _phase_selection_runtime_state(self, svc: Any) -> dict[str, object]:
+        """Return persisted requested/active phase-selection values."""
+        return {
             "active_phase_selection": self._normalize_runtime_phase_selection(
                 getattr(svc, "active_phase_selection", "P1")
             ),
@@ -606,17 +691,17 @@ class ServiceStateController:
                     getattr(svc, "supported_phase_selections", ("P1",))
                 )
             ),
-            "phase_switch_pending_selection": (
-                None
-                if getattr(svc, "_phase_switch_pending_selection", None) is None
-                else self._normalize_runtime_phase_selection(
-                    getattr(svc, "_phase_switch_pending_selection"),
-                    getattr(svc, "requested_phase_selection", "P1"),
-                )
+        }
+
+    def _phase_switch_runtime_state(self, svc: Any) -> dict[str, object]:
+        """Return phase-switch persistence fields."""
+        default_phase = self._normalize_runtime_phase_selection(getattr(svc, "requested_phase_selection", "P1"))
+        return {
+            "phase_switch_pending_selection": self._normalized_optional_runtime_phase_selection(
+                getattr(svc, "_phase_switch_pending_selection", None),
+                default_phase,
             ),
-            "phase_switch_state": self._normalize_phase_switch_state(
-                getattr(svc, "_phase_switch_state", None)
-            ),
+            "phase_switch_state": self._normalize_phase_switch_state(getattr(svc, "_phase_switch_state", None)),
             "phase_switch_requested_at": self._coerce_optional_runtime_past_time(
                 getattr(svc, "_phase_switch_requested_at", None)
             ),
@@ -625,18 +710,16 @@ class ServiceStateController:
             ),
             "phase_switch_resume_relay": 1 if bool(getattr(svc, "_phase_switch_resume_relay", False)) else 0,
             "phase_switch_mismatch_counts": dict(getattr(svc, "_phase_switch_mismatch_counts", {}) or {}),
-            "phase_switch_last_mismatch_selection": (
-                None
-                if getattr(svc, "_phase_switch_last_mismatch_selection", None) is None
-                else self._normalize_runtime_phase_selection(getattr(svc, "_phase_switch_last_mismatch_selection"))
+            "phase_switch_last_mismatch_selection": self._normalized_optional_runtime_phase_selection(
+                getattr(svc, "_phase_switch_last_mismatch_selection", None),
+                default_phase,
             ),
             "phase_switch_last_mismatch_at": self._coerce_optional_runtime_past_time(
                 getattr(svc, "_phase_switch_last_mismatch_at", None)
             ),
-            "phase_switch_lockout_selection": (
-                None
-                if getattr(svc, "_phase_switch_lockout_selection", None) is None
-                else self._normalize_runtime_phase_selection(getattr(svc, "_phase_switch_lockout_selection"))
+            "phase_switch_lockout_selection": self._normalized_optional_runtime_phase_selection(
+                getattr(svc, "_phase_switch_lockout_selection", None),
+                default_phase,
             ),
             "phase_switch_lockout_reason": str(getattr(svc, "_phase_switch_lockout_reason", "") or ""),
             "phase_switch_lockout_at": self._coerce_optional_runtime_past_time(
@@ -645,8 +728,15 @@ class ServiceStateController:
             "phase_switch_lockout_until": self._coerce_optional_runtime_float(
                 getattr(svc, "_phase_switch_lockout_until", None)
             ),
+        }
+
+    def _contactor_runtime_state(self, svc: Any) -> dict[str, object]:
+        """Return contactor fault and lockout runtime fields."""
+        return {
             "contactor_fault_counts": dict(getattr(svc, "_contactor_fault_counts", {}) or {}),
-            "contactor_fault_active_reason": str(getattr(svc, "_contactor_fault_active_reason", "") or "") or None,
+            "contactor_fault_active_reason": self._normalized_optional_runtime_text(
+                getattr(svc, "_contactor_fault_active_reason", "")
+            ),
             "contactor_fault_active_since": self._coerce_optional_runtime_past_time(
                 getattr(svc, "_contactor_fault_active_since", None)
             ),
@@ -655,9 +745,17 @@ class ServiceStateController:
             "contactor_lockout_at": self._coerce_optional_runtime_past_time(
                 getattr(svc, "_contactor_lockout_at", None)
             ),
-            "relay_last_changed_at": svc.relay_last_changed_at,
-            "relay_last_off_at": svc.relay_last_off_at,
         }
+
+    def current_runtime_state(self) -> dict[str, object]:
+        """Return the volatile runtime state that should survive service restarts."""
+        svc = self.service
+        runtime_state = self._base_runtime_state(svc)
+        runtime_state.update(self._learned_charge_power_runtime_state(svc))
+        runtime_state.update(self._phase_selection_runtime_state(svc))
+        runtime_state.update(self._phase_switch_runtime_state(svc))
+        runtime_state.update(self._contactor_runtime_state(svc))
+        return runtime_state
 
     @classmethod
     def _read_runtime_override_values(cls, path: str) -> dict[str, str]:
@@ -672,14 +770,30 @@ class ServiceStateController:
             return {}
         if not read_files or not parser.has_section(RUNTIME_OVERRIDE_SECTION):
             return {}
-        values: dict[str, str] = {}
         section = parser[RUNTIME_OVERRIDE_SECTION]
-        for config_key, raw_value in section.items():
-            spec = RUNTIME_OVERRIDE_BY_CONFIG_KEY.get(str(config_key).strip())
-            if spec is None:
-                continue
-            values[spec.config_key] = str(raw_value).strip()
+        return cls._normalized_runtime_override_section_items(section.items())
+
+    @classmethod
+    def _normalized_runtime_override_section_items(
+        cls,
+        items: Any,
+    ) -> dict[str, str]:
+        """Return normalized config-keyed override values from raw INI items."""
+        values: dict[str, str] = {}
+        for config_key, raw_value in items:
+            normalized_item = cls._normalized_runtime_override_item(config_key, raw_value)
+            if normalized_item is not None:
+                key, value = normalized_item
+                values[key] = value
         return values
+
+    @staticmethod
+    def _normalized_runtime_override_item(config_key: object, raw_value: object) -> tuple[str, str] | None:
+        """Return one normalized runtime override item or ``None`` when unknown."""
+        spec = RUNTIME_OVERRIDE_BY_CONFIG_KEY.get(str(config_key).strip())
+        if spec is None:
+            return None
+        return spec.config_key, str(raw_value).strip()
 
     @classmethod
     def _apply_runtime_overrides_to_config(
@@ -702,17 +816,15 @@ class ServiceStateController:
     @staticmethod
     def _override_value_as_text(spec: RuntimeOverrideSpec, value: object) -> str:
         """Return one runtime override as stable text for INI persistence."""
-        if spec.value_kind == "bool":
-            return str(int(bool(value)))
-        if spec.value_kind == "int":
-            return str(ServiceStateController.coerce_runtime_int(value))
-        if spec.value_kind == "phase":
-            return str(ServiceStateController._normalize_runtime_phase_selection(value))
-        if spec.value_kind == "weekday_set":
-            return scheduled_enabled_days_text(value, DEFAULT_SCHEDULED_ENABLED_DAYS)
-        if spec.value_kind == "hhmm":
-            return normalize_hhmm_text(value, "06:30")
-        return str(ServiceStateController.coerce_runtime_float(value))
+        renderers: dict[str, Callable[[object], str]] = {
+            "bool": lambda raw: str(int(bool(raw))),
+            "int": lambda raw: str(ServiceStateController.coerce_runtime_int(raw)),
+            "phase": lambda raw: str(ServiceStateController._normalize_runtime_phase_selection(raw)),
+            "weekday_set": lambda raw: scheduled_enabled_days_text(raw, DEFAULT_SCHEDULED_ENABLED_DAYS),
+            "hhmm": lambda raw: normalize_hhmm_text(raw, "06:30"),
+            "float": lambda raw: str(ServiceStateController.coerce_runtime_float(raw)),
+        }
+        return renderers.get(spec.value_kind, renderers["float"])(value)
 
     @staticmethod
     def _runtime_override_default_value(spec: RuntimeOverrideSpec) -> object:
@@ -809,28 +921,58 @@ class ServiceStateController:
         """Flush one staged runtime-override write once the debounce interval elapsed."""
         svc = self.service
         path = str(getattr(svc, "runtime_overrides_path", "")).strip()
-        pending_serialized = getattr(svc, "_runtime_overrides_pending_serialized", None)
-        pending_values = getattr(svc, "_runtime_overrides_pending_values", None)
-        pending_text = getattr(svc, "_runtime_overrides_pending_text", None)
-        if not path or not pending_serialized or not isinstance(pending_values, dict) or not isinstance(pending_text, str):
+        pending_payload = self._pending_runtime_overrides_payload(svc, path)
+        if pending_payload is None:
             return
         current_time = self._runtime_now(svc) if now is None else float(now)
-        due_at = self._coerce_optional_runtime_float(getattr(svc, "_runtime_overrides_pending_due_at", None))
-        if due_at is not None and current_time < due_at:
+        if not self._runtime_override_write_due(svc, current_time):
             return
         try:
             self._write_runtime_overrides_payload(
                 svc,
                 path,
-                dict(pending_values),
-                str(pending_serialized),
-                pending_text,
+                pending_payload[0],
+                pending_payload[1],
+                pending_payload[2],
                 current_time,
             )
         except Exception as error:  # pylint: disable=broad-except
-            min_interval = self._runtime_override_write_min_interval_seconds(svc)
-            svc._runtime_overrides_pending_due_at = float(current_time + min_interval)
+            svc._runtime_overrides_pending_due_at = float(
+                current_time + self._runtime_override_write_min_interval_seconds(svc)
+            )
             logging.warning("Unable to write runtime overrides to %s: %s", path, error)
+
+    def _runtime_override_write_due(self, svc: Any, current_time: float) -> bool:
+        """Return whether a staged runtime-override write may be flushed now."""
+        due_at = self._coerce_optional_runtime_float(getattr(svc, "_runtime_overrides_pending_due_at", None))
+        return due_at is None or current_time >= due_at
+
+    @staticmethod
+    def _pending_runtime_overrides_payload(svc: Any, path: str) -> tuple[dict[str, str], str, str] | None:
+        """Return the staged runtime-override payload when it is complete."""
+        pending_serialized = getattr(svc, "_runtime_overrides_pending_serialized", None)
+        pending_values = getattr(svc, "_runtime_overrides_pending_values", None)
+        pending_text = getattr(svc, "_runtime_overrides_pending_text", None)
+        if not bool(path) or not bool(pending_serialized):
+            return None
+        if not isinstance(pending_values, dict) or not isinstance(pending_text, str):
+            return None
+        return dict(pending_values), str(pending_serialized), pending_text
+
+    @classmethod
+    def _runtime_override_due_at(
+        cls,
+        current_time: float,
+        pending_due_at: float | None,
+        last_saved_at: float | None,
+        min_interval: float,
+    ) -> float | None:
+        """Return the next due timestamp for one runtime-override write, if any."""
+        if pending_due_at is not None and current_time < pending_due_at:
+            return pending_due_at
+        if last_saved_at is not None and (current_time - last_saved_at) < min_interval:
+            return last_saved_at + min_interval
+        return None
 
     def save_runtime_overrides(self) -> None:
         """Persist runtime-overridable DBus settings with atomic debounced writes."""
@@ -851,23 +993,9 @@ class ServiceStateController:
         last_saved_at = self._coerce_optional_runtime_float(getattr(svc, "_runtime_overrides_last_saved_at", None))
         pending_due_at = self._coerce_optional_runtime_float(getattr(svc, "_runtime_overrides_pending_due_at", None))
         min_interval = self._runtime_override_write_min_interval_seconds(svc)
-        if pending_due_at is not None and current_time < pending_due_at:
-            self._stage_runtime_overrides_write(
-                svc,
-                payload,
-                serialized,
-                rendered,
-                pending_due_at,
-            )
-            return
-        if last_saved_at is not None and (current_time - last_saved_at) < min_interval:
-            self._stage_runtime_overrides_write(
-                svc,
-                payload,
-                serialized,
-                rendered,
-                last_saved_at + min_interval,
-            )
+        due_at = self._runtime_override_due_at(current_time, pending_due_at, last_saved_at, min_interval)
+        if due_at is not None:
+            self._stage_runtime_overrides_write(svc, payload, serialized, rendered, due_at)
             return
         try:
             self._write_runtime_overrides_payload(
@@ -936,6 +1064,23 @@ class ServiceStateController:
         """Return normalized supported service phase selections."""
         normalized: tuple[PhaseSelection, ...] = normalize_phase_selection_tuple(value, default)
         return normalized
+
+    @classmethod
+    def _normalized_optional_runtime_phase_selection(
+        cls,
+        value: object,
+        default: PhaseSelection = "P1",
+    ) -> PhaseSelection | None:
+        """Return an optional normalized phase selection."""
+        if value is None:
+            return None
+        return cls._normalize_runtime_phase_selection(value, default)
+
+    @staticmethod
+    def _normalized_optional_runtime_text(value: object) -> str | None:
+        """Return normalized optional text or ``None`` for empty values."""
+        text = str(value or "").strip()
+        return text or None
 
     @staticmethod
     def _normalize_phase_switch_state(value: object) -> str | None:
@@ -1074,10 +1219,9 @@ class ServiceStateController:
             "phase_switch_pending_selection",
             getattr(svc, "_phase_switch_pending_selection", None),
         )
-        svc._phase_switch_pending_selection = (
-            None
-            if pending_phase_selection is None
-            else self._normalize_runtime_phase_selection(pending_phase_selection, svc.requested_phase_selection)
+        svc._phase_switch_pending_selection = self._normalized_optional_runtime_phase_selection(
+            pending_phase_selection,
+            svc.requested_phase_selection,
         )
         svc._phase_switch_state = self._normalize_phase_switch_state(
             state.get("phase_switch_state", getattr(svc, "_phase_switch_state", None))
@@ -1099,19 +1243,17 @@ class ServiceStateController:
             "phase_switch_mismatch_counts",
             getattr(svc, "_phase_switch_mismatch_counts", {}),
         )
-        svc._phase_switch_mismatch_counts = {}
-        if isinstance(raw_mismatch_counts, dict):
-            for raw_selection, raw_count in raw_mismatch_counts.items():
-                normalized_selection = self._normalize_runtime_phase_selection(raw_selection, svc.requested_phase_selection)
-                svc._phase_switch_mismatch_counts[normalized_selection] = non_negative_int(raw_count, 0)
+        svc._phase_switch_mismatch_counts = self._normalized_phase_switch_mismatch_counts(
+            raw_mismatch_counts,
+            svc.requested_phase_selection,
+        )
         last_mismatch_selection = state.get(
             "phase_switch_last_mismatch_selection",
             getattr(svc, "_phase_switch_last_mismatch_selection", None),
         )
-        svc._phase_switch_last_mismatch_selection = (
-            None
-            if last_mismatch_selection is None
-            else self._normalize_runtime_phase_selection(last_mismatch_selection, svc.requested_phase_selection)
+        svc._phase_switch_last_mismatch_selection = self._normalized_optional_runtime_phase_selection(
+            last_mismatch_selection,
+            svc.requested_phase_selection,
         )
         svc._phase_switch_last_mismatch_at = self._coerce_optional_runtime_past_time(
             state.get("phase_switch_last_mismatch_at", getattr(svc, "_phase_switch_last_mismatch_at", None)),
@@ -1121,10 +1263,9 @@ class ServiceStateController:
             "phase_switch_lockout_selection",
             getattr(svc, "_phase_switch_lockout_selection", None),
         )
-        svc._phase_switch_lockout_selection = (
-            None
-            if lockout_selection is None
-            else self._normalize_runtime_phase_selection(lockout_selection, svc.requested_phase_selection)
+        svc._phase_switch_lockout_selection = self._normalized_optional_runtime_phase_selection(
+            lockout_selection,
+            svc.requested_phase_selection,
         )
         svc._phase_switch_lockout_reason = str(
             state.get("phase_switch_lockout_reason", getattr(svc, "_phase_switch_lockout_reason", "")) or ""
@@ -1142,6 +1283,20 @@ class ServiceStateController:
             svc._phase_switch_requested_at = None
             svc._phase_switch_stable_until = None
             svc._phase_switch_resume_relay = False
+
+    def _normalized_phase_switch_mismatch_counts(
+        self,
+        raw_counts: object,
+        default_selection: PhaseSelection,
+    ) -> dict[PhaseSelection, int]:
+        """Return normalized persisted phase-switch mismatch counters."""
+        normalized_counts: dict[PhaseSelection, int] = {}
+        if not isinstance(raw_counts, dict):
+            return normalized_counts
+        for raw_selection, raw_count in raw_counts.items():
+            normalized_selection = self._normalize_runtime_phase_selection(raw_selection, default_selection)
+            normalized_counts[normalized_selection] = non_negative_int(raw_count, 0)
+        return normalized_counts
 
     def _restore_relay_runtime_state(
         self,
@@ -1163,28 +1318,17 @@ class ServiceStateController:
     ) -> None:
         """Restore contactor-fault counters, active suspicion, and latched lockout state."""
         raw_fault_counts = state.get("contactor_fault_counts", getattr(svc, "_contactor_fault_counts", {}))
-        svc._contactor_fault_counts = {}
-        if isinstance(raw_fault_counts, dict):
-            for raw_reason, raw_count in raw_fault_counts.items():
-                reason = str(raw_reason).strip()
-                if reason not in {"contactor-suspected-open", "contactor-suspected-welded"}:
-                    continue
-                svc._contactor_fault_counts[reason] = non_negative_int(raw_count, 0)
-        active_reason = str(
-            state.get("contactor_fault_active_reason", getattr(svc, "_contactor_fault_active_reason", "")) or ""
-        ).strip()
-        if active_reason not in {"contactor-suspected-open", "contactor-suspected-welded"}:
-            active_reason = ""
-        svc._contactor_fault_active_reason = active_reason or None
+        svc._contactor_fault_counts = self._normalized_contactor_fault_counts(raw_fault_counts)
+        svc._contactor_fault_active_reason = self._normalized_contactor_fault_reason(
+            state.get("contactor_fault_active_reason", getattr(svc, "_contactor_fault_active_reason", ""))
+        )
         svc._contactor_fault_active_since = self._coerce_optional_runtime_past_time(
             state.get("contactor_fault_active_since", getattr(svc, "_contactor_fault_active_since", None)),
             current_time,
         )
-        svc._contactor_lockout_reason = str(
-            state.get("contactor_lockout_reason", getattr(svc, "_contactor_lockout_reason", "")) or ""
-        )
-        if svc._contactor_lockout_reason not in {"contactor-suspected-open", "contactor-suspected-welded"}:
-            svc._contactor_lockout_reason = ""
+        svc._contactor_lockout_reason = self._normalized_contactor_fault_reason(
+            state.get("contactor_lockout_reason", getattr(svc, "_contactor_lockout_reason", ""))
+        ) or ""
         svc._contactor_lockout_source = str(
             state.get("contactor_lockout_source", getattr(svc, "_contactor_lockout_source", "")) or ""
         )
@@ -1192,6 +1336,27 @@ class ServiceStateController:
             state.get("contactor_lockout_at", getattr(svc, "_contactor_lockout_at", None)),
             current_time,
         )
+
+    @staticmethod
+    def _normalized_contactor_fault_counts(raw_counts: object) -> dict[str, int]:
+        """Return normalized persisted contactor fault counters."""
+        allowed_reasons = {"contactor-suspected-open", "contactor-suspected-welded"}
+        normalized_counts: dict[str, int] = {}
+        if not isinstance(raw_counts, dict):
+            return normalized_counts
+        for raw_reason, raw_count in raw_counts.items():
+            reason = str(raw_reason).strip()
+            if reason in allowed_reasons:
+                normalized_counts[reason] = non_negative_int(raw_count, 0)
+        return normalized_counts
+
+    @staticmethod
+    def _normalized_contactor_fault_reason(value: object) -> str | None:
+        """Return a normalized optional contactor fault reason."""
+        reason = str(value or "").strip()
+        if reason not in {"contactor-suspected-open", "contactor-suspected-welded"}:
+            return None
+        return reason
 
     def load_runtime_state(self) -> None:
         """Restore volatile runtime state from a RAM-backed file if present."""

@@ -118,6 +118,14 @@ def _evse_status_text(evse_state: int) -> str | None:
 
 def _fault_text(vehicle_state: int, status_bits: int) -> str | None:
     """Return one normalized SimpleEVSE fault text from status flags."""
+    faults = _simpleevse_fault_tokens(status_bits)
+    if int(vehicle_state) == 5 and not faults:
+        faults.append("vehicle-failure")
+    return ",".join(faults) if faults else None
+
+
+def _simpleevse_fault_tokens(status_bits: int) -> list[str]:
+    """Return normalized fault tokens from SimpleEVSE status bits."""
     faults: list[str] = []
     if status_bits & _SIMPLEEVSE_STATUS_DIODE_CHECK_FAIL_BIT:
         faults.append("diode-check-fail")
@@ -127,9 +135,7 @@ def _fault_text(vehicle_state: int, status_bits: int) -> str | None:
         faults.append("pilot-release-wait")
     if status_bits & _SIMPLEEVSE_STATUS_RCD_CHECK_ERROR_BIT:
         faults.append("rcd-check-error")
-    if int(vehicle_state) == 5 and not faults:
-        faults.append("vehicle-failure")
-    return ",".join(faults) if faults else None
+    return faults
 
 
 def _enabled(control_bits: int, evse_state: int) -> bool:
@@ -144,19 +150,29 @@ def _status_text(vehicle_state: int, evse_state: int, fault_text: str | None) ->
     if fault_text:
         return "error"
     vehicle_text = _vehicle_status_text(vehicle_state)
-    if vehicle_text is not None and vehicle_text != "error":
+    if _non_error_status(vehicle_text):
         return vehicle_text
     return _evse_status_text(evse_state)
+
+
+def _non_error_status(vehicle_text: str | None) -> bool:
+    """Return whether a vehicle status may be exposed directly."""
+    return vehicle_text is not None and vehicle_text != "error"
 
 
 def _rounded_current_setting(amps: float) -> int:
     """Return one SimpleEVSE-compatible whole-amp current setpoint."""
     rounded = int(math.floor(float(amps) + 0.5))
+    _validate_simpleevse_current(amps, rounded)
+    return rounded
+
+
+def _validate_simpleevse_current(amps: float, rounded: int) -> None:
+    """Validate one SimpleEVSE current setpoint."""
     if rounded < 0 or rounded > _SIMPLEEVSE_MAX_CURRENT_AMPS:
         raise ValueError(
             f"Unsupported charger current '{amps}' for SimpleEVSE backend (expected 0..{_SIMPLEEVSE_MAX_CURRENT_AMPS} A)"
         )
-    return rounded
 
 
 class SimpleEvseChargerBackend:

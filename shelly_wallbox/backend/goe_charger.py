@@ -145,7 +145,11 @@ def _goe_optional_bool(value: object) -> bool | None:
         return value
     if isinstance(value, (int, float)):
         return bool(int(value))
-    text = str(value).strip().lower()
+    return _goe_optional_bool_text(str(value).strip().lower())
+
+
+def _goe_optional_bool_text(text: str) -> bool | None:
+    """Return one optional bool from normalized go-e text tokens."""
     if text in {"1", "true", "on", "yes"}:
         return True
     if text in {"0", "false", "off", "no"}:

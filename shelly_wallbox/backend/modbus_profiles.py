@@ -32,12 +32,22 @@ class ModbusReadField:
         """Read one normalized value from the configured Modbus source."""
         raw_value = client.read_scalar(self.register_type, self.address, self.data_type, self.word_order)
         if self.value_map is not None:
-            mapped = self.value_map.get(int(raw_value))
-            return mapped if mapped is not None else str(int(raw_value))
+            return self._mapped_read_value(raw_value)
+        return self._scaled_read_value(raw_value)
+
+    def _mapped_read_value(self, raw_value: object) -> object:
+        """Return one mapped read value when a numeric value map is configured."""
+        assert self.value_map is not None
+        scalar = _int_scalar(raw_value)
+        mapped = self.value_map.get(scalar)
+        return mapped if mapped is not None else str(scalar)
+
+    def _scaled_read_value(self, raw_value: object) -> object:
+        """Return one raw or scaled read value when no value map is configured."""
         if isinstance(raw_value, bool):
             return raw_value
         if self.scale and self.scale not in {0.0, 1.0}:
-            return float(raw_value) / float(self.scale)
+            return _float_scalar(raw_value) / float(self.scale)
         return raw_value
 
 
@@ -73,13 +83,31 @@ class ModbusNumericWrite:
         """Write one scaled numeric value through the configured Modbus sink."""
         if self.register_type != "holding":
             raise ValueError("Numeric Modbus writes currently require RegisterType=holding")
+        registers = self._numeric_write_registers(value)
+        self._write_registers(client, registers)
+
+    def _numeric_write_registers(self, value: float) -> tuple[int, ...]:
+        """Return encoded Modbus registers for one numeric write value."""
         scaled = float(value) * float(self.scale or 1.0)
         rounded = int(round(scaled)) if self.data_type != "float32" else scaled
-        registers = encode_register_value(rounded, self.data_type, self.word_order)
+        return encode_register_value(rounded, self.data_type, self.word_order)
+
+    def _write_registers(self, client: ModbusClient, registers: tuple[int, ...]) -> None:
+        """Write one or many registers depending on the encoded payload width."""
         if len(registers) == 1:
             client.write_single_register(self.address, registers[0])
             return
         client.write_multiple_registers(self.address, registers)
+
+
+def _int_scalar(raw_value: object) -> int:
+    """Return one Modbus scalar coerced to integer for mapped reads."""
+    return int(cast(int | float | bool | str, raw_value))
+
+
+def _float_scalar(raw_value: object) -> float:
+    """Return one Modbus scalar coerced to float for scaled reads."""
+    return float(cast(int | float | bool | str, raw_value))
 
 
 @dataclass(frozen=True)
@@ -305,18 +333,31 @@ def _optional_phase_write(parser: configparser.ConfigParser) -> ModbusPhaseWrite
 
 def _supported_phase_selections(capabilities: configparser.SectionProxy | None, phase_write: ModbusPhaseWrite | None) -> tuple[PhaseSelection, ...]:
     """Return one normalized supported-phase tuple for the generic profile."""
-    configured = "P1"
-    if capabilities is not None:
-        configured = capabilities.get("SupportedPhaseSelections", configured)
+    configured = _configured_supported_phase_selections(capabilities)
     normalized = normalize_phase_selection_tuple(configured, ("P1",))
     if phase_write is None:
         return normalized
-    available = cast(
+    available = _mapped_supported_phase_selections(normalized, phase_write)
+    mapped = tuple(phase_write.selection_map.keys())
+    return available or mapped or ("P1",)
+
+
+def _configured_supported_phase_selections(capabilities: configparser.SectionProxy | None) -> str:
+    """Return the configured supported phase-selection text."""
+    if capabilities is None:
+        return "P1"
+    return capabilities.get("SupportedPhaseSelections", "P1")
+
+
+def _mapped_supported_phase_selections(
+    normalized: tuple[PhaseSelection, ...],
+    phase_write: ModbusPhaseWrite,
+) -> tuple[PhaseSelection, ...]:
+    """Return supported selections that are also writable by the phase map."""
+    return cast(
         tuple[PhaseSelection, ...],
         tuple(selection for selection in normalized if selection in phase_write.selection_map),
     )
-    mapped = tuple(phase_write.selection_map.keys())
-    return available or mapped or ("P1",)
 
 
 def load_generic_modbus_charger_profile(parser: configparser.ConfigParser) -> GenericModbusChargerProfile:

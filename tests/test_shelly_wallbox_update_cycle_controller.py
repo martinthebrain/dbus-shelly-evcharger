@@ -12,6 +12,7 @@ from shelly_wallbox.backend.modbus_transport import ModbusRequest, ModbusSlaveOf
 from shelly_wallbox.backend.shelly_io import ShellyIoController
 from shelly_wallbox.auto.policy import AutoPolicy
 from shelly_wallbox.update.controller import UpdateCycleController
+from shelly_wallbox.update.relay import _UpdateCycleRelayMixin
 
 
 def _phase_values(total_power, voltage, _phase, _voltage_mode):
@@ -136,6 +137,27 @@ class TestUpdateCycleController(unittest.TestCase):
         }
         data.update(overrides)
         return SimpleNamespace(**data)
+
+    def test_update_state_helpers_cover_freshness_and_startstop_edges(self):
+        service = SimpleNamespace(
+            _charger_backend=object(),
+            _worker_poll_interval_seconds=0.4,
+            auto_shelly_soft_fail_seconds=10.0,
+            _last_charger_state_enabled=True,
+            _last_charger_state_at=None,
+            virtual_startstop=0,
+            virtual_enable=0,
+            virtual_mode=0,
+            _mode_uses_auto_logic=lambda mode: int(mode) in (1, 2),
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        self.assertEqual(controller._charger_state_max_age_seconds(service), 1.0)
+        self.assertTrue(controller._stale_charger_enabled_readback(service, 100.0))
+        self.assertIsNone(controller._fresh_charger_enabled_readback(service, 100.0))
+
+        service._last_charger_state_at = 100.0
+        self.assertEqual(controller.startstop_display_for_state(service, False, 100.0), 1)
 
     def test_auto_phase_selection_tracks_candidate_before_staged_upshift(self):
         service = _auto_phase_service(
@@ -283,6 +305,591 @@ class TestUpdateCycleController(unittest.TestCase):
         self.assertIsNone(service._phase_switch_pending_selection)
         service._save_runtime_state.assert_called_once()
 
+    def test_auto_phase_helper_edges_cover_fallbacks_thresholds_and_lockouts(self):
+        service = _auto_phase_service(
+            requested_phase_selection="P1_P2_P3",
+            active_phase_selection="P1_P2",
+            _last_auto_metrics="bad",
+            auto_policy=None,
+            min_current=None,
+            _phase_switch_last_mismatch_selection=None,
+            _phase_switch_last_mismatch_at=None,
+            auto_phase_mismatch_retry_seconds=-1.0,
+            auto_phase_mismatch_lockout_count=-2,
+            auto_phase_mismatch_lockout_seconds=-3.0,
+            _phase_switch_mismatch_counts={"P1_P2": 2},
+            _phase_switch_lockout_selection="P1_P2",
+            _phase_switch_lockout_reason="mismatch-threshold",
+            _phase_switch_lockout_at=80.0,
+            _phase_switch_lockout_until=90.0,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        self.assertEqual(controller._current_phase_selection(service, ("P1", "P1_P2")), "P1_P2")
+        self.assertIsNone(controller._auto_phase_policy(service))
+        self.assertIsNone(controller._auto_phase_metric_surplus_watts(service))
+        self.assertIsNone(controller._phase_selection_min_surplus_watts(service, "P1", 230.0))
+        self.assertEqual(
+            controller._auto_phase_policy_state(service, ("P1",)),
+            (None, "phase-policy-disabled", None),
+        )
+
+        service.auto_policy = AutoPolicy()
+        service.auto_policy.phase.enabled = True
+        service.auto_policy.phase.mismatch_lockout_count = -2
+        service.auto_policy.phase.mismatch_lockout_seconds = -3.0
+        self.assertEqual(
+            controller._auto_phase_policy_state(service, ("P1",)),
+            (None, "single-phase-only", None),
+        )
+        self.assertEqual(
+            controller._idle_auto_phase_target(service.auto_policy.phase, ("P1",), "P1", False, False),
+            (None, "idle-hold-phase", None),
+        )
+        self.assertEqual(
+            controller._surplus_auto_phase_target(service, service.auto_policy.phase, ("P1", "P1_P2"), "P1", 230.0, 100.0),
+            (None, "phase-surplus-missing", None),
+        )
+
+        service._last_auto_metrics = {"surplus": 100.0}
+        self.assertEqual(
+            controller._surplus_auto_phase_target(service, service.auto_policy.phase, ("P1", "P1_P2"), "P1", 230.0, 100.0),
+            (None, "phase-hold", None),
+        )
+        self.assertIsNone(
+            controller._upshift_auto_phase_target(
+                service,
+                service.auto_policy.phase,
+                ("P1", "P1_P2"),
+                1,
+                "P1_P2",
+                1000.0,
+                230.0,
+                100.0,
+            )
+        )
+        self.assertIsNone(
+            controller._upshift_auto_phase_target(
+                service,
+                service.auto_policy.phase,
+                ("P1", "P1_P2"),
+                0,
+                "P1",
+                1000.0,
+                230.0,
+                100.0,
+            )
+        )
+        service.min_current = 6.0
+        self.assertIsNone(
+            controller._upshift_auto_phase_target(
+                service,
+                service.auto_policy.phase,
+                ("P1", "P1_P2"),
+                0,
+                "P1",
+                100.0,
+                230.0,
+                100.0,
+            )
+        )
+
+        self.assertFalse(controller._phase_switch_mismatch_retry_active(service, "P1_P2", "P1", 100.0))
+        service._phase_switch_last_mismatch_selection = "P1"
+        self.assertFalse(controller._phase_switch_mismatch_retry_active(service, "P1", "P1_P2", 100.0))
+        service._phase_switch_last_mismatch_selection = "P1_P2"
+        self.assertFalse(controller._phase_switch_mismatch_retry_active(service, "P1", "P1_P2", 100.0))
+        service._phase_switch_last_mismatch_at = 90.0
+        self.assertTrue(controller._phase_switch_mismatch_retry_active(service, "P1", "P1_P2", 100.0))
+        service.auto_policy.phase.mismatch_retry_seconds = 20.0
+        self.assertTrue(controller._phase_switch_mismatch_retry_active(service, "P1", "P1_P2", 100.0))
+        self.assertEqual(controller._phase_switch_lockout_threshold(service), 0)
+        self.assertEqual(controller._phase_switch_lockout_seconds(service), 0.0)
+
+        controller._clear_phase_switch_mismatch_tracking(service)
+        self.assertEqual(service._phase_switch_mismatch_counts, {})
+        self.assertIsNone(service._phase_switch_last_mismatch_selection)
+        self.assertIsNone(service._phase_switch_last_mismatch_at)
+        service._phase_switch_mismatch_counts = {"P1_P2": 1}
+        service._phase_switch_last_mismatch_selection = "P1_P2"
+        service._phase_switch_last_mismatch_at = 95.0
+        controller._clear_phase_switch_mismatch_tracking(service, "P1_P2")
+        self.assertIsNone(service._phase_switch_last_mismatch_selection)
+        self.assertIsNone(service._phase_switch_last_mismatch_at)
+
+        controller._engage_phase_switch_lockout(service, "P1_P2", 100.0)
+        self.assertIsNone(service._phase_switch_lockout_selection)
+        service.auto_policy.phase.mismatch_lockout_seconds = 30.0
+        controller._engage_phase_switch_lockout(service, "P1_P2", 100.0)
+        self.assertTrue(controller._phase_switch_lockout_active(service, 110.0, "P1_P2"))
+        self.assertFalse(controller._phase_switch_lockout_active(service, 131.0, "P1_P2"))
+
+        self.assertEqual(controller._phase_switch_fallback_selection(service, "P1", "P1_P2"), "P1")
+        with patch("shelly_wallbox.update.relay.normalize_phase_selection", side_effect=["", "P1_P2"]):
+            self.assertEqual(controller._phase_switch_fallback_selection(service, None, "P1_P2"), "P1_P2")
+
+        self.assertIsNone(
+            controller._downshift_auto_phase_target(
+                service,
+                service.auto_policy.phase,
+                ("P1", "P1_P2"),
+                "P1",
+                0,
+                10.0,
+                230.0,
+            )
+        )
+        service.min_current = None
+        self.assertIsNone(
+            controller._downshift_auto_phase_target(
+                service,
+                service.auto_policy.phase,
+                ("P1", "P1_P2"),
+                "P1_P2",
+                1,
+                10.0,
+                230.0,
+            )
+        )
+        service.min_current = 6.0
+        self.assertIsNone(
+            controller._downshift_auto_phase_target(
+                service,
+                service.auto_policy.phase,
+                ("P1", "P1_P2"),
+                "P1_P2",
+                1,
+                5000.0,
+                230.0,
+            )
+        )
+        self.assertEqual(
+            controller._downshift_auto_phase_target(
+                service,
+                service.auto_policy.phase,
+                ("P1", "P1_P2"),
+                "P1_P2",
+                1,
+                100.0,
+                230.0,
+            ),
+            ("P1", "phase-downshift", 2610.0),
+        )
+
+    def test_auto_phase_helper_edges_cover_candidate_staging_and_freshness(self):
+        service = _auto_phase_service(
+            auto_policy=None,
+            _phase_selection_requires_pause=lambda: False,
+            _peek_pending_relay_command=MagicMock(return_value=(None, None)),
+            _last_confirmed_pm_status=None,
+            _last_confirmed_pm_status_at=None,
+            _charger_backend=None,
+            _last_charger_state_at=None,
+            _last_switch_feedback_at=None,
+            _last_switch_feedback_closed=None,
+            _last_switch_interlock_ok=None,
+            _last_charger_state_enabled=None,
+            _apply_phase_selection=MagicMock(side_effect=RuntimeError("boom")),
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        self.assertEqual(controller._auto_phase_switch_delay_seconds(service, "P1", "P1_P2"), 0.0)
+        self.assertFalse(controller._auto_phase_candidate_ready(service, "P1", "P1_P2", 100.0))
+        service._auto_phase_target_candidate = "P1_P2"
+        service._auto_phase_target_since = None
+        self.assertFalse(controller._auto_phase_candidate_ready(service, "P1", "P1_P2", 100.0))
+        self.assertFalse(controller._phase_change_requires_staging(service, True, 100.0))
+        service._phase_selection_requires_pause = lambda: True
+        service._peek_pending_relay_command = MagicMock(return_value=(True, 99.0))
+        self.assertTrue(controller._phase_change_requires_staging(service, False, 100.0))
+        service._peek_pending_relay_command = MagicMock(return_value=(None, None))
+        self.assertTrue(controller._phase_change_requires_staging(service, True, 100.0))
+
+        self.assertEqual(controller._charger_state_max_age_seconds(service), 2.0)
+        service._worker_poll_interval_seconds = 0.5
+        service.auto_shelly_soft_fail_seconds = 7.0
+        self.assertEqual(controller._charger_state_max_age_seconds(service), 1.0)
+        self.assertIsInstance(controller._charger_readback_now(service), float)
+        self.assertIsNone(controller._fresh_charger_state_timestamp(service, 100.0))
+        service._charger_backend = object()
+        self.assertIsNone(controller._fresh_charger_state_timestamp(service, 100.0))
+        service._last_charger_state_at = 80.0
+        self.assertIsNone(controller._fresh_charger_state_timestamp(service, 100.0))
+        service._last_switch_feedback_at = 80.0
+        self.assertIsNone(controller._fresh_switch_feedback_timestamp(service, 100.0))
+        self.assertIsNone(controller._fresh_switch_feedback_closed(service, 100.0))
+        self.assertIsNone(controller._fresh_switch_interlock_ok(service, 100.0))
+        self.assertIsNone(controller._fresh_charger_enabled_readback(service, 100.0))
+
+        service._phase_selection_requires_pause = lambda: False
+        result = controller._apply_auto_phase_target(service, "P1_P2", True, True, 100.0)
+        self.assertIsNone(result)
+        service._mark_failure.assert_called_once_with("shelly")
+        service._warning_throttled.assert_called_once()
+
+    def test_relay_helper_edges_cover_health_status_and_learned_current_helpers(self):
+        service = _auto_phase_service(
+            _auto_phase_target_candidate="P1_P2",
+            _auto_phase_target_since=80.0,
+            _phase_switch_lockout_selection="P1_P2",
+            _phase_switch_lockout_reason="mismatch-threshold",
+            _phase_switch_lockout_at=50.0,
+            _phase_switch_lockout_until=90.0,
+            _apply_phase_selection=MagicMock(return_value="P1_P2"),
+            _phase_selection_requires_pause=lambda: False,
+            _worker_poll_interval_seconds=0.5,
+            auto_shelly_soft_fail_seconds=7.0,
+            _time_now=MagicMock(return_value=100.0),
+            _charger_backend=SimpleNamespace(set_enabled=MagicMock(), set_current=MagicMock()),
+            _last_charger_state_at=100.0,
+            _last_charger_state_enabled=None,
+            _last_switch_feedback_at=100.0,
+            _last_switch_feedback_closed=None,
+            _last_switch_interlock_ok=None,
+            _last_charger_state_power_w=1500.0,
+            _last_charger_state_actual_current_amps=7.0,
+            _last_charger_state_status="fault waiting",
+            _last_charger_state_fault="fault",
+            _last_charger_transport_reason=None,
+            _last_charger_transport_source=None,
+            _last_charger_transport_detail=None,
+            _last_charger_transport_at=None,
+            _charger_retry_reason=None,
+            _charger_retry_source=None,
+            _charger_retry_until=None,
+            _source_retry_after={},
+            _contactor_lockout_reason="contactor-suspected-open",
+            _contactor_lockout_source="feedback",
+            _contactor_lockout_at=90.0,
+            _contactor_fault_counts={"contactor-suspected-open": 1},
+            _contactor_fault_active_reason="contactor-suspected-open",
+            _contactor_fault_active_since=90.0,
+            _contactor_suspected_open_since=80.0,
+            _contactor_suspected_welded_since=81.0,
+            learned_charge_power_state="stable",
+            learned_charge_power_watts=-1.0,
+            learned_charge_power_voltage=230.0,
+            learned_charge_power_phase="3P",
+            learned_charge_power_updated_at=90.0,
+            auto_learn_charge_power_max_age_seconds=5.0,
+            min_current=6.0,
+            max_current=16.0,
+            voltage_mode="line",
+            idle_status=1,
+            virtual_set_current=10.0,
+            virtual_mode=1,
+            auto_month_windows={},
+            auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
+            auto_scheduled_night_start_delay_seconds=3600.0,
+            auto_scheduled_latest_end_time="06:30",
+            auto_scheduled_night_current_amps=0.0,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        self.assertTrue(controller._apply_auto_phase_target(service, "P1_P2", True, False, 100.0) is None)
+        self.assertIsNone(service._phase_switch_lockout_selection)
+        self.assertIsNone(service._auto_phase_target_candidate)
+        service._auto_phase_target_candidate = "P1_P2"
+        service._auto_phase_target_since = 95.0
+        self.assertIsNone(controller.maybe_apply_auto_phase_selection(service, True, False, 230.0, 100.0, False))
+        self.assertIsNone(service._auto_phase_target_candidate)
+        self.assertFalse(controller._auto_phase_selection_inactive(service, True))
+        self.assertEqual(controller._charger_state_max_age_seconds(service), 1.0)
+        self.assertEqual(controller._charger_readback_now(service), 100.0)
+        self.assertIsNone(controller._fresh_switch_feedback_closed(service, 100.0))
+        self.assertIsNone(controller._fresh_switch_interlock_ok(service, 100.0))
+        self.assertIsNone(controller._fresh_charger_enabled_readback(service, 100.0))
+        self.assertFalse(controller._pm_load_active(service, 5000.0, 20.0, False))
+        self.assertTrue(controller._charger_load_active(service, 100.0))
+        service._last_charger_state_power_w = 0.0
+        service._last_charger_state_actual_current_amps = 0.0
+        service._last_charger_state_status = "charging"
+        self.assertTrue(controller._charger_requests_load(service, 100.0))
+
+        class _NoSetattr:
+            def __setattr__(self, name, value):
+                raise AttributeError(name)
+
+        no_setattr = _NoSetattr()
+        controller._set_runtime_attr(no_setattr, "runtime_value", 5)
+        self.assertEqual(no_setattr.__dict__["runtime_value"], 5)
+
+        controller._remember_charger_retry(service, "offline", "read", 100.0)
+        self.assertEqual(service._source_retry_after["charger"], 120.0)
+        controller._clear_charger_retry(service)
+        self.assertEqual(service._source_retry_after["charger"], 0.0)
+        self.assertEqual(controller._contactor_fault_count(service, "bogus"), 0)
+        controller._clear_contactor_lockout(service)
+        self.assertEqual(service._contactor_lockout_reason, "")
+        self.assertEqual(service._contactor_lockout_source, "")
+        self.assertIsNone(service._contactor_lockout_at)
+        controller._clear_contactor_fault_tracking(service)
+        self.assertEqual(service._contactor_fault_counts, {})
+        self.assertIsNone(service._contactor_suspected_open_since)
+        self.assertIsNone(service._contactor_suspected_welded_since)
+        controller._engage_contactor_lockout(service, "bogus", 100.0, "feedback")
+        self.assertEqual(service._contactor_lockout_reason, "")
+        self.assertIsNone(controller._remember_contactor_fault(service, "bogus", 100.0))
+        self.assertEqual(controller.charger_health_override(service, 100.0), "charger-fault")
+
+        service._contactor_lockout_reason = "contactor-suspected-open"
+        service._last_switch_feedback_closed = None
+        service._last_switch_interlock_ok = True
+        self.assertEqual(
+            controller.switch_feedback_health_override(service, False, False, 100.0, power=0.0, current=0.0, pm_confirmed=False),
+            "contactor-lockout-open",
+        )
+        self.assertIsNone(controller._charger_status_override_from_tokens(service, {"mystery"}, True))
+        self.assertIsNone(controller._clamped_charger_current_target(service, None))
+        self.assertEqual(controller._apply_max_current_limit(12.0, None), 12.0)
+        self.assertIsNone(controller._validated_stable_learned_current_inputs((-1.0, 230.0, "L1", 1.0, None)))
+        self.assertIsNone(controller._validated_stable_learned_current_inputs((1000.0, 230.0, None, 1.0, None)))
+        self.assertIsNone(controller._positive_learned_scalar(0.0))
+        self.assertIsNone(controller._learned_phase_and_timestamp(None, 1.0))
+        self.assertAlmostEqual(controller._learned_phase_voltage(service, "3P", 400.0), 400.0 / math.sqrt(3.0))
+        self.assertIsNone(controller._rounded_learned_current_target(1000.0, 0.0, 3.0))
+        self.assertEqual(controller._scheduled_night_current_amps(service), 16.0)
+        self.assertIsNone(controller._derived_learned_current_target(service, 100.0))
+        self.assertIsNone(controller._charger_current_target_amps(service, True, 100.0, False))
+        service._charger_backend = None
+        self.assertIsNone(controller._charger_current_target_amps(service, True, 100.0, True))
+
+    def test_relay_mixin_direct_helper_edges_cover_shadowed_remaining_branches(self):
+        svc = SimpleNamespace(
+            _worker_poll_interval_seconds=None,
+            auto_shelly_soft_fail_seconds=None,
+            _charger_backend=object(),
+            _last_charger_state_at=100.0,
+            _last_charger_state_enabled=None,
+            _last_charger_state_power_w=0.0,
+            _last_charger_state_actual_current_amps=0.0,
+            _last_charger_state_status="charging",
+            _last_charger_state_fault=None,
+            _source_retry_after={},
+            learned_charge_power_state="stable",
+            learned_charge_power_watts=3000.0,
+            learned_charge_power_voltage=230.0,
+            learned_charge_power_phase="L1",
+            learned_charge_power_updated_at=50.0,
+            auto_learn_charge_power_max_age_seconds=10.0,
+            min_current=6.0,
+            max_current=16.0,
+            voltage_mode="line",
+            auto_scheduled_night_current_amps=0.0,
+            virtual_mode=1,
+            auto_month_windows={},
+            auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
+            auto_scheduled_night_start_delay_seconds=3600.0,
+            auto_scheduled_latest_end_time="06:30",
+            virtual_set_current=None,
+        )
+
+        self.assertEqual(_UpdateCycleRelayMixin._charger_state_max_age_seconds(svc), 2.0)
+        svc._worker_poll_interval_seconds = 0.5
+        svc.auto_shelly_soft_fail_seconds = 7.0
+        self.assertEqual(_UpdateCycleRelayMixin._charger_state_max_age_seconds(svc), 1.0)
+        self.assertFalse(_UpdateCycleRelayMixin._fresh_charger_enabled_readback(svc, 100.0))
+        self.assertTrue(_UpdateCycleRelayMixin._charger_requests_load(svc, 100.0))
+        svc.auto_policy = None
+        self.assertEqual(_UpdateCycleRelayMixin._phase_switch_mismatch_retry_seconds(svc), 300.0)
+        self.assertEqual(_UpdateCycleRelayMixin._phase_switch_lockout_seconds(svc), 1800.0)
+        svc._last_auto_metrics = {"surplus": 2600.0}
+        self.assertEqual(
+            _UpdateCycleRelayMixin._surplus_auto_phase_target(
+                svc,
+                SimpleNamespace(downshift_margin_watts=150.0, upshift_headroom_watts=250.0),
+                ("P1", "P1_P2"),
+                "P1_P2",
+                230.0,
+                100.0,
+            ),
+            ("P1", "phase-downshift", 2610.0),
+        )
+
+        class _NoRuntimeAttr:
+            __slots__ = ()
+
+            def __setattr__(self, name, value):
+                raise AttributeError(name)
+
+        with self.assertRaises(AttributeError):
+            _UpdateCycleRelayMixin._set_runtime_attr(_NoRuntimeAttr(), "x", 1)
+
+        svc._last_charger_state_status = "fault waiting"
+        self.assertEqual(_UpdateCycleRelayMixin.charger_health_override(svc, 100.0), "charger-fault")
+        self.assertIsNone(_UpdateCycleRelayMixin._derived_learned_current_target(svc, 100.0))
+        self.assertIsNone(_UpdateCycleRelayMixin.apply_charger_current_target(svc, True, 100.0, True))
+        self.assertEqual(_UpdateCycleRelayMixin._phase_switch_fallback_selection(SimpleNamespace(active_phase_selection="P1_P2"), None, "P1"), "P1_P2")
+        self.assertIsNone(_UpdateCycleRelayMixin._phase_tuple_item(True))
+        self.assertIsNone(_UpdateCycleRelayMixin._resolved_phase_tuple((1.0, None, 3.0)))
+        self.assertAlmostEqual(_UpdateCycleRelayMixin._phase_voltage(400.0, "P1_P2_P3", "line"), 400.0 / math.sqrt(3.0))
+
+    def test_relay_mixin_direct_helper_edges_cover_remaining_small_branches(self):
+        svc = SimpleNamespace(
+            auto_policy=SimpleNamespace(phase=SimpleNamespace(mismatch_retry_seconds=0.0)),
+            _phase_switch_last_mismatch_selection="P1_P2",
+            _phase_switch_last_mismatch_at=95.0,
+            _worker_poll_interval_seconds=1.0,
+            auto_shelly_soft_fail_seconds=7.0,
+            _last_charger_state_at=None,
+            _last_charger_state_enabled=True,
+            _last_charger_state_power_w=2000.0,
+            _last_charger_state_actual_current_amps=0.0,
+            _last_charger_state_status="idle",
+            _last_charger_state_phase_selection="P1_P2",
+            _last_auto_metrics={"surplus": 2600.0},
+            _phase_switch_requested_at=None,
+            phase_switch_pause_seconds=1.0,
+            phase_switch_stabilization_seconds=2.0,
+            _relay_sync_failure_reported=True,
+            _relay_sync_requested_at=90.0,
+            _mark_failure=MagicMock(),
+            _warning_throttled=MagicMock(),
+            _charger_backend=SimpleNamespace(set_current=MagicMock()),
+            learned_charge_power_state="unknown",
+            _source_retry_after={},
+            min_current=6.0,
+            max_current=16.0,
+        )
+
+        self.assertFalse(_UpdateCycleRelayMixin._phase_switch_mismatch_retry_active(svc, "P1", "P1_P2", 100.0))
+        self.assertIsNone(_UpdateCycleRelayMixin._fresh_charger_enabled_readback(svc, 100.0))
+        svc._last_charger_state_at = 100.0
+        self.assertTrue(_UpdateCycleRelayMixin._fresh_charger_enabled_readback(svc, 100.0))
+        self.assertTrue(_UpdateCycleRelayMixin._charger_requests_load(svc, 100.0))
+        self.assertIsNone(_UpdateCycleRelayMixin._observed_phase_selection_from_pm_status({}))
+        self.assertEqual(_UpdateCycleRelayMixin._observed_phase_selection(svc, {}, 100.0), "P1_P2")
+        svc._last_charger_state_phase_selection = None
+        self.assertIsNone(_UpdateCycleRelayMixin._observed_phase_selection(svc, {}, 100.0))
+        self.assertIsNone(_UpdateCycleRelayMixin._phase_switch_verification_deadline(svc))
+        svc._phase_switch_requested_at = 95.0
+        self.assertEqual(_UpdateCycleRelayMixin._phase_switch_verification_deadline(svc), 105.0)
+
+        controller = UpdateCycleController(svc, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+        controller._record_relay_sync_timeout(svc, relay_on=False, pm_confirmed=False, expected_relay=True, deadline_at=100.0)
+        svc._mark_failure.assert_not_called()
+        svc._warning_throttled.assert_not_called()
+
+        with patch.object(_UpdateCycleRelayMixin, "_charger_current_target_amps", return_value=None):
+            self.assertIsNone(_UpdateCycleRelayMixin.apply_charger_current_target(svc, True, 100.0, True))
+
+    def test_phase_switch_resume_helper_covers_no_resume_auto_failure_and_noop_paths(self):
+        service = _auto_phase_service(
+            _phase_switch_resume_relay=False,
+            _save_runtime_state=MagicMock(),
+            _mark_failure=MagicMock(),
+            _warning_throttled=MagicMock(),
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        self.assertEqual(
+            controller._resume_after_phase_switch_pause(service, False, 12.0, 3.0, True, 100.0, False),
+            (False, 12.0, 3.0, True),
+        )
+        service._save_runtime_state.assert_called()
+
+        service._phase_switch_resume_relay = True
+        service._save_runtime_state.reset_mock()
+        self.assertEqual(
+            controller._resume_after_phase_switch_pause(service, False, 12.0, 3.0, True, 101.0, True),
+            (False, 12.0, 3.0, True),
+        )
+        self.assertTrue(service._ignore_min_offtime_once)
+
+        service._phase_switch_resume_relay = True
+        service._save_runtime_state.reset_mock()
+        with patch.object(controller, "_apply_enabled_target", side_effect=RuntimeError("boom")):
+            self.assertEqual(
+                controller._resume_after_phase_switch_pause(service, False, 12.0, 3.0, True, 102.0, False),
+                (False, 12.0, 3.0, True),
+            )
+        service._mark_failure.assert_called()
+        service._warning_throttled.assert_called()
+
+        service._phase_switch_resume_relay = True
+        service._save_runtime_state.reset_mock()
+        with patch.object(controller, "_apply_enabled_target", return_value=False):
+            self.assertEqual(
+                controller._resume_after_phase_switch_pause(service, False, 12.0, 3.0, True, 103.0, False),
+                (False, 12.0, 3.0, True),
+            )
+
+    def test_phase_switch_waiting_and_stabilizing_helpers_cover_remaining_branches(self):
+        service = _auto_phase_service(
+            _phase_switch_pending_selection="P1_P2",
+            _phase_switch_state="waiting-relay-off",
+            _phase_switch_requested_at=98.0,
+            _phase_switch_resume_relay=True,
+            _save_runtime_state=MagicMock(),
+            _mark_failure=MagicMock(),
+            _warning_throttled=MagicMock(),
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        service._peek_pending_relay_command.return_value = (True, 99.0)
+        self.assertFalse(controller._phase_switch_waiting_ready(service, False, True, 100.0))
+        self.assertEqual(
+            controller._orchestrate_waiting_phase_switch(service, "P1_P2", False, 10.0, 2.0, True, 100.0, False),
+            (False, 10.0, 2.0, True, False),
+        )
+
+        service._peek_pending_relay_command.return_value = (None, None)
+        service._apply_phase_selection = MagicMock(side_effect=RuntimeError("apply failed"))
+        result = controller._orchestrate_waiting_phase_switch(service, "P1_P2", False, 11.0, 3.0, True, 101.0, False)
+        self.assertEqual(result[-1], None)
+        self.assertEqual(service.requested_phase_selection, "P1")
+        service._mark_failure.assert_called()
+        service._warning_throttled.assert_called()
+
+        service._phase_switch_state = "stabilizing"
+        service._phase_switch_pending_selection = "P1_P2"
+        service._phase_switch_stable_until = 120.0
+        self.assertEqual(
+            controller._orchestrate_stabilizing_phase_switch(service, "P1_P2", {}, False, 0.0, 0.0, False, 110.0, False),
+            (False, 0.0, 0.0, False, False),
+        )
+
+        service._phase_switch_stable_until = 100.0
+        service._phase_switch_lockout_selection = "P1_P2"
+        with patch.object(controller, "_resume_after_phase_switch_pause", return_value=(True, 0.0, 0.0, False)) as resume_mock:
+            result = controller._orchestrate_stabilizing_phase_switch(
+                service,
+                "P1_P2",
+                {"_phase_selection": "P1_P2"},
+                False,
+                0.0,
+                0.0,
+                False,
+                121.0,
+                False,
+            )
+        self.assertEqual(result, (True, 0.0, 0.0, False, None))
+        resume_mock.assert_called_once()
+        self.assertIsNone(service._phase_switch_lockout_selection)
+
+    def test_relay_decision_failure_records_charger_transport_retry(self):
+        service = SimpleNamespace(
+            _charger_backend=SimpleNamespace(set_enabled=MagicMock()),
+            _last_charger_transport_reason=None,
+            _last_charger_transport_source=None,
+            _last_charger_transport_detail=None,
+            _last_charger_transport_at=None,
+            _charger_retry_reason=None,
+            _charger_retry_source=None,
+            _source_retry_after={},
+            auto_shelly_soft_fail_seconds=10.0,
+            _mark_failure=MagicMock(),
+            _warning_throttled=MagicMock(),
+        )
+
+        UpdateCycleController._handle_relay_decision_failure(service, ModbusSlaveOfflineError("offline"))
+
+        self.assertEqual(service._last_charger_transport_reason, "offline")
+        self.assertEqual(service._last_charger_transport_source, "enable")
+        self.assertEqual(service._charger_retry_reason, "offline")
+        self.assertEqual(service._charger_retry_source, "enable")
+        self.assertIn("charger", service._source_retry_after)
+
     def test_normalize_learned_charge_power_state_falls_back_to_unknown_for_invalid_values(self):
         self.assertEqual(UpdateCycleController._normalize_learned_charge_power_state("weird"), "unknown")
 
@@ -315,6 +922,287 @@ class TestUpdateCycleController(unittest.TestCase):
                 service._software_update_next_check_at,
                 100.0 + UpdateCycleController.SOFTWARE_UPDATE_CHECK_INTERVAL_SECONDS,
             )
+
+    def test_software_update_helper_methods_cover_text_and_state_branches(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bootstrap_state = Path(temp_dir) / ".bootstrap-state"
+            bootstrap_state.mkdir(parents=True, exist_ok=True)
+            (bootstrap_state / "installed_version").write_text("2.0.0\nextra\n", encoding="utf-8")
+            (bootstrap_state / "installed_bundle_sha256").write_text("abc123  payload\n", encoding="utf-8")
+            service = self._software_update_service(temp_dir)
+
+            self.assertEqual(UpdateCycleController._read_text_file(""), "")
+            self.assertEqual(UpdateCycleController._read_text_file(Path(temp_dir) / "missing.txt"), "")
+            self.assertEqual(UpdateCycleController._local_software_update_version(service), "2.0.0")
+            self.assertEqual(UpdateCycleController._local_installed_bundle_hash(service), "abc123")
+
+            service._software_update_available = False
+            service._software_update_last_check_at = None
+            self.assertEqual(UpdateCycleController._software_update_state_for_no_update_block(service), "idle")
+            service._software_update_last_check_at = 100.0
+            self.assertEqual(UpdateCycleController._software_update_state_for_no_update_block(service), "up-to-date")
+            service._software_update_available = True
+            self.assertEqual(UpdateCycleController._software_update_state_for_no_update_block(service), "available-blocked")
+
+            UpdateCycleController._set_software_update_state(
+                service,
+                "available",
+                detail="detail",
+                available=True,
+                available_version="2.0.1",
+                last_result="success",
+            )
+            self.assertEqual(service._software_update_state, "available")
+            self.assertEqual(service._software_update_detail, "detail")
+            self.assertTrue(service._software_update_available)
+            self.assertEqual(service._software_update_available_version, "2.0.1")
+            self.assertEqual(service._software_update_last_result, "success")
+
+    def test_software_update_check_covers_version_source_and_failure_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            (repo_root / "version.txt").write_text("1.2.3\n", encoding="utf-8")
+            service = self._software_update_service(
+                temp_dir,
+                software_update_manifest_source="",
+                software_update_version_source="https://example.invalid/version.txt",
+            )
+            controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+            response = MagicMock()
+            response.raise_for_status.return_value = None
+            response.text = "1.2.4\n"
+
+            with patch("shelly_wallbox.update.controller.requests.get", return_value=response):
+                controller._run_software_update_check(service, 100.0)
+
+            self.assertEqual(service._software_update_state, "available")
+            self.assertEqual(service._software_update_available_version, "1.2.4")
+            self.assertEqual(service._software_update_detail, "version-file")
+
+            with patch("shelly_wallbox.update.controller.requests.get", side_effect=RuntimeError("network down")):
+                controller._run_software_update_check(service, 120.0)
+
+            self.assertEqual(service._software_update_state, "check-failed")
+            self.assertEqual(service._software_update_detail, "network down")
+            self.assertFalse(service._software_update_available)
+
+    def test_software_update_check_uses_manifest_version_without_bundle_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            (repo_root / "version.txt").write_text("1.2.3\n", encoding="utf-8")
+            service = self._software_update_service(temp_dir)
+            controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+            response = MagicMock()
+            response.raise_for_status.return_value = None
+            response.json.return_value = {"version": "1.2.4"}
+
+            with patch("shelly_wallbox.update.controller.requests.get", return_value=response):
+                controller._run_software_update_check(service, 100.0)
+
+            self.assertTrue(service._software_update_available)
+            self.assertEqual(service._software_update_available_version, "1.2.4")
+
+    def test_software_update_run_and_poll_cover_process_lifecycle_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            (repo_root / "install.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            restart_dir = repo_root / "deploy" / "venus"
+            restart_dir.mkdir(parents=True, exist_ok=True)
+            (restart_dir / "restart_shelly_wallbox.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            service = self._software_update_service(temp_dir)
+            controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+            active_process = MagicMock()
+            service._software_update_process = active_process
+            self.assertFalse(controller._start_software_update_run(service, 100.0, "manual"))
+            self.assertIsNone(service._software_update_run_requested_at)
+
+            service._software_update_process = None
+            service.software_update_install_script = str(repo_root / "missing-install.sh")
+            self.assertFalse(controller._start_software_update_run(service, 100.0, "manual"))
+            self.assertEqual(service._software_update_state, "update-unavailable")
+            self.assertEqual(service._software_update_detail, "install.sh missing")
+
+            service.software_update_install_script = str(repo_root / "install.sh")
+            fake_process = MagicMock()
+            with patch("shelly_wallbox.update.controller.subprocess.Popen", return_value=fake_process) as popen_mock:
+                self.assertTrue(controller._start_software_update_run(service, 130.0, "manual"))
+
+            popen_mock.assert_called_once()
+            self.assertIs(service._software_update_process, fake_process)
+            self.assertEqual(service._software_update_state, "running")
+            self.assertEqual(service._software_update_detail, "manual")
+            self.assertEqual(service._software_update_last_run_at, 130.0)
+            log_handle = service._software_update_process_log_handle
+
+            service._software_update_process = fake_process
+            fake_process.poll.return_value = None
+            controller._poll_software_update_process(service)
+            self.assertIs(service._software_update_process, fake_process)
+
+            fake_process.poll.return_value = 0
+            controller._poll_software_update_process(service)
+            self.assertIsNone(service._software_update_process)
+            self.assertEqual(service._software_update_state, "installed")
+
+            failing_process = MagicMock()
+            failing_process.poll.return_value = 9
+            failing_log = MagicMock()
+            service._software_update_process = failing_process
+            service._software_update_process_log_handle = failing_log
+            controller._poll_software_update_process(service)
+            failing_log.close.assert_called_once_with()
+            self.assertEqual(service._software_update_state, "install-failed")
+            self.assertEqual(service._software_update_detail, "exit 9")
+            if log_handle is not None and hasattr(log_handle, "close"):
+                log_handle.close()
+
+    def test_software_update_run_and_housekeeping_cover_failure_and_due_check_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            (repo_root / "install.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            restart_dir = repo_root / "deploy" / "venus"
+            restart_dir.mkdir(parents=True, exist_ok=True)
+            (restart_dir / "restart_shelly_wallbox.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            service = self._software_update_service(temp_dir, _software_update_next_check_at=100.0)
+            controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+            with patch("shelly_wallbox.update.controller.subprocess.Popen", side_effect=RuntimeError("spawn failed")):
+                self.assertFalse(controller._start_software_update_run(service, 120.0, "manual"))
+
+            self.assertEqual(service._software_update_state, "install-failed")
+            self.assertEqual(service._software_update_detail, "spawn failed")
+
+            with patch.object(UpdateCycleController, "_run_software_update_check") as check_mock:
+                controller._software_update_housekeeping(service, 120.0)
+            check_mock.assert_called_once_with(service, 120.0)
+
+            process = MagicMock()
+            process.poll.return_value = 1
+            failing_log = MagicMock()
+            failing_log.close.side_effect = OSError("close failed")
+            service._software_update_process = process
+            service._software_update_process_log_handle = failing_log
+            controller._poll_software_update_process(service)
+            self.assertEqual(service._software_update_state, "install-failed")
+
+    def test_software_update_run_failure_tolerates_log_close_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            (repo_root / "install.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            restart_dir = repo_root / "deploy" / "venus"
+            restart_dir.mkdir(parents=True, exist_ok=True)
+            (restart_dir / "restart_shelly_wallbox.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            service = self._software_update_service(temp_dir)
+            controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+            fake_log = MagicMock()
+            fake_log.close.side_effect = OSError("close failed")
+            with patch("builtins.open", return_value=fake_log), patch(
+                "shelly_wallbox.update.controller.subprocess.Popen",
+                side_effect=RuntimeError("spawn failed"),
+            ):
+                self.assertFalse(controller._start_software_update_run(service, 120.0, "manual"))
+
+            self.assertEqual(service._software_update_state, "install-failed")
+
+    def test_update_cycle_health_helpers_cover_blocking_reason_variants(self) -> None:
+        service = SimpleNamespace(
+            auto_shelly_soft_fail_seconds=10.0,
+            _warning_throttled=MagicMock(),
+            _last_charger_transport_source="charger",
+            _last_charger_transport_detail="timeout",
+            _last_charger_state_status="charging",
+            _last_charger_state_fault="fault",
+            _last_switch_interlock_ok=False,
+            _contactor_fault_counts={
+                "contactor-suspected-open": 2,
+                "contactor-suspected-welded": 3,
+            },
+            _contactor_lockout_source="feedback",
+            _last_switch_feedback_closed=True,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        with patch.object(controller, "charger_health_override", return_value="charger-transport-timeout"):
+            self.assertEqual(controller._blocking_charger_health(True, False, 100.0), "charger-transport-timeout")
+        with patch.object(controller, "charger_health_override", return_value="charger-fault"):
+            self.assertEqual(controller._blocking_charger_health(True, False, 100.0), "charger-fault")
+        with patch.object(controller, "charger_health_override", return_value=None):
+            self.assertIsNone(controller._blocking_charger_health(True, False, 100.0))
+
+        for reason in (
+            "contactor-interlock",
+            "contactor-suspected-open",
+            "contactor-suspected-welded",
+            "contactor-lockout-open",
+            "contactor-lockout-welded",
+            "switch-feedback-mismatch",
+        ):
+            with self.subTest(reason=reason):
+                with patch.object(controller, "switch_feedback_health_override", return_value=reason):
+                    self.assertEqual(
+                        controller._blocking_switch_feedback_health(True, True, 2300.0, 10.0, True, 100.0),
+                        reason,
+                    )
+
+        with patch.object(controller, "switch_feedback_health_override", return_value=None):
+            self.assertIsNone(controller._blocking_switch_feedback_health(True, True, 2300.0, 10.0, True, 100.0))
+
+        self.assertTrue(controller._desired_relay_target(service, False, True, None, None, None))
+        service._auto_decide_relay = MagicMock(return_value=False)
+        self.assertFalse(controller._desired_relay_target(service, True, None, None, None, None))
+
+    def test_update_cycle_helpers_cover_offline_inputs_and_relay_resolution_edges(self) -> None:
+        service = SimpleNamespace(
+            _last_confirmed_pm_status="bad",
+            _last_confirmed_pm_status_at=100.0,
+            relay_sync_timeout_seconds=3.0,
+            virtual_mode=1,
+            _auto_cached_inputs_used=True,
+            _auto_decide_relay=MagicMock(return_value=True),
+            _bump_update_index=MagicMock(),
+            _time_now=MagicMock(return_value=123.0),
+            _last_successful_update_at=None,
+            _last_recovery_attempt_at=1.0,
+            last_update=0.0,
+            _warning_throttled=MagicMock(),
+            auto_shelly_soft_fail_seconds=10.0,
+            _last_charger_transport_source="source",
+            _last_charger_transport_detail="detail",
+            _last_charger_state_status="charging",
+            _last_charger_state_fault=None,
+            _last_switch_feedback_closed=True,
+            _contactor_fault_counts={},
+            _contactor_lockout_source="",
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        self.assertIsNone(controller._fresh_offline_pm_status(service, 101.0))
+        self.assertEqual(controller._offline_power_state(), (0.0, 0.0, 0))
+        self.assertEqual(controller.resolve_auto_inputs({}, 100.0, False), (None, None, None))
+        self.assertFalse(service._auto_cached_inputs_used)
+
+        controller.complete_update_cycle(service, False, 200.0, False, 0.0, 0.0, 0, None, None, None)
+        service._bump_update_index.assert_not_called()
+        self.assertEqual(service._last_successful_update_at, 123.0)
+
+        controller.complete_update_cycle(service, True, 201.0, False, 0.0, 0.0, 0, None, None, None)
+        service._bump_update_index.assert_called_once_with(201.0)
+
+        with patch.object(controller, "orchestrate_pending_phase_switch", return_value=(True, 2300.0, 10.0, True, None)), patch.object(
+            controller,
+            "_blocking_switch_feedback_health",
+            return_value="switch-feedback-mismatch",
+        ), patch.object(controller, "_blocking_charger_health", return_value=None), patch.object(
+            controller,
+            "maybe_apply_auto_phase_selection",
+            return_value=True,
+        ), patch.object(controller, "apply_charger_current_target") as apply_target:
+            result = controller._resolved_relay_decision({}, True, 2300.0, 230.0, 10.0, True, 100.0, True, 5000.0, 50.0, -1000.0)
+
+        self.assertEqual(result, (True, 2300.0, 10.0, True, True, "switch-feedback-mismatch"))
+        apply_target.assert_called_once_with(service, True, 100.0, True)
 
     def test_software_update_run_is_blocked_by_no_update_marker(self):
         with tempfile.TemporaryDirectory() as temp_dir:

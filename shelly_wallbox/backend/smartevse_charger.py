@@ -115,33 +115,42 @@ def _rounded_current_setting(amps: float, *, max_current_amps: int | None = None
     rounded = int(math.floor(float(amps) + 0.5))
     if rounded == 0:
         return 0
+    _validate_smartevse_current_range(amps, rounded)
+    _validate_smartevse_current_ceiling(amps, rounded, max_current_amps)
+    return rounded
+
+
+def _validate_smartevse_current_range(amps: float, rounded: int) -> None:
+    """Validate that one SmartEVSE current is inside the hardware range."""
     if rounded < _SMARTEVSE_MIN_CURRENT_AMPS or rounded > _SMARTEVSE_MAX_CURRENT_AMPS:
         raise ValueError(
             "Unsupported charger current "
             f"'{amps}' for SmartEVSE backend (expected 0 or {_SMARTEVSE_MIN_CURRENT_AMPS}..{_SMARTEVSE_MAX_CURRENT_AMPS} A)"
         )
+
+
+def _validate_smartevse_current_ceiling(amps: float, rounded: int, max_current_amps: int | None) -> None:
+    """Validate one SmartEVSE current against an optional configured ceiling."""
     if max_current_amps is not None and max_current_amps >= _SMARTEVSE_MIN_CURRENT_AMPS and rounded > max_current_amps:
         raise ValueError(
             "Unsupported charger current "
             f"'{amps}' for SmartEVSE backend (exceeds SmartEVSE maximum charging current {max_current_amps} A)"
         )
-    return rounded
 
 
 def _fault_tokens(error_bits: int) -> list[str]:
     """Return one normalized SmartEVSE fault token list."""
-    faults: list[str] = []
-    if int(error_bits) & _SMARTEVSE_ERROR_LESS_THAN_6A_BIT:
-        faults.append("less-than-6a")
-    if int(error_bits) & _SMARTEVSE_ERROR_NO_COMM_BIT:
-        faults.append("no-comm")
-    if int(error_bits) & _SMARTEVSE_ERROR_TEMP_HIGH_BIT:
-        faults.append("temp-high")
-    if int(error_bits) & _SMARTEVSE_ERROR_RCD_BIT:
-        faults.append("rcd")
-    if int(error_bits) & _SMARTEVSE_ERROR_NO_SUN_BIT:
-        faults.append("no-sun")
-    return faults
+    return [
+        token
+        for mask, token in (
+            (_SMARTEVSE_ERROR_LESS_THAN_6A_BIT, "less-than-6a"),
+            (_SMARTEVSE_ERROR_NO_COMM_BIT, "no-comm"),
+            (_SMARTEVSE_ERROR_TEMP_HIGH_BIT, "temp-high"),
+            (_SMARTEVSE_ERROR_RCD_BIT, "rcd"),
+            (_SMARTEVSE_ERROR_NO_SUN_BIT, "no-sun"),
+        )
+        if int(error_bits) & mask
+    ]
 
 
 def _fault_text(error_bits: int) -> str | None:
@@ -159,7 +168,7 @@ def _status_text(state_value: int, error_bits: int, enabled: bool, mode_value: i
     """Return one normalized SmartEVSE status text."""
     if int(error_bits) & _SMARTEVSE_HARD_ERROR_BITS:
         return "error"
-    if int(error_bits) & _SMARTEVSE_ERROR_NO_SUN_BIT and int(mode_value) == _SMARTEVSE_MODE_SOLAR:
+    if _smartevse_waiting_for_solar(error_bits, mode_value):
         return "waiting-solar"
     if not bool(enabled) and int(state_value) not in {2, 6, 7, 10}:
         return "disabled"
@@ -176,6 +185,11 @@ def _status_text(state_value: int, error_bits: int, enabled: bool, mode_value: i
         9: "connected-authorized",
         10: "charging-authorized",
     }.get(int(state_value))
+
+
+def _smartevse_waiting_for_solar(error_bits: int, mode_value: int) -> bool:
+    """Return whether SmartEVSE currently waits for solar surplus."""
+    return bool(int(error_bits) & _SMARTEVSE_ERROR_NO_SUN_BIT and int(mode_value) == _SMARTEVSE_MODE_SOLAR)
 
 
 class SmartEvseChargerBackend:

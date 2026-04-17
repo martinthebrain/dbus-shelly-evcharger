@@ -225,6 +225,14 @@ class TestShellyWallboxAutoInputHelper(unittest.TestCase):
         self.assertIsNone(snapshot["pv_power"])
         self.assertIsNone(snapshot["pv_captured_at"])
 
+    def test_configured_auto_battery_service_returns_none_when_soc_is_missing(self):
+        helper = self._make_helper()
+        helper._get_dbus_value = MagicMock(return_value=None)
+
+        self.assertIsNone(helper._configured_auto_battery_service(100.0))
+        self.assertIsNone(helper._resolved_auto_battery_service)
+        self.assertEqual(helper._auto_battery_last_scan, 0.0)
+
     def test_parent_alive_uses_parent_pid_and_handles_errors(self):
         helper = self._make_helper()
         helper.parent_pid = 1234

@@ -6,7 +6,13 @@ from types import SimpleNamespace
 from typing import cast
 from unittest.mock import MagicMock
 
-from shelly_wallbox.backend.factory import build_service_backends
+from shelly_wallbox.backend.factory import (
+    _resolved_meter_backend,
+    _resolved_switch_backend,
+    build_service_backends,
+)
+from shelly_wallbox.backend.models import BackendSelection
+from shelly_wallbox.backend.registry import create_meter_backend
 from shelly_wallbox.backend.goe_charger import GoEChargerBackend
 from shelly_wallbox.backend.modbus_charger import ModbusChargerBackend
 from shelly_wallbox.backend.shelly_combined import ShellyCombinedBackend
@@ -22,6 +28,26 @@ from shelly_wallbox.backend.template_switch import TemplateSwitchBackend
 
 
 class TestShellyWallboxBackendFactory(unittest.TestCase):
+    def test_private_resolvers_reject_none_backends_outside_split_mode(self) -> None:
+        selection = BackendSelection(
+            mode="combined",
+            meter_type="none",
+            switch_type="none",
+            charger_type=None,
+            meter_config_path=Path(""),
+            switch_config_path=Path(""),
+            charger_config_path=Path(""),
+        )
+
+        with self.assertRaisesRegex(ValueError, "MeterType=none"):
+            _resolved_meter_backend(selection, SimpleNamespace())
+        with self.assertRaisesRegex(ValueError, "SwitchType=none"):
+            _resolved_switch_backend(selection, SimpleNamespace())
+
+    def test_registry_rejects_unsupported_meter_backend_type(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unsupported meter backend"):
+            create_meter_backend("unknown", SimpleNamespace(), "")
+
     def test_build_service_backends_uses_default_combined_selection(self) -> None:
         service = SimpleNamespace(
             phase="L1",

@@ -29,6 +29,16 @@ from shelly_wallbox.update.relay import _UpdateCycleRelayMixin
 from shelly_wallbox.update.state import _UpdateCycleStateMixin
 
 
+def _software_update_install_script_missing(install_script: str, repo_root: str) -> bool:
+    """Return whether the install script or repo root is unavailable."""
+    return not install_script or not os.path.isfile(install_script) or not repo_root
+
+
+def _software_update_restart_script_missing(restart_script: str) -> bool:
+    """Return whether the restart handoff script is unavailable."""
+    return not restart_script or not os.path.isfile(restart_script)
+
+
 class UpdateCycleController(
     _UpdateCycleStateMixin,
     _UpdateCycleRelayMixin,
@@ -129,13 +139,82 @@ class UpdateCycleController(
         return "idle"
 
     @classmethod
+    def _software_update_manifest_result(
+        cls,
+        manifest_source: str,
+        current_version: str,
+        installed_bundle_hash: str,
+    ) -> tuple[str, bool, str]:
+        """Return version, availability, and detail from one manifest source."""
+        response = requests.get(manifest_source, timeout=cls.SOFTWARE_UPDATE_REQUEST_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            return "", False, ""
+        available_version = cls._software_update_payload_value(payload, "version")
+        bundle_hash = cls._software_update_payload_value(payload, "bundle_sha256")
+        available = cls._software_update_manifest_available(
+            available_version,
+            bundle_hash,
+            current_version,
+            installed_bundle_hash,
+        )
+        return available_version, available, "manifest"
+
+    @staticmethod
+    def _software_update_payload_value(payload: dict[str, Any], key: str) -> str:
+        """Return one trimmed string value from an update payload."""
+        return str(payload.get(key, "") or "").strip()
+
+    @staticmethod
+    def _software_update_manifest_available(
+        available_version: str,
+        bundle_hash: str,
+        current_version: str,
+        installed_bundle_hash: str,
+    ) -> bool:
+        """Return whether a manifest payload announces a newer installable update."""
+        if bundle_hash and installed_bundle_hash:
+            return bundle_hash != installed_bundle_hash
+        return bool(available_version and available_version != current_version)
+
+    @classmethod
+    def _software_update_version_result(
+        cls,
+        version_source: str,
+        current_version: str,
+    ) -> tuple[str, bool, str]:
+        """Return version, availability, and detail from one version-text source."""
+        response = requests.get(version_source, timeout=cls.SOFTWARE_UPDATE_REQUEST_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        available_version = str(response.text or "").splitlines()[0].strip()
+        return available_version, bool(available_version and available_version != current_version), "version-file"
+
+    @classmethod
+    def _software_update_availability_state(cls, svc: Any, available: bool) -> str:
+        """Return the outward software-update state for one availability result."""
+        if available and cls._software_update_no_update_active(svc):
+            return "available-blocked"
+        return "available" if available else "up-to-date"
+
+    @classmethod
+    def _software_update_check_sources(
+        cls,
+        svc: Any,
+    ) -> tuple[str, str, str, str]:
+        """Return normalized software-update source inputs and local identifiers."""
+        return (
+            str(getattr(svc, "software_update_manifest_source", "") or "").strip(),
+            str(getattr(svc, "software_update_version_source", "") or "").strip(),
+            str(getattr(svc, "_software_update_current_version", "") or ""),
+            cls._local_installed_bundle_hash(svc),
+        )
+
+    @classmethod
     def _run_software_update_check(cls, svc: Any, now: float) -> None:
         """Refresh remote software-update availability from manifest or version text."""
         cls._refresh_software_update_local_state(svc)
-        manifest_source = str(getattr(svc, "software_update_manifest_source", "") or "").strip()
-        version_source = str(getattr(svc, "software_update_version_source", "") or "").strip()
-        current_version = str(getattr(svc, "_software_update_current_version", "") or "")
-        installed_bundle_hash = cls._local_installed_bundle_hash(svc)
+        manifest_source, version_source, current_version, installed_bundle_hash = cls._software_update_check_sources(svc)
         available_version = ""
         available = False
         detail = ""
@@ -143,30 +222,21 @@ class UpdateCycleController(
         try:
             cls._set_software_update_state(svc, "checking", detail="")
             if manifest_source:
-                response = requests.get(manifest_source, timeout=cls.SOFTWARE_UPDATE_REQUEST_TIMEOUT_SECONDS)
-                response.raise_for_status()
-                payload = response.json()
-                if isinstance(payload, dict):
-                    available_version = str(payload.get("version", "") or "").strip()
-                    bundle_hash = str(payload.get("bundle_sha256", "") or "").strip()
-                    if bundle_hash and installed_bundle_hash:
-                        available = bundle_hash != installed_bundle_hash
-                    elif available_version:
-                        available = available_version != current_version
-                    detail = "manifest"
+                available_version, available, detail = cls._software_update_manifest_result(
+                    manifest_source,
+                    current_version,
+                    installed_bundle_hash,
+                )
             if not available_version and version_source:
-                response = requests.get(version_source, timeout=cls.SOFTWARE_UPDATE_REQUEST_TIMEOUT_SECONDS)
-                response.raise_for_status()
-                available_version = str(response.text or "").splitlines()[0].strip()
-                available = bool(available_version and available_version != current_version)
-                detail = "version-file"
+                available_version, available, detail = cls._software_update_version_result(
+                    version_source,
+                    current_version,
+                )
             svc._software_update_last_check_at = now
             svc._software_update_next_check_at = now + cls.SOFTWARE_UPDATE_CHECK_INTERVAL_SECONDS
             cls._set_software_update_state(
                 svc,
-                "available-blocked"
-                if (available and cls._software_update_no_update_active(svc))
-                else ("available" if available else "up-to-date"),
+                cls._software_update_availability_state(svc, available),
                 detail=detail,
                 available=available,
                 available_version=available_version,
@@ -185,81 +255,186 @@ class UpdateCycleController(
     @classmethod
     def _start_software_update_run(cls, svc: Any, now: float, source: str) -> bool:
         """Launch one detached software-update run through the bootstrap installer."""
-        if getattr(svc, "_software_update_process", None) is not None:
-            svc._software_update_run_requested_at = None
+        if cls._software_update_run_already_active(svc):
             return False
         cls._refresh_software_update_local_state(svc)
-        if cls._software_update_no_update_active(svc):
-            cls._set_software_update_state(
-                svc,
-                cls._software_update_state_for_no_update_block(svc),
-                detail="noUpdate marker present",
-            )
-            svc._software_update_run_requested_at = None
+        if cls._software_update_run_blocked_by_no_update(svc):
             return False
+        run_paths = cls._prepared_software_update_run_paths(svc)
+        if run_paths is None:
+            return False
+        return cls._launch_software_update_run(svc, run_paths, now, source)
 
-        install_script = str(getattr(svc, "software_update_install_script", "") or "")
-        repo_root = str(getattr(svc, "software_update_repo_root", "") or "")
-        restart_script = str(getattr(svc, "software_update_restart_script", "") or "")
-        if not install_script or not os.path.isfile(install_script) or not repo_root:
-            cls._set_software_update_state(
-                svc,
-                "update-unavailable",
-                detail="install.sh missing",
-                last_result="failed",
-            )
-            svc._software_update_run_requested_at = None
-            return False
-        if not restart_script or not os.path.isfile(restart_script):
-            cls._set_software_update_state(
-                svc,
-                "update-unavailable",
-                detail="restart script missing",
-                last_result="failed",
-            )
-            svc._software_update_run_requested_at = None
-            return False
-
+    @classmethod
+    def _launch_software_update_run(
+        cls,
+        svc: Any,
+        run_paths: tuple[str, str],
+        now: float,
+        source: str,
+    ) -> bool:
+        """Spawn the detached update process and publish the running state."""
+        repo_root, restart_script = run_paths
         log_path = str(getattr(svc, "software_update_log_path", "") or "")
-        log_handle = None
         try:
-            log_dir = os.path.dirname(log_path)
-            if log_dir:
-                os.makedirs(log_dir, exist_ok=True)
-            log_handle = open(log_path, "ab")  # pylint: disable=consider-using-with
-            command = ["/bin/bash", "-lc", f'cd "{repo_root}" && "./install.sh" && "{restart_script}"']
-            process = subprocess.Popen(  # pylint: disable=consider-using-with
-                command,
-                cwd=repo_root,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
+            process, log_handle = cls._spawn_software_update_process(log_path, repo_root, restart_script)
         except Exception as error:  # pylint: disable=broad-except
-            if log_handle is not None:
-                try:
-                    log_handle.close()
-                except OSError:
-                    pass
-            cls._set_software_update_state(
-                svc,
-                "install-failed",
-                detail=str(error),
-                last_result="failed",
-            )
-            svc._software_update_run_requested_at = None
+            cls._software_update_mark_install_failed(svc, error)
             return False
         svc._software_update_process = process
         svc._software_update_process_log_handle = log_handle
         svc._software_update_last_run_at = now
         svc._software_update_run_requested_at = None
+        cls._set_software_update_state(svc, "running", detail=source, last_result="running")
+        return True
+
+    @classmethod
+    def _prepared_software_update_run_paths(cls, svc: Any) -> tuple[str, str] | None:
+        """Return normalized repo-root and restart-script paths when the run is available."""
+        install_script, repo_root, restart_script = cls._software_update_run_paths(svc)
+        unavailable_detail = cls._software_update_unavailable_detail(install_script, repo_root, restart_script)
+        if unavailable_detail is None:
+            return repo_root, restart_script
+        cls._software_update_mark_unavailable(svc, unavailable_detail)
+        return None
+
+    @staticmethod
+    def _software_update_run_paths(svc: Any) -> tuple[str, str, str]:
+        """Return normalized install, repo-root, and restart paths for update runs."""
+        return (
+            str(getattr(svc, "software_update_install_script", "") or ""),
+            str(getattr(svc, "software_update_repo_root", "") or ""),
+            str(getattr(svc, "software_update_restart_script", "") or ""),
+        )
+
+    @classmethod
+    def _software_update_run_already_active(cls, svc: Any) -> bool:
+        """Return whether an update run is already active and clear the queued trigger."""
+        if getattr(svc, "_software_update_process", None) is None:
+            return False
+        svc._software_update_run_requested_at = None
+        return True
+
+    @classmethod
+    def _software_update_run_blocked_by_no_update(cls, svc: Any) -> bool:
+        """Return whether local noUpdate policy blocks a requested update run."""
+        if not cls._software_update_no_update_active(svc):
+            return False
         cls._set_software_update_state(
             svc,
-            "running",
-            detail=source,
-            last_result="running",
+            cls._software_update_state_for_no_update_block(svc),
+            detail="noUpdate marker present",
         )
+        svc._software_update_run_requested_at = None
         return True
+
+    @staticmethod
+    def _software_update_unavailable_detail(
+        install_script: str,
+        repo_root: str,
+        restart_script: str,
+    ) -> str | None:
+        """Return the missing-resource detail for one update run or ``None`` when usable."""
+        if _software_update_install_script_missing(install_script, repo_root):
+            return "install.sh missing"
+        if _software_update_restart_script_missing(restart_script):
+            return "restart script missing"
+        return None
+
+    @classmethod
+    def _software_update_mark_unavailable(cls, svc: Any, detail: str) -> None:
+        """Publish one unavailable update-run state."""
+        cls._set_software_update_state(
+            svc,
+            "update-unavailable",
+            detail=detail,
+            last_result="failed",
+        )
+        svc._software_update_run_requested_at = None
+
+    @classmethod
+    def _software_update_mark_install_failed(cls, svc: Any, error: Exception) -> None:
+        """Publish one failed update-run start result."""
+        cls._set_software_update_state(
+            svc,
+            "install-failed",
+            detail=str(error),
+            last_result="failed",
+        )
+        svc._software_update_run_requested_at = None
+
+    @classmethod
+    def _spawn_software_update_process(
+        cls,
+        log_path: str,
+        repo_root: str,
+        restart_script: str,
+    ) -> tuple[subprocess.Popen[bytes], Any]:
+        """Start one detached update process and return the child plus log handle."""
+        log_handle = cls._software_update_log_handle(log_path)
+        try:
+            process = subprocess.Popen(  # pylint: disable=consider-using-with
+                cls._software_update_command(repo_root, restart_script),
+                cwd=repo_root,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except Exception:
+            cls._close_open_log_handle(log_handle)
+            raise
+        return process, log_handle
+
+    @staticmethod
+    def _software_update_log_handle(log_path: str) -> Any:
+        """Open the update log file after creating its parent directory when needed."""
+        log_dir = os.path.dirname(log_path)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+        return open(log_path, "ab")  # pylint: disable=consider-using-with
+
+    @staticmethod
+    def _software_update_command(repo_root: str, restart_script: str) -> list[str]:
+        """Return the shell command used for detached update execution."""
+        return ["/bin/bash", "-lc", f'cd "{repo_root}" && "./install.sh" && "{restart_script}"']
+
+    @staticmethod
+    def _close_open_log_handle(log_handle: Any) -> None:
+        """Close one possibly-open log handle while ignoring close errors."""
+        if log_handle is None:
+            return
+        try:
+            log_handle.close()
+        except OSError:
+            pass
+
+    @staticmethod
+    def _close_software_update_log_handle(svc: Any) -> None:
+        """Close the current update log handle when one is open."""
+        log_handle = getattr(svc, "_software_update_process_log_handle", None)
+        if log_handle is None:
+            return
+        try:
+            log_handle.close()
+        except OSError:
+            pass
+
+    @classmethod
+    def _completed_software_update_state(
+        cls,
+        svc: Any,
+        return_code: int,
+    ) -> tuple[str, str, Any, Any, str]:
+        """Return the final outward state fields for one completed update process."""
+        if int(return_code) == 0:
+            return "installed", "completed", False, "", "success"
+        return (
+            "install-failed",
+            f"exit {int(return_code)}",
+            getattr(svc, "_software_update_available", False),
+            getattr(svc, "_software_update_available_version", ""),
+            "failed",
+        )
 
     @classmethod
     def _poll_software_update_process(cls, svc: Any) -> None:
@@ -270,31 +445,32 @@ class UpdateCycleController(
         return_code = process.poll()
         if return_code is None:
             return
-        log_handle = getattr(svc, "_software_update_process_log_handle", None)
-        if log_handle is not None:
-            try:
-                log_handle.close()
-            except OSError:
-                pass
+        cls._close_software_update_log_handle(svc)
         svc._software_update_process = None
         svc._software_update_process_log_handle = None
         cls._refresh_software_update_local_state(svc)
-        if int(return_code) == 0:
-            cls._set_software_update_state(
-                svc,
-                "installed",
-                detail="completed",
-                available=False,
-                available_version="",
-                last_result="success",
-            )
-            return
+        state, detail, available, available_version, last_result = cls._completed_software_update_state(svc, int(return_code))
         cls._set_software_update_state(
             svc,
-            "install-failed",
-            detail=f"exit {int(return_code)}",
-            last_result="failed",
+            state,
+            detail=detail,
+            available=available,
+            available_version=available_version,
+            last_result=last_result,
         )
+
+    @staticmethod
+    def _software_update_due(now: float, due_at: Any) -> bool:
+        """Return whether one optional update timestamp is due."""
+        return isinstance(due_at, (int, float)) and float(now) >= float(due_at)
+
+    @classmethod
+    def _clear_software_update_triggers_while_running(cls, svc: Any, now: float, process_running: bool) -> None:
+        """Clear queued update triggers that became irrelevant while a run is active."""
+        if process_running and getattr(svc, "_software_update_run_requested_at", None) is not None:
+            svc._software_update_run_requested_at = None
+        if process_running and cls._software_update_due(now, getattr(svc, "_software_update_boot_auto_due_at", None)):
+            svc._software_update_boot_auto_due_at = None
 
     @classmethod
     def _software_update_housekeeping(cls, svc: Any, now: float) -> None:
@@ -302,35 +478,31 @@ class UpdateCycleController(
         cls._poll_software_update_process(svc)
         cls._refresh_software_update_local_state(svc)
         process_running = getattr(svc, "_software_update_process", None) is not None
-        if process_running and getattr(svc, "_software_update_run_requested_at", None) is not None:
-            svc._software_update_run_requested_at = None
-        if (
-            process_running
-            and isinstance(getattr(svc, "_software_update_boot_auto_due_at", None), (int, float))
-            and float(now) >= float(getattr(svc, "_software_update_boot_auto_due_at"))
-        ):
-            svc._software_update_boot_auto_due_at = None
-        next_check_at = getattr(svc, "_software_update_next_check_at", None)
-        if (
-            not process_running
-            and isinstance(next_check_at, (int, float))
-            and float(now) >= float(next_check_at)
-        ):
+        cls._clear_software_update_triggers_while_running(svc, now, process_running)
+        if process_running:
+            return
+        cls._software_update_run_due_check(svc, now)
+        cls._software_update_run_due_boot_update(svc, now)
+        cls._software_update_run_due_manual_trigger(svc, now)
+
+    @classmethod
+    def _software_update_run_due_check(cls, svc: Any, now: float) -> None:
+        """Run the periodic update check when its due timestamp has arrived."""
+        if cls._software_update_due(now, getattr(svc, "_software_update_next_check_at", None)):
             cls._run_software_update_check(svc, float(now))
 
-        boot_due_at = getattr(svc, "_software_update_boot_auto_due_at", None)
-        if (
-            not process_running
-            and isinstance(boot_due_at, (int, float))
-            and float(now) >= float(boot_due_at)
-        ):
-            svc._software_update_boot_auto_due_at = None
-            cls._start_software_update_run(svc, float(now), "boot-auto")
+    @classmethod
+    def _software_update_run_due_boot_update(cls, svc: Any, now: float) -> None:
+        """Run the deferred boot-time update when due."""
+        if not cls._software_update_due(now, getattr(svc, "_software_update_boot_auto_due_at", None)):
+            return
+        svc._software_update_boot_auto_due_at = None
+        cls._start_software_update_run(svc, float(now), "boot-auto")
 
-        if (
-            not process_running
-            and getattr(svc, "_software_update_run_requested_at", None) is not None
-        ):
+    @classmethod
+    def _software_update_run_due_manual_trigger(cls, svc: Any, now: float) -> None:
+        """Run a queued manual update trigger."""
+        if getattr(svc, "_software_update_run_requested_at", None) is not None:
             cls._start_software_update_run(svc, float(now), "manual")
 
     @staticmethod
@@ -1117,27 +1289,96 @@ class UpdateCycleController(
         charger_health = self.charger_health_override(svc, now)
         if charger_health is None:
             return None
+        charging_requested = bool(desired_relay) or bool(relay_on)
+        if charging_requested:
+            warning_key, message, args = self._blocking_charger_health_warning_spec(svc, charger_health)
+            svc._warning_throttled(
+                warning_key,
+                svc.auto_shelly_soft_fail_seconds,
+                message,
+                *args,
+            )
+        return charger_health
+
+    @staticmethod
+    def _blocking_charger_health_warning_spec(svc: Any, charger_health: str) -> tuple[str, str, tuple[Any, ...]]:
+        """Return warning metadata for one blocking charger-health reason."""
         if charger_health.startswith("charger-transport-"):
-            if bool(desired_relay) or bool(relay_on):
-                svc._warning_throttled(
-                    "charger-transport-blocking",
-                    svc.auto_shelly_soft_fail_seconds,
-                    "Native charger transport override %s blocks charging (source=%s detail=%s)",
+            return (
+                "charger-transport-blocking",
+                "Native charger transport override %s blocks charging (source=%s detail=%s)",
+                (
                     charger_health,
                     getattr(svc, "_last_charger_transport_source", None),
                     getattr(svc, "_last_charger_transport_detail", None),
-                )
-            return charger_health
-        if bool(desired_relay) or bool(relay_on):
-            svc._warning_throttled(
-                "charger-health-blocking",
-                svc.auto_shelly_soft_fail_seconds,
-                "Native charger health override %s blocks charging (status=%s fault=%s)",
+                ),
+            )
+        return (
+            "charger-health-blocking",
+            "Native charger health override %s blocks charging (status=%s fault=%s)",
+            (
                 charger_health,
                 getattr(svc, "_last_charger_state_status", None),
                 getattr(svc, "_last_charger_state_fault", None),
-            )
-        return charger_health
+            ),
+        )
+
+    @staticmethod
+    def _switch_feedback_warning_spec(
+        switch_health: str,
+        desired_relay: bool,
+        relay_on: bool,
+        power: float,
+        current: float,
+        svc: Any,
+    ) -> tuple[str, str, tuple[Any, ...]]:
+        """Return warning metadata for one blocking switch-feedback health reason."""
+        specs: dict[str, tuple[str, str, tuple[Any, ...]]] = {
+            "contactor-interlock": (
+                "switch-interlock-blocking",
+                "Switch interlock blocks charging (desired=%s relay=%s interlock_ok=%s)",
+                (int(bool(desired_relay)), int(bool(relay_on)), getattr(svc, "_last_switch_interlock_ok", None)),
+            ),
+            "contactor-suspected-open": (
+                "switch-suspected-open-blocking",
+                "Contactor heuristics suspect OPEN state (relay=%s power=%.1f current=%.1f charger_status=%s)",
+                (
+                    int(bool(relay_on)),
+                    float(power),
+                    float(current),
+                    getattr(svc, "_last_charger_state_status", None),
+                ),
+            ),
+            "contactor-suspected-welded": (
+                "switch-suspected-welded-blocking",
+                "Contactor heuristics suspect WELDED state (relay=%s power=%.1f current=%.1f)",
+                (int(bool(relay_on)), float(power), float(current)),
+            ),
+            "contactor-lockout-open": (
+                "switch-lockout-open-blocking",
+                "Latched contactor OPEN lockout blocks charging (count=%s source=%s)",
+                (
+                    int(getattr(svc, "_contactor_fault_counts", {}).get("contactor-suspected-open", 0)),
+                    getattr(svc, "_contactor_lockout_source", ""),
+                ),
+            ),
+            "contactor-lockout-welded": (
+                "switch-lockout-welded-blocking",
+                "Latched contactor WELDED lockout blocks charging (count=%s source=%s)",
+                (
+                    int(getattr(svc, "_contactor_fault_counts", {}).get("contactor-suspected-welded", 0)),
+                    getattr(svc, "_contactor_lockout_source", ""),
+                ),
+            ),
+        }
+        return specs.get(
+            switch_health,
+            (
+                "switch-feedback-blocking",
+                "Switch feedback mismatch blocks charging (relay=%s feedback_closed=%s)",
+                (int(bool(relay_on)), getattr(svc, "_last_switch_feedback_closed", None)),
+            ),
+        )
 
     def _blocking_switch_feedback_health(
         self,
@@ -1161,61 +1402,19 @@ class UpdateCycleController(
         )
         if switch_health is None:
             return None
-        if switch_health == "contactor-interlock":
-            svc._warning_throttled(
-                "switch-interlock-blocking",
-                svc.auto_shelly_soft_fail_seconds,
-                "Switch interlock blocks charging (desired=%s relay=%s interlock_ok=%s)",
-                int(bool(desired_relay)),
-                int(bool(relay_on)),
-                getattr(svc, "_last_switch_interlock_ok", None),
-            )
-            return switch_health
-        if switch_health == "contactor-suspected-open":
-            svc._warning_throttled(
-                "switch-suspected-open-blocking",
-                svc.auto_shelly_soft_fail_seconds,
-                "Contactor heuristics suspect OPEN state (relay=%s power=%.1f current=%.1f charger_status=%s)",
-                int(bool(relay_on)),
-                float(power),
-                float(current),
-                getattr(svc, "_last_charger_state_status", None),
-            )
-            return switch_health
-        if switch_health == "contactor-suspected-welded":
-            svc._warning_throttled(
-                "switch-suspected-welded-blocking",
-                svc.auto_shelly_soft_fail_seconds,
-                "Contactor heuristics suspect WELDED state (relay=%s power=%.1f current=%.1f)",
-                int(bool(relay_on)),
-                float(power),
-                float(current),
-            )
-            return switch_health
-        if switch_health == "contactor-lockout-open":
-            svc._warning_throttled(
-                "switch-lockout-open-blocking",
-                svc.auto_shelly_soft_fail_seconds,
-                "Latched contactor OPEN lockout blocks charging (count=%s source=%s)",
-                int(getattr(svc, "_contactor_fault_counts", {}).get("contactor-suspected-open", 0)),
-                getattr(svc, "_contactor_lockout_source", ""),
-            )
-            return switch_health
-        if switch_health == "contactor-lockout-welded":
-            svc._warning_throttled(
-                "switch-lockout-welded-blocking",
-                svc.auto_shelly_soft_fail_seconds,
-                "Latched contactor WELDED lockout blocks charging (count=%s source=%s)",
-                int(getattr(svc, "_contactor_fault_counts", {}).get("contactor-suspected-welded", 0)),
-                getattr(svc, "_contactor_lockout_source", ""),
-            )
-            return switch_health
+        warning_key, warning_text, warning_args = self._switch_feedback_warning_spec(
+            switch_health,
+            desired_relay,
+            relay_on,
+            power,
+            current,
+            svc,
+        )
         svc._warning_throttled(
-            "switch-feedback-blocking",
+            warning_key,
             svc.auto_shelly_soft_fail_seconds,
-            "Switch feedback mismatch blocks charging (relay=%s feedback_closed=%s)",
-            int(bool(relay_on)),
-            getattr(svc, "_last_switch_feedback_closed", None),
+            warning_text,
+            *warning_args,
         )
         return switch_health
 

@@ -3,6 +3,7 @@ import unittest
 import sys
 import configparser
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from types import ModuleType
 from types import SimpleNamespace
@@ -238,6 +239,80 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service._dbusservice.paths["/Auto/PhaseCandidate"]["value"], "")
         self.assertEqual(service._dbusservice.paths["/Auto/PhaseCandidateAge"]["value"], -1)
         self.assertEqual(service._dbusservice.paths["/Auto/PhaseLockoutAge"]["value"], -1)
+
+    def test_register_paths_initializes_scheduled_snapshot_when_mode_is_scheduled(self):
+        service = SimpleNamespace(
+            _dbusservice=_FakeDbusService(),
+            connection_name="Shelly RPC",
+            deviceinstance=60,
+            product_name="Shelly Wallbox Meter",
+            custom_name="Wallbox",
+            firmware_version="1.0",
+            hardware_version="Shelly 1PM Gen4",
+            serial="ABC123",
+            position=1,
+            min_current=6.0,
+            max_current=16.0,
+            virtual_set_current=16.0,
+            virtual_autostart=1,
+            virtual_mode=2,
+            virtual_startstop=1,
+            virtual_enable=1,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1",),
+            auto_start_surplus_watts=1850.0,
+            auto_stop_surplus_watts=1350.0,
+            auto_min_soc=40.0,
+            auto_resume_soc=50.0,
+            auto_start_delay_seconds=10.0,
+            auto_stop_delay_seconds=30.0,
+            auto_month_windows={4: ((7, 30), (19, 30))},
+            auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
+            auto_scheduled_night_start_delay_seconds=3600.0,
+            auto_scheduled_latest_end_time="06:30",
+            auto_scheduled_night_current_amps=13.0,
+            auto_dbus_backoff_base_seconds=5.0,
+            auto_dbus_backoff_max_seconds=60.0,
+            auto_grid_recovery_start_seconds=14.0,
+            auto_stop_surplus_delay_seconds=45.0,
+            auto_stop_surplus_volatility_low_watts=80.0,
+            auto_stop_surplus_volatility_high_watts=240.0,
+            auto_reference_charge_power_watts=2100.0,
+            auto_learn_charge_power_enabled=True,
+            auto_learn_charge_power_min_watts=1400.0,
+            auto_learn_charge_power_alpha=0.25,
+            auto_learn_charge_power_start_delay_seconds=12.0,
+            auto_learn_charge_power_window_seconds=180.0,
+            auto_learn_charge_power_max_age_seconds=21600.0,
+            auto_phase_switching_enabled=True,
+            auto_phase_prefer_lowest_when_idle=False,
+            auto_phase_upshift_delay_seconds=120.0,
+            auto_phase_downshift_delay_seconds=30.0,
+            auto_phase_upshift_headroom_watts=250.0,
+            auto_phase_downshift_margin_watts=150.0,
+            auto_phase_mismatch_retry_seconds=300.0,
+            auto_phase_mismatch_lockout_count=3,
+            auto_phase_mismatch_lockout_seconds=1800.0,
+            runtime_overrides_path="/run/wallbox-overrides.ini",
+            _runtime_overrides_active=True,
+            backend_mode="combined",
+            meter_backend_type="shelly_combined",
+            switch_backend_type="shelly_combined",
+            charger_backend_type=None,
+            _last_health_reason="init",
+            _last_health_code=0,
+            _last_auto_state="idle",
+            _last_auto_state_code=0,
+            _handle_write=MagicMock(),
+        )
+        controller = self._controller(service)
+
+        with patch("shelly_wallbox.bootstrap.paths.time.time", return_value=datetime(2026, 4, 20, 21, 0).timestamp()):
+            controller.register_paths()
+
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledState"]["value"], "night-boost")
+        self.assertEqual(service._dbusservice.paths["/Auto/ScheduledReason"]["value"], "night-boost-window")
         self.assertEqual(service._dbusservice.paths["/Auto/ContactorLockoutAge"]["value"], -1)
         self.assertEqual(service._dbusservice.paths["/Auto/LastSwitchFeedbackAge"]["value"], -1)
         self.assertEqual(service._dbusservice.paths["/Auto/LastChargerTransportAge"]["value"], -1)
@@ -398,6 +473,33 @@ class TestServiceBootstrapController(unittest.TestCase):
         self.assertEqual(service.requested_phase_selection, "P1_P2")
         self.assertEqual(service.active_phase_selection, "P1_P2")
         self.assertFalse(service._auto_mode_cutover_pending)
+
+    def test_initialize_virtual_state_falls_back_when_phase_selection_is_not_supported(self):
+        service = SimpleNamespace(
+            config={
+                "DEFAULT": {
+                    "PhaseSelection": "P1_P2_P3",
+                }
+            },
+            max_current=16.0,
+            _switch_backend=SimpleNamespace(
+                capabilities=MagicMock(return_value=SimpleNamespace(supported_phase_selections=("P1", "P1_P2")))
+            ),
+        )
+        controller = self._controller(service)
+
+        controller.initialize_virtual_state()
+
+        self.assertEqual(service.requested_phase_selection, "P1")
+        self.assertEqual(service.active_phase_selection, "P1")
+
+    def test_switch_backend_supported_phase_selections_falls_back_after_capability_error(self):
+        service = SimpleNamespace(
+            _switch_backend=SimpleNamespace(capabilities=MagicMock(side_effect=RuntimeError("boom"))),
+        )
+        controller = self._controller(service)
+
+        self.assertEqual(controller._switch_backend_supported_phase_selections(service), ("P1",))
 
     def test_restore_runtime_state_sets_manual_startup_target_only_outside_auto_mode(self):
         manual_service = SimpleNamespace(

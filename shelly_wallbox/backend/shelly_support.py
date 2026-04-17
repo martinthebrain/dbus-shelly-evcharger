@@ -413,17 +413,11 @@ def load_shelly_backend_settings(
     switching_mode = _resolved_switching_mode(capabilities, default_switching_mode)
     supported_phase_selections = _supported_phase_selections(capabilities)
     max_power = _resolved_max_direct_switch_power_w(service, capabilities, switching_mode)
-
+    component = _resolved_shelly_component(adapter, profile_defaults, service)
     return ShellyBackendSettings(
         profile_name=profile_name,
         host=str(adapter.get("Host", getattr(service, "host", ""))).strip(),
-        component=str(
-            adapter.get(
-                "Component",
-                profile_defaults.component if profile_defaults is not None else getattr(service, "pm_component", "Switch"),
-            )
-        ).strip()
-        or "Switch",
+        component=component,
         device_id=device_id,
         timeout_seconds=_resolved_timeout_seconds(adapter, service),
         username=str(adapter.get("Username", getattr(service, "username", ""))).strip(),
@@ -444,6 +438,16 @@ def load_shelly_backend_settings(
         feedback_readback=_optional_signal_readback_settings(feedback),
         interlock_readback=_optional_signal_readback_settings(interlock),
     )
+
+
+def _resolved_shelly_component(
+    adapter: configparser.SectionProxy,
+    profile_defaults: ShellyProfileDefaults | None,
+    service: Any,
+) -> str:
+    """Return the effective Shelly RPC component for one backend."""
+    default_component = profile_defaults.component if profile_defaults is not None else getattr(service, "pm_component", "Switch")
+    return str(adapter.get("Component", default_component)).strip() or "Switch"
 
 
 def _resolved_switching_mode(

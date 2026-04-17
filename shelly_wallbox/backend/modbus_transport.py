@@ -83,19 +83,19 @@ class ModbusSlaveOfflineError(ModbusTimeoutError):
 
 def modbus_transport_issue_reason(error: BaseException) -> str | None:
     """Return one normalized reason label for a transport-layer Modbus failure."""
-    if isinstance(error, ModbusPortBusyError):
-        return "busy"
-    if isinstance(error, ModbusPortOwnershipError):
-        return "ownership"
-    if isinstance(error, ModbusSlaveOfflineError):
-        return "offline"
-    if isinstance(error, (ModbusTimeoutError, TimeoutError)):
-        return "timeout"
-    if isinstance(error, ModbusResponseError):
-        return "response"
-    if isinstance(error, (ModbusTransportError, OSError)):
-        return "error"
-    return None
+    for error_type, reason in _MODBUS_TRANSPORT_ISSUE_REASONS:
+        if isinstance(error, error_type):
+            return reason
+    return "error" if isinstance(error, (ModbusTransportError, OSError)) else None
+
+
+_MODBUS_TRANSPORT_ISSUE_REASONS: tuple[tuple[type[BaseException] | tuple[type[BaseException], ...], str], ...] = (
+    (ModbusPortBusyError, "busy"),
+    (ModbusPortOwnershipError, "ownership"),
+    (ModbusSlaveOfflineError, "offline"),
+    ((ModbusTimeoutError, TimeoutError), "timeout"),
+    (ModbusResponseError, "response"),
+)
 
 
 def _normalized_transport_kind(value: object) -> ModbusTransportKind:
@@ -217,51 +217,19 @@ def load_modbus_transport_settings(
     )
     unit_id = _normalized_unit_id(transport.get("UnitId", transport.get("SlaveId", "1")))
     host = str(transport.get("Host", "")).strip() or None
-    port = None
-    device = None
-    baudrate = 9600
-    bytesize = 8
-    parity: ModbusParity = "N"
-    stopbits = 1
-    serial_port_owner: SerialPortOwnerKind = "none"
-    serial_port_owner_stop_command: str | None = None
-    serial_port_owner_start_command: str | None = None
-    serial_retry_count = 0
-    serial_retry_delay_seconds = 0.2
-    if transport_kind == "serial_rtu":
-        device = _normalized_device(transport.get("Device", ""))
-        baudrate = _normalized_baudrate(transport.get("Baudrate", "9600"))
-        bytesize = _normalized_bytesize(transport.get("Bytesize", "8"))
-        parity = _normalized_parity(transport.get("Parity", "N"))
-        stopbits = _normalized_stopbits(transport.get("StopBits", "1"))
-        serial_port_owner = _normalized_serial_port_owner(transport.get("PortOwner", "none"))
-        serial_port_owner_stop_command = (
-            str(
-                transport.get(
-                    "PortOwnerStopCommand",
-                    "/opt/victronenergy/serial-starter/stop-tty.sh",
-                )
-            ).strip()
-            or None
-        )
-        serial_port_owner_start_command = (
-            str(
-                transport.get(
-                    "PortOwnerStartCommand",
-                    "/opt/victronenergy/serial-starter/start-tty.sh",
-                )
-            ).strip()
-            or None
-        )
-        serial_retry_count = _normalized_retry_count(transport.get("RetryCount", "1"), 1)
-        serial_retry_delay_seconds = _normalized_retry_delay_seconds(
-            transport.get("RetryDelaySeconds", "0.2"),
-            0.2,
-        )
-    else:
-        if not host:
-            raise ValueError(f"Modbus {transport_kind} transport requires Transport.Host")
-        port = _normalized_port(transport.get("Port", "502"), 502)
+    (
+        port,
+        device,
+        baudrate,
+        bytesize,
+        parity,
+        stopbits,
+        serial_port_owner,
+        serial_port_owner_stop_command,
+        serial_port_owner_start_command,
+        serial_retry_count,
+        serial_retry_delay_seconds,
+    ) = _transport_runtime_fields(transport_kind, transport, host)
     return ModbusTransportSettings(
         transport_kind=transport_kind,
         unit_id=unit_id,
@@ -278,6 +246,58 @@ def load_modbus_transport_settings(
         serial_port_owner_start_command=serial_port_owner_start_command,
         serial_retry_count=serial_retry_count,
         serial_retry_delay_seconds=serial_retry_delay_seconds,
+    )
+
+
+def _transport_runtime_fields(
+    transport_kind: ModbusTransportKind,
+    transport: configparser.SectionProxy,
+    host: str | None,
+) -> tuple[int | None, str | None, int, int, ModbusParity, int, SerialPortOwnerKind, str | None, str | None, int, float]:
+    """Return transport-specific runtime fields for one normalized transport kind."""
+    port, device, baudrate, bytesize, parity, stopbits = _default_modbus_serial_fields()
+    serial_port_owner, serial_port_owner_stop_command, serial_port_owner_start_command = _default_port_owner_fields()
+    serial_retry_count = 0
+    serial_retry_delay_seconds = 0.2
+    if transport_kind == "serial_rtu":
+        (
+            device,
+            baudrate,
+            bytesize,
+            parity,
+            stopbits,
+            serial_port_owner,
+            serial_port_owner_stop_command,
+            serial_port_owner_start_command,
+            serial_retry_count,
+            serial_retry_delay_seconds,
+        ) = _serial_transport_runtime_fields(transport)
+        return (
+            port,
+            device,
+            baudrate,
+            bytesize,
+            parity,
+            stopbits,
+            serial_port_owner,
+            serial_port_owner_stop_command,
+            serial_port_owner_start_command,
+            serial_retry_count,
+            serial_retry_delay_seconds,
+        )
+    port = _required_host_port(transport_kind, transport, host)
+    return (
+        port,
+        device,
+        baudrate,
+        bytesize,
+        parity,
+        stopbits,
+        serial_port_owner,
+        serial_port_owner_stop_command,
+        serial_port_owner_start_command,
+        serial_retry_count,
+        serial_retry_delay_seconds,
     )
 
 
@@ -380,23 +400,109 @@ class _VenusSerialPortOwner:
     def _run_command(self, command: str) -> None:
         """Run one stop/start helper with the current tty path."""
         try:
-            result = subprocess.run(
-                [command, self.device],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            result = self._command_result(command)
         except FileNotFoundError as error:
             raise ModbusPortOwnershipError(
                 f"Venus serial ownership helper '{command}' is unavailable for {self.device}"
             ) from error
         if result.returncode == 0:
             return
-        detail = (result.stderr or result.stdout or "").strip()
+        detail = self._command_detail(result)
         suffix = f": {detail}" if detail else ""
         raise ModbusPortOwnershipError(
             f"Venus serial ownership helper '{command}' failed for {self.device}{suffix}"
         )
+
+    def _command_result(self, command: str) -> subprocess.CompletedProcess[str]:
+        """Return the subprocess result for one tty ownership helper."""
+        return subprocess.run(
+            [command, self.device],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    @staticmethod
+    def _command_detail(result: subprocess.CompletedProcess[str]) -> str:
+        """Return the best available stderr/stdout detail for one helper result."""
+        return (result.stderr or result.stdout or "").strip()
+
+
+def _default_modbus_serial_fields() -> tuple[int | None, str | None, int, int, ModbusParity, int]:
+    """Return default serial-field values before transport-specific normalization."""
+    return None, None, 9600, 8, "N", 1
+
+
+def _default_port_owner_fields() -> tuple[SerialPortOwnerKind, str | None, str | None]:
+    """Return default serial-port ownership settings."""
+    return "none", None, None
+
+
+def _serial_transport_fields(
+    transport: configparser.SectionProxy,
+) -> tuple[str, int, int, ModbusParity, int]:
+    """Return normalized serial transport fields from config."""
+    return (
+        _normalized_device(transport.get("Device", "")),
+        _normalized_baudrate(transport.get("Baudrate", "9600")),
+        _normalized_bytesize(transport.get("Bytesize", "8")),
+        _normalized_parity(transport.get("Parity", "N")),
+        _normalized_stopbits(transport.get("StopBits", "1")),
+    )
+
+
+def _port_owner_commands(transport: configparser.SectionProxy) -> tuple[str | None, str | None]:
+    """Return normalized stop/start commands for serial port ownership."""
+    return (
+        _optional_transport_command(
+            transport,
+            "PortOwnerStopCommand",
+            "/opt/victronenergy/serial-starter/stop-tty.sh",
+        ),
+        _optional_transport_command(
+            transport,
+            "PortOwnerStartCommand",
+            "/opt/victronenergy/serial-starter/start-tty.sh",
+        ),
+    )
+
+
+def _optional_transport_command(
+    transport: configparser.SectionProxy,
+    key: str,
+    default: str,
+) -> str | None:
+    """Return one optional transport command string."""
+    return str(transport.get(key, default)).strip() or None
+
+
+def _serial_transport_runtime_fields(
+    transport: configparser.SectionProxy,
+) -> tuple[str, int, int, ModbusParity, int, SerialPortOwnerKind, str | None, str | None, int, float]:
+    """Return normalized runtime fields for serial RTU transport settings."""
+    device, baudrate, bytesize, parity, stopbits = _serial_transport_fields(transport)
+    return (
+        device,
+        baudrate,
+        bytesize,
+        parity,
+        stopbits,
+        _normalized_serial_port_owner(transport.get("PortOwner", "none")),
+        *_port_owner_commands(transport),
+        _normalized_retry_count(transport.get("RetryCount", "1"), 1),
+        _normalized_retry_delay_seconds(transport.get("RetryDelaySeconds", "0.2"), 0.2),
+    )
+
+
+def _required_host_port(
+    transport_kind: ModbusTransportKind,
+    transport: configparser.SectionProxy,
+    host: str | None,
+) -> int:
+    """Return the validated TCP/UDP port and require a host when needed."""
+    if not host:
+        raise ValueError(f"Modbus {transport_kind} transport requires Transport.Host")
+    return _normalized_port(transport.get("Port", "502"), 502)
 
 
 def _serial_port_owner(settings: ModbusTransportSettings) -> _VenusSerialPortOwner | None:
@@ -508,31 +614,54 @@ class ModbusSerialRtuTransport:
 
     def exchange(self, request: ModbusRequest, *, timeout_seconds: float) -> bytes:
         """Send one Modbus RTU request and return the response PDU."""
-        attempts = max(1, self.settings.serial_retry_count + 1)
+        attempts = self._serial_attempt_count()
         last_error: ModbusTransportError | None = None
         for attempt_index in range(attempts):
             self._ensure_port_owned()
-            try:
-                return self._exchange_once(request, timeout_seconds)
-            except ModbusPortBusyError:
-                raise
-            except ModbusPortOwnershipError:
-                raise
-            except ModbusTimeoutError as error:
-                last_error = error
-            except ModbusResponseError as error:
-                last_error = error
-            except OSError as error:
-                last_error = self._normalized_serial_os_error(error)
-            if attempt_index >= (attempts - 1):
+            exchange_result, last_error = self._exchange_attempt(request, timeout_seconds)
+            if exchange_result is not None:
+                return exchange_result
+            if self._serial_retry_exhausted(attempt_index, attempts):
                 break
             self._recover_after_failure(last_error)
         assert last_error is not None
+        raise self._final_serial_exchange_error(request, last_error)
+
+    def _exchange_attempt(
+        self,
+        request: ModbusRequest,
+        timeout_seconds: float,
+    ) -> tuple[bytes | None, ModbusTransportError]:
+        """Return one exchange result or the normalized recoverable error."""
+        try:
+            return self._exchange_once(request, timeout_seconds), ModbusTransportError("unused")
+        except (ModbusPortBusyError, ModbusPortOwnershipError):
+            raise
+        except (ModbusTimeoutError, ModbusResponseError) as error:
+            return None, error
+        except OSError as error:
+            return None, self._normalized_serial_os_error(error)
+
+    def _serial_attempt_count(self) -> int:
+        """Return the number of serial exchange attempts including retries."""
+        return max(1, self.settings.serial_retry_count + 1)
+
+    @staticmethod
+    def _serial_retry_exhausted(attempt_index: int, attempts: int) -> bool:
+        """Return whether the current serial exchange attempt was the last one."""
+        return attempt_index >= (attempts - 1)
+
+    def _final_serial_exchange_error(
+        self,
+        request: ModbusRequest,
+        last_error: ModbusTransportError,
+    ) -> ModbusTransportError:
+        """Return the final transport error after all serial retries are exhausted."""
         if isinstance(last_error, ModbusTimeoutError):
-            raise ModbusSlaveOfflineError(
+            return ModbusSlaveOfflineError(
                 f"Modbus slave {request.unit_id} on {self.settings.device} did not respond"
-            ) from last_error
-        raise last_error
+            )
+        return last_error
 
     def _exchange_once(self, request: ModbusRequest, timeout_seconds: float) -> bytes:
         """Perform one single Modbus RTU exchange without retry handling."""

@@ -22,8 +22,13 @@ from shelly_wallbox.core.shared import (
 
 class TestShellyWallboxShared(unittest.TestCase):
     def test_numeric_helpers_cover_scalar_container_and_invalid_values(self):
+        class _BadIterable:
+            def __iter__(self):
+                raise TypeError("boom")
+
         self.assertIsNone(_iter_numeric_container_items("abc"))
         self.assertEqual(_iter_numeric_container_items((1, 2)), [1, 2])
+        self.assertIsNone(_iter_numeric_container_items(_BadIterable()))
         self.assertIsNone(_coerce_scalar_numeric(None))
         self.assertIsNone(_coerce_scalar_numeric(True))
         self.assertEqual(_coerce_scalar_numeric("4.5"), 4.5)

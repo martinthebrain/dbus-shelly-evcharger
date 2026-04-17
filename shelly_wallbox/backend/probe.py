@@ -273,22 +273,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("config_path")
     args = parser.parse_args(argv)
-
-    if args.command == "validate":
-        payload = validate_backend_config(args.config_path)
-    elif args.command == "validate-wallbox":
-        payload = validate_wallbox_config(args.config_path)
-    elif args.command == "probe-meter":
-        payload = probe_meter_backend(args.config_path)
-    elif args.command == "probe-switch":
-        payload = probe_switch_backend(args.config_path)
-    elif args.command == "read-charger":
-        payload = read_charger_backend(args.config_path)
-    else:
-        payload = probe_charger_backend(args.config_path)
-
+    payload = _probe_command_payload(args.command, args.config_path)
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
+
+
+def _probe_command_payload(command: str, config_path: str) -> dict[str, object]:
+    """Return the payload for one probe CLI subcommand."""
+    handlers: dict[str, Any] = {
+        "validate": validate_backend_config,
+        "validate-wallbox": validate_wallbox_config,
+        "probe-meter": probe_meter_backend,
+        "probe-switch": probe_switch_backend,
+        "probe-charger": probe_charger_backend,
+        "read-charger": read_charger_backend,
+    }
+    return cast(dict[str, object], handlers[command](config_path))
 
 
 if __name__ == "__main__":  # pragma: no cover

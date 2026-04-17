@@ -34,15 +34,20 @@ from shelly_wallbox.runtime import RuntimeSupportController
 from vedbus import VeDbusService
 
 
+def _backend_capabilities_unavailable(backend: Any) -> bool:
+    """Return whether a backend object cannot expose capabilities."""
+    return backend is None or not hasattr(backend, "capabilities")
+
+
 class _ServiceBootstrapRuntimeMixin(_ComposableControllerMixin):
     @staticmethod
     def _switch_backend_supported_phase_selections(svc: Any) -> tuple[str, ...]:
         """Return normalized supported phase selections declared by the current switch backend."""
         backend = getattr(svc, "_switch_backend", None)
-        if backend is None or not hasattr(backend, "capabilities"):
+        if _backend_capabilities_unavailable(backend):
             return ("P1",)
         try:
-            capabilities = backend.capabilities()
+            capabilities = cast(Any, backend).capabilities()
         except Exception:  # pylint: disable=broad-except
             return ("P1",)
         normalized = normalize_phase_selection_tuple(

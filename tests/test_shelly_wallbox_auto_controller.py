@@ -130,6 +130,25 @@ class TestAutoDecisionController(unittest.TestCase):
 
         self.assertFalse(controller._scheduled_night_charge_active())
 
+    def test_scheduled_night_decision_covers_gate_autostart_and_waiting_offtime_edges(self):
+        controller, service = self._make_controller()
+
+        with patch.object(controller, "_handle_common_runtime_gates", return_value=True):
+            self.assertTrue(controller._scheduled_night_decision(False, 100.0, False))
+
+        service.virtual_autostart = 0
+        with patch.object(controller, "_handle_common_runtime_gates", return_value=controller._NO_DECISION):
+            self.assertFalse(controller._scheduled_night_decision(False, 100.0, False))
+        self.assertEqual(service._last_health_reason, "autostart-disabled")
+
+        service.virtual_autostart = 1
+        with (
+            patch.object(controller, "_handle_common_runtime_gates", return_value=controller._NO_DECISION),
+            patch.object(controller, "_minimum_offtime_elapsed", return_value=False),
+        ):
+            self.assertFalse(controller._scheduled_night_decision(False, 100.0, False))
+        self.assertEqual(service._last_health_reason, "waiting-offtime")
+
     def test_set_health_cached_updates_code_and_audit_log(self):
         controller, service = self._make_controller()
         service.auto_audit_log = True

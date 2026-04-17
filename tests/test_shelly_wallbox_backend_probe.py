@@ -8,7 +8,15 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
-from shelly_wallbox.backend.probe import main, validate_backend_config, validate_wallbox_config
+from shelly_wallbox.backend.probe import (
+    main,
+    probe_charger_backend,
+    probe_meter_backend,
+    probe_switch_backend,
+    read_charger_backend,
+    validate_backend_config,
+    validate_wallbox_config,
+)
 from shelly_wallbox.backend.modbus_transport import ModbusRequest
 
 
@@ -87,6 +95,83 @@ class TestShellyWallboxBackendProbe(unittest.TestCase):
 
             self.assertEqual(payload["type"], "shelly_meter")
             self.assertEqual(payload["roles"], ["meter"])
+
+    def test_validate_backend_config_rejects_missing_and_unsupported_types(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_path = str(Path(temp_dir) / "missing.ini")
+            with self.assertRaises(FileNotFoundError):
+                validate_backend_config(missing_path)
+
+            backend_path = self._write_config(
+                temp_dir,
+                "backend.ini",
+                "[DEFAULT]\nType=unknown_backend\n",
+            )
+            with self.assertRaisesRegex(ValueError, "Unsupported backend type"):
+                validate_backend_config(backend_path)
+
+    def test_probe_helpers_reject_wrong_backend_roles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "backend.ini",
+                "[Adapter]\nType=template_switch\nBaseUrl=http://switch.local\n"
+                "[StateRequest]\nUrl=/state\n"
+                "[StateResponse]\nEnabledPath=enabled\n"
+                "[CommandRequest]\nUrl=/control\n",
+            )
+
+            with self.assertRaisesRegex(ValueError, "not a meter backend"):
+                probe_meter_backend(config_path)
+            with self.assertRaisesRegex(ValueError, "not a charger backend"):
+                probe_charger_backend(config_path)
+            with self.assertRaisesRegex(ValueError, "not a charger backend"):
+                read_charger_backend(config_path)
+
+    def test_probe_switch_backend_rejects_non_switch_backend_type(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "backend.ini",
+                "[Adapter]\nType=template_meter\nBaseUrl=http://meter.local\n"
+                "[MeterRequest]\nUrl=/meter/state\n"
+                "[MeterResponse]\nPowerPath=power_w\n",
+            )
+
+            with self.assertRaisesRegex(ValueError, "not a switch backend"):
+                probe_switch_backend(config_path)
+
+    def test_read_charger_backend_rechecks_backend_registry_before_live_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "backend.ini",
+                "[Adapter]\nType=template_charger\nBaseUrl=http://charger.local\n"
+                "[EnableRequest]\nUrl=/charger/enable\n"
+                "[CurrentRequest]\nUrl=/charger/current\n",
+            )
+
+            with (
+                patch("shelly_wallbox.backend.probe.probe_charger_backend", return_value={"path": config_path}),
+                patch("shelly_wallbox.backend.probe.CHARGER_BACKENDS", {}),
+            ):
+                with self.assertRaisesRegex(ValueError, "not a charger backend"):
+                    read_charger_backend(config_path)
+
+    def test_main_validate_command_prints_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            meter_path = self._write_config(
+                temp_dir,
+                "meter.ini",
+                "[Adapter]\nType=shelly_meter\nHost=192.168.1.10\n",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                rc = main(["validate", meter_path])
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(json.loads(stdout.getvalue())["type"], "shelly_meter")
 
     def test_validate_backend_config_accepts_contactor_switch_type(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

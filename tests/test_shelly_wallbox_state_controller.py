@@ -177,6 +177,43 @@ class TestServiceStateController(unittest.TestCase):
         self.assertIn("fault_reason=contactor-lockout-open", lockout_summary)
         self.assertIn("recovery=1", lockout_summary)
 
+    def test_runtime_override_load_and_validation_helpers_cover_error_paths(self) -> None:
+        service = SimpleNamespace(
+            _contactor_fault_counts={},
+            auto_start_delay_seconds=-1.0,
+        )
+        controller = ServiceStateController(service, self._normalize_mode)
+
+        self.assertEqual(controller._read_runtime_override_values(""), {})
+        with patch("shelly_wallbox.controllers.state._CasePreservingConfigParser.read", side_effect=RuntimeError("boom")):
+            self.assertEqual(controller._read_runtime_override_values("/tmp/runtime.ini"), {})
+        self.assertIn("AutoDbusBackoffBaseSeconds", controller._serialized_runtime_overrides())
+        controller._restore_contactor_runtime_state(
+            service,
+            {"contactor_fault_counts": {"contactor-suspected-open": 2, "ignored": 9}},
+            100.0,
+        )
+        self.assertEqual(service._contactor_fault_counts, {"contactor-suspected-open": 2})
+        controller._validate_optional_non_negative_int(service, "auto_start_delay_seconds", "AutoStartDelaySeconds")
+        self.assertEqual(service.auto_start_delay_seconds, 0)
+
+    def test_flush_runtime_overrides_keeps_pending_snapshot_after_write_failure(self) -> None:
+        service = SimpleNamespace(
+            runtime_overrides_path="/tmp/runtime.ini",
+            _runtime_overrides_pending_serialized='{"Mode":"1"}',
+            _runtime_overrides_pending_values={"Mode": "1"},
+            _runtime_overrides_pending_text="[RuntimeOverrides]\nMode=1\n",
+            _runtime_overrides_pending_due_at=0.0,
+            runtime_overrides_write_min_interval_seconds=2.0,
+            _time_now=lambda: 100.0,
+        )
+        controller = ServiceStateController(service, self._normalize_mode)
+
+        with patch.object(controller, "_write_runtime_overrides_payload", side_effect=RuntimeError("boom")):
+            controller.flush_runtime_overrides(100.0)
+
+        self.assertEqual(service._runtime_overrides_pending_due_at, 102.0)
+
     def test_state_summary_includes_scheduled_v2_diagnostics(self) -> None:
         service = SimpleNamespace(
             virtual_mode=2,
