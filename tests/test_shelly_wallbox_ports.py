@@ -366,7 +366,7 @@ class TestWallboxPorts(unittest.TestCase):
 
         port = WriteControllerPort(service)
         port.supported_phase_selections = ("P1_P2", "P1")
-        port._software_update_run_requested_at = "42.5"
+        port._software_update_run_requested_at = 42.5
         self.assertEqual(service.supported_phase_selections, ("P1_P2", "P1"))
         self.assertEqual(service._software_update_run_requested_at, 42.5)
         self.assertEqual(port._software_update_run_requested_at, 42.5)
