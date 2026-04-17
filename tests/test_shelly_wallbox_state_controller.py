@@ -14,6 +14,13 @@ from shelly_wallbox.auto.policy import (
     AutoThresholdProfile,
 )
 from shelly_wallbox.controllers.state import ServiceStateController
+
+STATE_SUMMARY_TIME = "shelly_wallbox.controllers.state_summary.time.time"
+STATE_RUNTIME_PARSER_READ = "shelly_wallbox.controllers.state_runtime._CasePreservingConfigParser.read"
+STATE_RUNTIME_WRITE = "shelly_wallbox.controllers.state_runtime.write_text_atomically"
+STATE_RUNTIME_LOG_WARNING = "shelly_wallbox.controllers.state_runtime.logging.warning"
+STATE_RESTORE_WRITE = "shelly_wallbox.controllers.state_restore.write_text_atomically"
+STATE_RESTORE_LOG_WARNING = "shelly_wallbox.controllers.state_restore.logging.warning"
 from tests.wallbox_test_fixtures import make_runtime_state_service, make_state_validation_service
 
 
@@ -69,7 +76,7 @@ class TestServiceStateController(unittest.TestCase):
             _last_health_reason="running",
         )
         controller = ServiceStateController(service, self._normalize_mode)
-        with patch("shelly_wallbox.controllers.state.time.time", return_value=100.0):
+        with patch(STATE_SUMMARY_TIME, return_value=100.0):
             summary = controller.state_summary()
 
         self.assertTrue(controller.config_path().endswith("config.shelly_wallbox.ini"))
@@ -152,7 +159,7 @@ class TestServiceStateController(unittest.TestCase):
             _contactor_lockout_reason="",
         )
         controller = ServiceStateController(service, self._normalize_mode)
-        with patch("shelly_wallbox.controllers.state.time.time", return_value=100.0):
+        with patch(STATE_SUMMARY_TIME, return_value=100.0):
             open_summary = controller.state_summary()
 
         self.assertIn("contactor_suspected_open=1", open_summary)
@@ -162,7 +169,7 @@ class TestServiceStateController(unittest.TestCase):
         self.assertIn("recovery=0", open_summary)
 
         service._last_health_reason = "contactor-suspected-welded"
-        with patch("shelly_wallbox.controllers.state.time.time", return_value=100.0):
+        with patch(STATE_SUMMARY_TIME, return_value=100.0):
             welded_summary = controller.state_summary()
 
         self.assertIn("contactor_suspected_open=0", welded_summary)
@@ -170,7 +177,7 @@ class TestServiceStateController(unittest.TestCase):
 
         service._last_health_reason = "contactor-lockout-open"
         service._last_auto_state = "recovery"
-        with patch("shelly_wallbox.controllers.state.time.time", return_value=100.0):
+        with patch(STATE_SUMMARY_TIME, return_value=100.0):
             lockout_summary = controller.state_summary()
 
         self.assertIn("fault=1", lockout_summary)
@@ -185,7 +192,7 @@ class TestServiceStateController(unittest.TestCase):
         controller = ServiceStateController(service, self._normalize_mode)
 
         self.assertEqual(controller._read_runtime_override_values(""), {})
-        with patch("shelly_wallbox.controllers.state._CasePreservingConfigParser.read", side_effect=RuntimeError("boom")):
+        with patch(STATE_RUNTIME_PARSER_READ, side_effect=RuntimeError("boom")):
             self.assertEqual(controller._read_runtime_override_values("/tmp/runtime.ini"), {})
         self.assertIn("AutoDbusBackoffBaseSeconds", controller._serialized_runtime_overrides())
         controller._restore_contactor_runtime_state(
@@ -250,7 +257,7 @@ class TestServiceStateController(unittest.TestCase):
         )
         controller = ServiceStateController(service, self._normalize_mode)
         now = datetime(2026, 4, 20, 21, 0).timestamp()
-        with patch("shelly_wallbox.controllers.state.time.time", return_value=now):
+        with patch(STATE_SUMMARY_TIME, return_value=now):
             summary = controller.state_summary()
 
         self.assertIn("scheduled_state=night-boost", summary)
@@ -303,7 +310,7 @@ class TestServiceStateController(unittest.TestCase):
         )
         controller = ServiceStateController(service, self._normalize_mode)
         now = datetime(2026, 4, 20, 21, 0).timestamp()
-        with patch("shelly_wallbox.controllers.state.time.time", return_value=now):
+        with patch(STATE_SUMMARY_TIME, return_value=now):
             summary = controller.state_summary()
 
         self.assertIn("fault=1", summary)
@@ -351,7 +358,7 @@ class TestServiceStateController(unittest.TestCase):
             _last_charger_transport_at=199.0,
         )
         controller = ServiceStateController(service, self._normalize_mode)
-        with patch("shelly_wallbox.controllers.state.time.time", return_value=200.0):
+        with patch(STATE_SUMMARY_TIME, return_value=200.0):
             summary = controller.state_summary()
 
         self.assertIn("fault=0", summary)
@@ -512,7 +519,7 @@ class TestServiceStateController(unittest.TestCase):
             self.assertTrue(service._runtime_overrides_active)
             self.assertEqual(service._runtime_overrides_values["AutoPhaseSwitching"], "1")
 
-            with patch("shelly_wallbox.controllers.state.write_text_atomically") as write_mock:
+            with patch(STATE_RUNTIME_WRITE) as write_mock:
                 controller.save_runtime_overrides()
 
         write_mock.assert_not_called()
@@ -574,7 +581,7 @@ class TestServiceStateController(unittest.TestCase):
             )
             controller = ServiceStateController(service, self._normalize_mode)
 
-            with patch("shelly_wallbox.controllers.state.write_text_atomically") as write_mock:
+            with patch(STATE_RUNTIME_WRITE) as write_mock:
                 controller.save_runtime_overrides()
                 self.assertEqual(write_mock.call_count, 1)
                 self.assertIn("Mode = 1", write_mock.call_args.args[1])
@@ -655,7 +662,7 @@ class TestServiceStateController(unittest.TestCase):
             )
             controller = ServiceStateController(service, self._normalize_mode)
 
-            with patch("shelly_wallbox.controllers.state.write_text_atomically") as write_mock:
+            with patch(STATE_RUNTIME_WRITE) as write_mock:
                 controller.save_runtime_overrides()
                 self.assertEqual(write_mock.call_count, 1)
 
@@ -730,7 +737,7 @@ class TestServiceStateController(unittest.TestCase):
             controller = ServiceStateController(service, self._normalize_mode)
 
             with patch(
-                "shelly_wallbox.controllers.state.write_text_atomically",
+                STATE_RUNTIME_WRITE,
                 side_effect=RuntimeError("boom"),
             ) as write_mock:
                 controller.save_runtime_overrides()
@@ -1269,7 +1276,7 @@ class TestServiceStateController(unittest.TestCase):
             controller.load_runtime_state()
 
             now = datetime(2026, 4, 20, 20, 15).timestamp()
-            with patch("shelly_wallbox.controllers.state.time.time", return_value=now):
+            with patch(STATE_SUMMARY_TIME, return_value=now):
                 summary = controller.state_summary()
 
             self.assertEqual(service.virtual_mode, 2)
@@ -1316,9 +1323,9 @@ class TestServiceStateController(unittest.TestCase):
             controller.save_runtime_state()
             self.assertEqual(service._runtime_state_serialized, first_serialized)
 
-            with patch("shelly_wallbox.controllers.state.write_text_atomically", side_effect=RuntimeError("boom")):
+            with patch(STATE_RESTORE_WRITE, side_effect=RuntimeError("boom")):
                 service._runtime_state_serialized = None
-                with patch("shelly_wallbox.controllers.state.logging.warning") as warning_mock:
+                with patch(STATE_RESTORE_LOG_WARNING) as warning_mock:
                     controller.save_runtime_state()
                 warning_mock.assert_called_once()
 
@@ -1336,7 +1343,7 @@ class TestServiceStateController(unittest.TestCase):
             service.runtime_state_path = path
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write("{bad json")
-            with patch("shelly_wallbox.controllers.state.logging.warning") as warning_mock:
+            with patch(STATE_RUNTIME_LOG_WARNING) as warning_mock:
                 controller.load_runtime_state()
             warning_mock.assert_called_once()
 

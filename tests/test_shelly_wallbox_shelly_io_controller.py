@@ -33,7 +33,7 @@ class TestShellyIoController(unittest.TestCase):
         basic_controller = ShellyIoController(basic_service)
         none_controller = ShellyIoController(none_service)
 
-        with patch("shelly_wallbox.backend.shelly_io.HTTPDigestAuth", return_value="digest-auth") as digest_auth:
+        with patch("shelly_wallbox.backend.shelly_io_requests.HTTPDigestAuth", return_value="digest-auth") as digest_auth:
             self.assertEqual(digest_controller._request_auth_kwargs(), {"auth": "digest-auth"})
         digest_auth.assert_called_once_with("user", "pass")
         self.assertEqual(basic_controller._request_auth_kwargs(), {"auth": ("user", "pass")})
@@ -1078,7 +1078,7 @@ class TestShellyIoController(unittest.TestCase):
         )
 
         controller = ShellyIoController(service)
-        with patch("shelly_wallbox.backend.shelly_io.threading.Thread") as thread_factory:
+        with patch("shelly_wallbox.backend.shelly_io_worker.threading.Thread") as thread_factory:
             controller.start_io_worker()
             thread_factory.assert_not_called()
         service._ensure_auto_input_helper_process.assert_called_once_with()
@@ -1090,7 +1090,7 @@ class TestShellyIoController(unittest.TestCase):
         )
         controller = ShellyIoController(service)
         thread = MagicMock()
-        with patch("shelly_wallbox.backend.shelly_io.threading.Thread", return_value=thread) as thread_factory:
+        with patch("shelly_wallbox.backend.shelly_io_worker.threading.Thread", return_value=thread) as thread_factory:
             controller.start_io_worker()
 
         thread_factory.assert_called_once()

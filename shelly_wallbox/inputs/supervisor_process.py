@@ -1,0 +1,127 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# mypy: disable-error-code=attr-defined
+# pyright: reportAttributeAccessIssue=false
+"""Helper-process lifecycle helpers for the Auto input supervisor."""
+
+from __future__ import annotations
+
+import logging
+import os
+import subprocess
+import sys
+from typing import Any
+
+
+class _AutoInputSupervisorProcessMixin:
+    def stop_helper(self, force: bool = False) -> None:
+        svc = self.service
+        svc._ensure_worker_state()
+        process = svc._auto_input_helper_process
+        if process is None:
+            return
+        if process.poll() is not None:
+            svc._auto_input_helper_process = None
+            svc._auto_input_helper_restart_requested_at = None
+            return
+        try:
+            if force:
+                process.kill()
+            else:
+                process.terminate()
+        except Exception as error:  # pylint: disable=broad-except
+            logging.debug("Unable to stop auto input helper pid=%s: %s", getattr(process, "pid", "na"), error)
+
+    def spawn_helper(self, now: float | None = None) -> None:
+        svc = self.service
+        svc._ensure_worker_state()
+        current = svc._time_now() if now is None else float(now)
+        command = [
+            sys.executable,
+            "-u",
+            svc._auto_input_helper_path(),
+            svc._config_path(),
+            svc.auto_input_snapshot_path,
+            str(os.getpid()),
+        ]
+        process = subprocess.Popen(command)  # pylint: disable=consider-using-with
+        svc._auto_input_helper_process = process
+        svc._auto_input_helper_last_start_at = current
+        svc._auto_input_helper_restart_requested_at = None
+        logging.info(
+            "Started auto input helper pid=%s snapshot=%s",
+            getattr(process, "pid", "na"),
+            svc.auto_input_snapshot_path,
+        )
+
+    def _helper_snapshot_age(self, current: float) -> float | None:
+        svc = self.service
+        if svc._auto_input_snapshot_last_seen is not None:
+            return current - float(svc._auto_input_snapshot_last_seen)
+        if svc._auto_input_helper_last_start_at > 0:
+            return current - float(svc._auto_input_helper_last_start_at)
+        return None
+
+    def _handle_stale_running_helper(self, process: Any, current: float, snapshot_age: float | None) -> bool:
+        svc = self.service
+        if snapshot_age is None or snapshot_age <= svc.auto_input_helper_stale_seconds:
+            return False
+        if svc._auto_input_helper_restart_requested_at is None:
+            svc._auto_input_helper_restart_requested_at = current
+            logging.warning(
+                "Auto input helper pid=%s stale for %.0fs, restarting",
+                getattr(process, "pid", "na"),
+                snapshot_age,
+            )
+            svc._stop_auto_input_helper(force=False)
+            return True
+        if (current - svc._auto_input_helper_restart_requested_at) > max(2.0, svc.auto_input_helper_restart_seconds):
+            svc._stop_auto_input_helper(force=True)
+        return True
+
+    def _handle_existing_helper_process(self, process: Any, current: float) -> bool:
+        svc = self.service
+        return_code = process.poll()
+        if return_code is None:
+            snapshot_age = self._helper_snapshot_age(current)
+            if self._handle_stale_running_helper(process, current, snapshot_age):
+                return True
+            return True
+        logging.warning(
+            "Auto input helper exited with rc=%s pid=%s",
+            return_code,
+            getattr(process, "pid", "na"),
+        )
+        svc._auto_input_helper_process = None
+        svc._auto_input_helper_restart_requested_at = None
+        return False
+
+    def _helper_restart_cooldown_active(self, current: float) -> bool:
+        svc = self.service
+        return bool(
+            svc._auto_input_helper_last_start_at > 0
+            and (current - svc._auto_input_helper_last_start_at) < svc.auto_input_helper_restart_seconds
+        )
+
+    def _spawn_helper_with_warning(self, current: float) -> None:
+        svc = self.service
+        try:
+            svc._spawn_auto_input_helper(current)
+        except Exception as error:  # pylint: disable=broad-except
+            svc._warning_throttled(
+                "auto-input-helper-start-failed",
+                max(1.0, svc.auto_input_helper_restart_seconds),
+                "Unable to start auto input helper: %s",
+                error,
+                exc_info=error,
+            )
+
+    def ensure_helper_process(self, now: float | None = None) -> None:
+        svc = self.service
+        svc._ensure_worker_state()
+        current = svc._time_now() if now is None else float(now)
+        process = svc._auto_input_helper_process
+        if process is not None and self._handle_existing_helper_process(process, current):
+            return
+        if self._helper_restart_cooldown_active(current):
+            return
+        self._spawn_helper_with_warning(current)
