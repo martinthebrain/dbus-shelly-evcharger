@@ -11,31 +11,31 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" >/dev/null 2>&1 && pwd)
-BOOTSTRAP_STATE_DIR="${SCRIPT_DIR}/.wallbox-bootstrap"
+BOOTSTRAP_STATE_DIR="${SCRIPT_DIR}/.venus-evcharger-bootstrap"
 NO_UPDATE_FILE="${SCRIPT_DIR}/noUpdate"
-DEFAULT_TARGET_DIR="${SCRIPT_DIR}/dbus-shelly-wallbox"
-DEFAULT_REPO_SLUG="martinthebrain/dbus-shelly-evcharger"
+DEFAULT_TARGET_DIR="${SCRIPT_DIR}/dbus-venus-evcharger"
+DEFAULT_REPO_SLUG="martinthebrain/venus-evcharger-service"
 DEFAULT_CHANNEL="main"
 
-TARGET_DIR="${SHELLY_WALLBOX_TARGET_DIR:-}"
+TARGET_DIR="${VENUS_EVCHARGER_TARGET_DIR:-}"
 if [ -z "$TARGET_DIR" ]; then
-    if [ -f "${SCRIPT_DIR}/deploy/venus/install_shelly_wallbox.sh" ]; then
+    if [ -f "${SCRIPT_DIR}/deploy/venus/install_venus_evcharger_service.sh" ]; then
         TARGET_DIR="$SCRIPT_DIR"
     else
         TARGET_DIR="$DEFAULT_TARGET_DIR"
     fi
 fi
 
-REPO_SLUG="${SHELLY_WALLBOX_REPO_SLUG:-$DEFAULT_REPO_SLUG}"
-CHANNEL="${SHELLY_WALLBOX_CHANNEL:-$DEFAULT_CHANNEL}"
+REPO_SLUG="${VENUS_EVCHARGER_REPO_SLUG:-$DEFAULT_REPO_SLUG}"
+CHANNEL="${VENUS_EVCHARGER_CHANNEL:-$DEFAULT_CHANNEL}"
 UPDATER_PATH="${BOOTSTRAP_STATE_DIR}/bootstrap_updater.sh"
-MANIFEST_SOURCE="${SHELLY_WALLBOX_MANIFEST_SOURCE:-https://raw.githubusercontent.com/${REPO_SLUG}/${CHANNEL}/deploy/venus/bootstrap_manifest.json}"
-MANIFEST_SIG_SOURCE="${SHELLY_WALLBOX_MANIFEST_SIG_SOURCE:-${MANIFEST_SOURCE}.sig}"
-UPDATER_SOURCE="${SHELLY_WALLBOX_UPDATER_SOURCE:-https://raw.githubusercontent.com/${REPO_SLUG}/${CHANNEL}/deploy/venus/bootstrap_updater.sh}"
-UPDATER_HASH_SOURCE="${SHELLY_WALLBOX_UPDATER_HASH_SOURCE:-${UPDATER_SOURCE}.sha256}"
-BOOTSTRAP_PUBKEY_OVERRIDE="${SHELLY_WALLBOX_BOOTSTRAP_PUBKEY:-}"
-REQUIRE_SIGNED_MANIFEST="${SHELLY_WALLBOX_REQUIRE_SIGNED_MANIFEST:-0}"
-INSTALLER_OVERRIDE="${SHELLY_WALLBOX_INSTALLER_PATH:-}"
+MANIFEST_SOURCE="${VENUS_EVCHARGER_MANIFEST_SOURCE:-https://raw.githubusercontent.com/${REPO_SLUG}/${CHANNEL}/deploy/venus/bootstrap_manifest.json}"
+MANIFEST_SIG_SOURCE="${VENUS_EVCHARGER_MANIFEST_SIG_SOURCE:-${MANIFEST_SOURCE}.sig}"
+UPDATER_SOURCE="${VENUS_EVCHARGER_UPDATER_SOURCE:-https://raw.githubusercontent.com/${REPO_SLUG}/${CHANNEL}/deploy/venus/bootstrap_updater.sh}"
+UPDATER_HASH_SOURCE="${VENUS_EVCHARGER_UPDATER_HASH_SOURCE:-${UPDATER_SOURCE}.sha256}"
+BOOTSTRAP_PUBKEY_OVERRIDE="${VENUS_EVCHARGER_BOOTSTRAP_PUBKEY:-}"
+REQUIRE_SIGNED_MANIFEST="${VENUS_EVCHARGER_REQUIRE_SIGNED_MANIFEST:-0}"
+INSTALLER_OVERRIDE="${VENUS_EVCHARGER_INSTALLER_PATH:-}"
 MANIFEST_UPDATER_URL=""
 MANIFEST_UPDATER_SHA256=""
 MANIFEST_VERSION=""
@@ -256,19 +256,19 @@ resolve_installer_path() {
         printf '%s\n' "$INSTALLER_OVERRIDE"
         return 0
     fi
-    if [ -x "${TARGET_DIR}/current/deploy/venus/install_shelly_wallbox.sh" ]; then
-        printf '%s\n' "${TARGET_DIR}/current/deploy/venus/install_shelly_wallbox.sh"
+    if [ -x "${TARGET_DIR}/current/deploy/venus/install_venus_evcharger_service.sh" ]; then
+        printf '%s\n' "${TARGET_DIR}/current/deploy/venus/install_venus_evcharger_service.sh"
         return 0
     fi
-    printf '%s\n' "${TARGET_DIR}/deploy/venus/install_shelly_wallbox.sh"
+    printf '%s\n' "${TARGET_DIR}/deploy/venus/install_venus_evcharger_service.sh"
 }
 
 resolve_previous_installer_path() {
     previous_link="${TARGET_DIR}/previous"
     if [ -L "$previous_link" ] && command -v readlink >/dev/null 2>&1; then
         previous_target=$(readlink "$previous_link" 2>/dev/null || true)
-        if [ -n "$previous_target" ] && [ -x "${previous_target}/deploy/venus/install_shelly_wallbox.sh" ]; then
-            printf '%s\n' "${previous_target}/deploy/venus/install_shelly_wallbox.sh"
+        if [ -n "$previous_target" ] && [ -x "${previous_target}/deploy/venus/install_venus_evcharger_service.sh" ]; then
+            printf '%s\n' "${previous_target}/deploy/venus/install_venus_evcharger_service.sh"
             return 0
         fi
     fi
@@ -324,9 +324,9 @@ fi
 
 ensure_updater
 log "Running updater for target: $TARGET_DIR"
-export SHELLY_WALLBOX_MANIFEST_SOURCE="$MANIFEST_SOURCE"
-export SHELLY_WALLBOX_MANIFEST_SIG_SOURCE="$MANIFEST_SIG_SOURCE"
-export SHELLY_WALLBOX_BOOTSTRAP_PUBKEY="$(resolve_pubkey_path)"
-export SHELLY_WALLBOX_REQUIRE_SIGNED_MANIFEST="$REQUIRE_SIGNED_MANIFEST"
+export VENUS_EVCHARGER_MANIFEST_SOURCE="$MANIFEST_SOURCE"
+export VENUS_EVCHARGER_MANIFEST_SIG_SOURCE="$MANIFEST_SIG_SOURCE"
+export VENUS_EVCHARGER_BOOTSTRAP_PUBKEY="$(resolve_pubkey_path)"
+export VENUS_EVCHARGER_REQUIRE_SIGNED_MANIFEST="$REQUIRE_SIGNED_MANIFEST"
 "$UPDATER_PATH" "$TARGET_DIR"
 run_existing_installer

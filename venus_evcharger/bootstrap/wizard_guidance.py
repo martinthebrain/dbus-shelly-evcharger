@@ -1,0 +1,268 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Prompt guidance, compatibility warnings, and shared wizard defaults."""
+
+from __future__ import annotations
+
+from typing import Callable
+
+from venus_evcharger.bootstrap.wizard_charger_presets import apply_charger_preset_backend
+from venus_evcharger.bootstrap.wizard_import import ImportedWizardDefaults
+from venus_evcharger.bootstrap.wizard_models import WizardChargerBackend
+from venus_evcharger.bootstrap.wizard_support import SPLIT_PRESET_LABELS, SPLIT_PRESET_VALUES, host_from_input
+
+PromptText = Callable[[str, str], str]
+PromptChoice = Callable[[str, tuple[str, ...], dict[str, str] | None, str | None], str]
+
+_SPLIT_ROLE_HOSTS: dict[str, tuple[str, ...]] = {
+    "template-stack": ("meter", "switch", "charger"),
+    "shelly-io-template-charger": ("meter", "switch", "charger"),
+    "shelly-io-modbus-charger": ("meter", "switch"),
+    "shelly-meter-goe": ("meter", "charger"),
+    "shelly-meter-modbus-charger": ("meter", "charger"),
+    "goe-external-switch-group": ("switch", "charger"),
+    "template-meter-goe-switch-group": ("meter", "switch", "charger"),
+    "shelly-meter-goe-switch-group": ("meter", "switch", "charger"),
+    "shelly-meter-modbus-switch-group": ("meter", "switch"),
+}
+_ROLE_PROMPT_INTROS: dict[tuple[str, str | None], str] = {
+    ("native-charger", None): "This preset only needs the charger endpoint.",
+    ("native-charger-phase-switch", None): "This preset needs one charger endpoint and one external phase-switch endpoint.",
+    ("split-topology", "shelly-meter-goe"): "This topology uses a separate meter plus a native go-e charger.",
+    ("split-topology", "goe-external-switch-group"): "This topology uses a go-e charger plus one external switch-group adapter for phase switching.",
+}
+_DEFAULT_BACKENDS: dict[str, WizardChargerBackend] = {
+    "native-charger": "goe_charger",
+    "native-charger-phase-switch": "simpleevse_charger",
+}
+_PRESET_BACKENDS: dict[str, WizardChargerBackend] = {
+    "shelly-io-template-charger": "template_charger",
+    "shelly-io-modbus-charger": "modbus_charger",
+    "shelly-meter-modbus-switch-group": "modbus_charger",
+    "shelly-meter-goe": "goe_charger",
+    "shelly-meter-modbus-charger": "modbus_charger",
+    "goe-external-switch-group": "goe_charger",
+    "template-meter-goe-switch-group": "goe_charger",
+    "shelly-meter-goe-switch-group": "goe_charger",
+}
+_PHASE_LAYOUT_PRESETS = {"goe-external-switch-group"}
+_SWITCH_GROUP_PRESET_FRAGMENT = "switch-group"
+
+
+def prompt_split_preset(prompt_choice: PromptChoice, default: str) -> str:
+    labels: dict[str, str] = {key: value for key, value in SPLIT_PRESET_LABELS}
+    return prompt_choice("Choose the split-topology preset:", SPLIT_PRESET_VALUES, labels, default)
+
+
+def relevant_role_hosts(profile: str, split_preset: str | None) -> tuple[str, ...]:
+    if profile == "native-charger":
+        return ("charger",)
+    if profile == "native-charger-phase-switch":
+        return ("charger", "switch")
+    if profile != "split-topology":
+        return ()
+    return _SPLIT_ROLE_HOSTS.get(split_preset or "", ())
+
+
+def role_prompt_intro(profile: str, split_preset: str | None) -> str | None:
+    if profile == "split-topology":
+        return _ROLE_PROMPT_INTROS.get(
+            (profile, split_preset),
+            "This topology uses separate adapter roles. We will ask for each role endpoint individually.",
+        )
+    return _ROLE_PROMPT_INTROS.get((profile, None))
+
+
+def role_prompt_label(role: str, split_preset: str | None) -> str:
+    if role == "meter":
+        return "Meter endpoint (host or full BaseUrl)"
+    if role == "switch":
+        if split_preset and _SWITCH_GROUP_PRESET_FRAGMENT in split_preset:
+            return "External phase-switch endpoint (host or full BaseUrl)"
+        return "Switch endpoint (host or full BaseUrl)"
+    return "Charger endpoint (host or full BaseUrl)"
+
+
+def role_host_defaults(
+    namespace: object,
+    imported: ImportedWizardDefaults,
+    profile: str,
+    split_preset: str | None,
+    shared_host: str,
+) -> tuple[str | None, str | None, str | None]:
+    relevant = set(relevant_role_hosts(profile, split_preset))
+    role_values = {
+        role: getattr(namespace, f"{role}_host") or getattr(imported, f"{role}_host_input") or (shared_host if role in relevant else None)
+        for role in ("meter", "switch", "charger")
+    }
+    return role_values["meter"], role_values["switch"], role_values["charger"]
+
+
+def resolved_primary_host(
+    namespace: object,
+    imported: ImportedWizardDefaults,
+    meter_host: str | None,
+    switch_host: str | None,
+    charger_host: str | None,
+) -> str:
+    for candidate in (getattr(namespace, "host"), imported.host_input, charger_host, meter_host, switch_host):
+        if candidate:
+            return candidate
+    return "192.168.1.50"
+
+
+def prompt_role_hosts(
+    namespace: object,
+    imported: ImportedWizardDefaults,
+    profile: str,
+    split_preset: str | None,
+    shared_host: str,
+    *,
+    prompt_text: PromptText,
+) -> tuple[str | None, str | None, str | None]:
+    relevant = set(relevant_role_hosts(profile, split_preset))
+    role_defaults = _prompted_role_defaults(namespace, imported, profile, split_preset, shared_host, relevant, prompt_text)
+    return _filtered_role_defaults(role_defaults, relevant)
+
+
+def _role_defaults_map(
+    namespace: object,
+    imported: ImportedWizardDefaults,
+    profile: str,
+    split_preset: str | None,
+    shared_host: str,
+) -> dict[str, str | None]:
+    return dict(
+        zip(
+            ("meter", "switch", "charger"),
+            role_host_defaults(namespace, imported, profile, split_preset, shared_host),
+        )
+    )
+
+
+def _prompted_role_defaults(
+    namespace: object,
+    imported: ImportedWizardDefaults,
+    profile: str,
+    split_preset: str | None,
+    shared_host: str,
+    relevant: set[str],
+    prompt_text: PromptText,
+) -> dict[str, str | None]:
+    role_defaults = _role_defaults_map(namespace, imported, profile, split_preset, shared_host)
+    for role in sorted(relevant):
+        if getattr(namespace, f"{role}_host") is None:
+            role_defaults[role] = prompt_text(role_prompt_label(role, split_preset), role_defaults[role] or shared_host)
+    return role_defaults
+
+
+def _filtered_role_defaults(role_defaults: dict[str, str | None], relevant: set[str]) -> tuple[str | None, str | None, str | None]:
+    return (
+        role_defaults["meter"] if "meter" in relevant else None,
+        role_defaults["switch"] if "switch" in relevant else None,
+        role_defaults["charger"] if "charger" in relevant else None,
+    )
+
+
+def default_backend(profile: str, imported: ImportedWizardDefaults | None) -> WizardChargerBackend | None:
+    imported_backend = imported.charger_backend if imported is not None else None
+    return imported_backend or _DEFAULT_BACKENDS.get(profile)
+
+
+def apply_split_preset_backend(
+    split_preset: str | None,
+    backend: WizardChargerBackend | None,
+    charger_preset: str | None = None,
+) -> WizardChargerBackend | None:
+    resolved_backend = _resolved_split_preset_backend(split_preset, backend)
+    return apply_charger_preset_backend(charger_preset, resolved_backend)
+
+
+def _resolved_split_preset_backend(
+    split_preset: str | None,
+    backend: WizardChargerBackend | None,
+) -> WizardChargerBackend | None:
+    """Return the backend implied by one split preset, falling back to the explicit backend."""
+    if split_preset is None:
+        return backend
+    return _PRESET_BACKENDS.get(split_preset) or backend
+
+
+def compatibility_warnings(
+    *,
+    profile: str,
+    split_preset: str | None,
+    charger_backend: str | None,
+    primary_host_input: str,
+    role_hosts: dict[str, str],
+    transport_kind: str,
+    transport_host: str,
+    switch_group_supported_phase_selections: str,
+    charger_preset: str | None = None,
+) -> tuple[str, ...]:
+    shared_roles = sorted(role for role, value in role_hosts.items() if value == primary_host_input)
+    warning_items = (
+        _shared_endpoint_warning(profile, role_hosts),
+        _switch_group_warning(split_preset, shared_roles),
+        _charger_host_warning(charger_backend, transport_kind, transport_host, primary_host_input, role_hosts),
+        _charger_preset_warning(charger_preset),
+        _phase_layout_warning(switch_group_supported_phase_selections),
+    )
+    return tuple(item for item in warning_items if item is not None)
+
+
+def _shared_endpoint_warning(profile: str, role_hosts: dict[str, str]) -> str | None:
+    if profile == "split-topology" and len(role_hosts) > 1 and len(set(role_hosts.values())) == 1:
+        return "Multiple topology roles resolve to the same shared endpoint; verify that this combined-host layout is intentional."
+    return None
+
+
+def _switch_group_warning(split_preset: str | None, shared_roles: list[str]) -> str | None:
+    if split_preset and (_SWITCH_GROUP_PRESET_FRAGMENT in split_preset or split_preset in _PHASE_LAYOUT_PRESETS) and "switch" in shared_roles:
+        return "This switch_group preset is using the shared primary endpoint for the external phase switch; verify that the switch adapter is really colocated there."
+    return None
+
+
+def _charger_host_warning(
+    charger_backend: str | None,
+    transport_kind: str,
+    transport_host: str,
+    primary_host_input: str,
+    role_hosts: dict[str, str],
+) -> str | None:
+    if _modbus_primary_transport_warning(charger_backend, transport_kind, transport_host, primary_host_input):
+        return "The Modbus TCP charger currently uses the primary service host as transport host; confirm charger address and unit id."
+    if charger_backend == "goe_charger" and "charger" not in role_hosts:
+        return "The go-e preset fell back to the shared primary endpoint; set an explicit charger endpoint if the charger lives elsewhere."
+    return None
+
+
+def _modbus_primary_transport_warning(
+    charger_backend: str | None,
+    transport_kind: str,
+    transport_host: str,
+    primary_host_input: str,
+) -> bool:
+    return (
+        charger_backend == "modbus_charger"
+        and transport_kind == "tcp"
+        and transport_host == host_from_input(primary_host_input)
+    )
+
+
+def _phase_layout_warning(switch_group_supported_phase_selections: str) -> str | None:
+    if switch_group_supported_phase_selections == "P1,P1_P2_P3":
+        return "The external phase switch is configured for 1P -> 3P switching only; make sure a 2-phase step is intentionally unavailable."
+    return None
+
+
+def _charger_preset_warning(charger_preset: str | None) -> str | None:
+    if charger_preset == "cfos-power-brain-modbus":
+        return "The cFos preset only writes charging_enable, charging_cur_limit, and relay_select regularly; avoid adding periodic writes to other cFos registers because they persist to flash."
+    if charger_preset == "openwb-modbus-secondary":
+        return "The openWB Modbus preset expects the charger in secondary Modbus mode. If you enable the openWB heartbeat, keep this service polling continuously so the heartbeat does not expire."
+    return None
+
+
+def probe_roles(namespace: object) -> tuple[str, ...] | None:
+    selected = tuple(getattr(namespace, "probe_roles") or ())
+    return selected or None

@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping shape `dbus-shelly-evcharger`.
+Thanks for helping shape `venus-evcharger-service`.
 
 This project grows through real charging setups, careful field feedback, solid
 tests, and small changes that keep the outward behavior crisp on Venus OS.

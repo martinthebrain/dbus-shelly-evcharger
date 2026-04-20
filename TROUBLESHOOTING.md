@@ -10,20 +10,20 @@ For the full DBus path list and live diagnostics, see
 Check the runit service first:
 
 ```bash
-svstat /service/dbus-shelly-wallbox
+svstat /service/dbus-venus-evcharger
 ```
 
 Then reinstall the service wiring:
 
 ```bash
 cd /data/shellyWB
-./deploy/venus/install_shelly_wallbox.sh
+./deploy/venus/install_venus_evcharger_service.sh
 ```
 
 If you want the direct traceback, start the service once in the foreground:
 
 ```bash
-python3 ./dbus_shelly_wallbox.py
+python3 ./venus_evcharger_service.py
 ```
 
 If the issue started directly after a refresh, check the bootstrap and release
@@ -58,8 +58,8 @@ Check these points:
 Useful logs:
 
 ```bash
-tail -f /var/volatile/log/dbus-shelly-wallbox/current
-tail -f /var/volatile/log/dbus-shelly-wallbox/auto-reasons.log
+tail -f /var/volatile/log/dbus-venus-evcharger/current
+tail -f /var/volatile/log/dbus-venus-evcharger/auto-reasons.log
 ```
 
 Useful DBus paths:
@@ -84,7 +84,7 @@ Check:
 If the setup uses a charger adapter file, validate it directly:
 
 ```bash
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-charger.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-charger.ini
 ```
 
 ## Meter, Charger, And Switch Disagree
@@ -157,7 +157,7 @@ Check:
 Restart the service after a larger tuning session:
 
 ```bash
-svc -t /service/dbus-shelly-wallbox
+svc -t /service/dbus-venus-evcharger
 ```
 
 If the override path points to `/run/...`, a full GX reboot clears the runtime
@@ -168,13 +168,13 @@ layer and the service comes back on the base config.
 Validate the full wallbox configuration:
 
 ```bash
-python3 -m shelly_wallbox.backend.probe validate-wallbox deploy/venus/config.shelly_wallbox.ini
+python3 -m venus_evcharger.backend.probe validate-wallbox deploy/venus/config.venus_evcharger.ini
 ```
 
 Validate adapter files:
 
 ```bash
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-meter.ini
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-switch.ini
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-charger.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-meter.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-switch.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-charger.ini
 ```

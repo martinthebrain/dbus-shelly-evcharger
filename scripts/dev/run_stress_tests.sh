@@ -13,5 +13,5 @@ export SHELLY_STRESS_THREADS
 
 cd "$REPO_DIR"
 
-echo "Running Shelly wallbox stress tests with SHELLY_STRESS_ITERS=${SHELLY_STRESS_ITERS} SHELLY_STRESS_THREADS=${SHELLY_STRESS_THREADS}"
-python3 -m unittest tests.test_shelly_wallbox_stress
+echo "Running Venus EV charger stress tests with SHELLY_STRESS_ITERS=${SHELLY_STRESS_ITERS} SHELLY_STRESS_THREADS=${SHELLY_STRESS_THREADS}"
+python3 -m unittest tests.test_venus_evcharger_stress

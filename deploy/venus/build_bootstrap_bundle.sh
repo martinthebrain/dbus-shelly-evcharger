@@ -14,7 +14,7 @@ BUNDLE_URL="${3:-wallbox-bundle.tar.gz}"
 MANIFEST_PATH="${OUTPUT_DIR}/bootstrap_manifest.json"
 BUNDLE_PATH="${OUTPUT_DIR}/wallbox-bundle.tar.gz"
 MANIFEST_SIG_PATH="${OUTPUT_DIR}/bootstrap_manifest.json.sig"
-SIGNING_KEY="${SHELLY_WALLBOX_BOOTSTRAP_SIGNING_KEY:-}"
+SIGNING_KEY="${VENUS_EVCHARGER_BOOTSTRAP_SIGNING_KEY:-}"
 
 copy_item() {
     src_root="$1"
@@ -45,10 +45,10 @@ for rel_path in \
     README.md \
     SHELLY_PROFILES.md \
     version.txt \
-    dbus_shelly_wallbox.py \
-    shelly_wallbox_auto_input_helper.py \
+    venus_evcharger_service.py \
+    venus_evcharger_auto_input_helper.py \
     deploy/venus \
-    shelly_wallbox \
+    venus_evcharger \
     scripts/ops
 do
     copy_item "$SOURCE_DIR" "$stage_dir" "$rel_path"

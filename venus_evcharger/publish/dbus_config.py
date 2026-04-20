@@ -1,0 +1,316 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# mypy: disable-error-code="attr-defined,no-any-return"
+# pyright: reportAttributeAccessIssue=false, reportReturnType=false
+"""Config-value publishing helpers for DBus publishing."""
+
+from __future__ import annotations
+
+import time
+from datetime import datetime
+from typing import Any, Mapping, cast
+
+from venus_evcharger.backend.models import effective_supported_phase_selections, switch_feedback_mismatch
+from venus_evcharger.core.common import (
+    DEFAULT_SCHEDULED_ENABLED_DAYS,
+    evse_fault_reason,
+    mode_uses_scheduled_logic,
+    scheduled_mode_snapshot,
+)
+from venus_evcharger.core.contracts import finite_float_or_none, normalized_auto_state_pair
+
+class _DbusPublishConfigMixin:
+    def _config_values(self, startstop_display: int, now: float | None) -> dict[str, Any]:
+        """Return mode and control values keyed by DBus path."""
+        charger_enabled = self._charger_enabled_readback(now)
+        current_time = time.time() if now is None else float(now)
+        effective_supported = effective_supported_phase_selections(
+            getattr(self.service, "supported_phase_selections", ("P1",)),
+            lockout_selection=getattr(self.service, "_phase_switch_lockout_selection", None),
+            lockout_until=getattr(self.service, "_phase_switch_lockout_until", None),
+            now=current_time,
+        )
+        enable_display = (
+            int(bool(charger_enabled))
+            if charger_enabled is not None
+            else int(getattr(self.service, "virtual_enable", 1))
+        )
+        startstop_value = int(bool(charger_enabled)) if charger_enabled is not None else int(startstop_display)
+        return {
+            "/Mode": int(getattr(self.service, "virtual_mode", 0)),
+            "/AutoStart": int(getattr(self.service, "virtual_autostart", 1)),
+            "/StartStop": startstop_value,
+            "/Enable": enable_display,
+            "/PhaseSelection": str(getattr(self.service, "requested_phase_selection", "P1")),
+            "/PhaseSelectionActive": str(getattr(self.service, "active_phase_selection", "P1")),
+            "/SupportedPhaseSelections": ",".join(effective_supported),
+            "/SetCurrent": self._display_set_current(now),
+            "/MinCurrent": getattr(self.service, "min_current", 0.0),
+            "/MaxCurrent": getattr(self.service, "max_current", 0.0),
+            "/Auto/StartSurplusWatts": getattr(self.service, "auto_start_surplus_watts", 0.0),
+            "/Auto/StopSurplusWatts": getattr(self.service, "auto_stop_surplus_watts", 0.0),
+            "/Auto/MinSoc": getattr(self.service, "auto_min_soc", 0.0),
+            "/Auto/ResumeSoc": getattr(self.service, "auto_resume_soc", 0.0),
+            "/Auto/StartDelaySeconds": getattr(self.service, "auto_start_delay_seconds", 0.0),
+            "/Auto/StopDelaySeconds": getattr(self.service, "auto_stop_delay_seconds", 0.0),
+            "/Auto/ScheduledEnabledDays": str(
+                getattr(self.service, "auto_scheduled_enabled_days", "Mon,Tue,Wed,Thu,Fri")
+            ),
+            "/Auto/ScheduledFallbackDelaySeconds": getattr(
+                self.service,
+                "auto_scheduled_night_start_delay_seconds",
+                0.0,
+            ),
+            "/Auto/ScheduledLatestEndTime": str(
+                getattr(self.service, "auto_scheduled_latest_end_time", "06:30")
+            ),
+            "/Auto/ScheduledNightCurrent": getattr(self.service, "auto_scheduled_night_current_amps", 0.0),
+            "/Auto/DbusBackoffBaseSeconds": getattr(self.service, "auto_dbus_backoff_base_seconds", 0.0),
+            "/Auto/DbusBackoffMaxSeconds": getattr(self.service, "auto_dbus_backoff_max_seconds", 0.0),
+            "/Auto/GridRecoveryStartSeconds": getattr(self.service, "auto_grid_recovery_start_seconds", 0.0),
+            "/Auto/StopSurplusDelaySeconds": getattr(self.service, "auto_stop_surplus_delay_seconds", 0.0),
+            "/Auto/StopSurplusVolatilityLowWatts": getattr(
+                self.service,
+                "auto_stop_surplus_volatility_low_watts",
+                0.0,
+            ),
+            "/Auto/StopSurplusVolatilityHighWatts": getattr(
+                self.service,
+                "auto_stop_surplus_volatility_high_watts",
+                0.0,
+            ),
+            "/Auto/ReferenceChargePowerWatts": getattr(self.service, "auto_reference_charge_power_watts", 0.0),
+            "/Auto/LearnChargePowerEnabled": int(bool(getattr(self.service, "auto_learn_charge_power_enabled", True))),
+            "/Auto/LearnChargePowerMinWatts": getattr(self.service, "auto_learn_charge_power_min_watts", 0.0),
+            "/Auto/LearnChargePowerAlpha": getattr(self.service, "auto_learn_charge_power_alpha", 0.0),
+            "/Auto/LearnChargePowerStartDelaySeconds": getattr(
+                self.service,
+                "auto_learn_charge_power_start_delay_seconds",
+                0.0,
+            ),
+            "/Auto/LearnChargePowerWindowSeconds": getattr(
+                self.service,
+                "auto_learn_charge_power_window_seconds",
+                0.0,
+            ),
+            "/Auto/LearnChargePowerMaxAgeSeconds": getattr(
+                self.service,
+                "auto_learn_charge_power_max_age_seconds",
+                0.0,
+            ),
+            "/Auto/PhaseSwitching": int(bool(getattr(self.service, "auto_phase_switching_enabled", True))),
+            "/Auto/PhasePreferLowestWhenIdle": int(
+                bool(getattr(self.service, "auto_phase_prefer_lowest_when_idle", True))
+            ),
+            "/Auto/PhaseUpshiftDelaySeconds": getattr(self.service, "auto_phase_upshift_delay_seconds", 0.0),
+            "/Auto/PhaseDownshiftDelaySeconds": getattr(self.service, "auto_phase_downshift_delay_seconds", 0.0),
+            "/Auto/PhaseUpshiftHeadroomWatts": getattr(self.service, "auto_phase_upshift_headroom_watts", 0.0),
+            "/Auto/PhaseDownshiftMarginWatts": getattr(self.service, "auto_phase_downshift_margin_watts", 0.0),
+            "/Auto/PhaseMismatchRetrySeconds": getattr(self.service, "auto_phase_mismatch_retry_seconds", 0.0),
+            "/Auto/PhaseMismatchLockoutCount": getattr(self.service, "auto_phase_mismatch_lockout_count", 0),
+            "/Auto/PhaseMismatchLockoutSeconds": getattr(self.service, "auto_phase_mismatch_lockout_seconds", 0.0),
+        }
+
+    @staticmethod
+    def _backend_mode_value(service: Any) -> str:
+        """Return one stable backend-mode label for diagnostics."""
+        raw_value = getattr(service, "backend_mode", "combined")
+        normalized = str(raw_value).strip()
+        return normalized or "combined"
+
+    @staticmethod
+    def _backend_type_value(service: Any, attribute_name: str, default: str = "") -> str:
+        """Return one stable backend-type label for diagnostics."""
+        raw_value = getattr(service, attribute_name, default)
+        normalized = str(raw_value).strip() if raw_value is not None else ""
+        return normalized or default
+
+    @staticmethod
+    def _charger_current_target_value(service: Any) -> float:
+        """Return the last applied native-charger current target or -1 when absent."""
+        target_amps = finite_float_or_none(getattr(service, "_charger_target_current_amps", None))
+        return -1.0 if target_amps is None else float(target_amps)
+
+    @staticmethod
+    def _auto_metrics(service: Any) -> dict[str, Any]:
+        """Return the latest Auto metrics mapping used for outward diagnostics."""
+        metrics = getattr(service, "_last_auto_metrics", None)
+        return dict(cast(dict[str, Any], metrics)) if isinstance(metrics, dict) else {}
+
+    @classmethod
+    def _auto_phase_metric_text(cls, service: Any, field_name: str) -> str:
+        """Return one outward-safe Auto phase metric text value."""
+        raw_value = cls._auto_metrics(service).get(field_name)
+        return "" if raw_value is None else str(raw_value).strip()
+
+    @staticmethod
+    def _diagnostic_text_value(raw_value: Any) -> str:
+        """Return one stripped diagnostic text value or an empty string."""
+        return "" if raw_value is None else str(raw_value).strip()
+
+    @staticmethod
+    def _fault_reason(service: Any) -> str:
+        """Return the active hard EVSE-fault reason or an empty string."""
+        reason = evse_fault_reason(getattr(service, "_last_health_reason", ""))
+        return "" if reason is None else reason
+
+    @classmethod
+    def _fault_active(cls, service: Any) -> int:
+        """Return whether a hard EVSE fault is currently active."""
+        return int(bool(cls._fault_reason(service)))
+
+    @staticmethod
+    def _scheduled_snapshot(service: Any, now: float) -> Any | None:
+        """Return the derived scheduled-mode snapshot when scheduled mode is active."""
+        if not mode_uses_scheduled_logic(getattr(service, "virtual_mode", 0)):
+            return None
+        return scheduled_mode_snapshot(
+            datetime.fromtimestamp(now),
+            getattr(service, "auto_month_windows", {}),
+            getattr(service, "auto_scheduled_enabled_days", DEFAULT_SCHEDULED_ENABLED_DAYS),
+            delay_seconds=float(getattr(service, "auto_scheduled_night_start_delay_seconds", 3600.0)),
+            latest_end_time=getattr(service, "auto_scheduled_latest_end_time", "06:30"),
+        )
+
+    @staticmethod
+    def _recovery_active(service: Any) -> int:
+        """Return whether the broad Auto state is currently in recovery mode."""
+        auto_state, _auto_state_code = normalized_auto_state_pair(
+            getattr(service, "_last_auto_state", "idle"),
+            getattr(service, "_last_auto_state_code", 0),
+        )
+        return int(auto_state == "recovery")
+
+    @classmethod
+    def _observed_phase_value(cls, service: Any) -> str:
+        """Return the latest observed phase selection from PM status or charger readback."""
+        pm_status = getattr(service, "_last_confirmed_pm_status", None)
+        if isinstance(pm_status, Mapping):
+            observed = cls._diagnostic_text_value(pm_status.get("_phase_selection"))
+            if observed:
+                return observed
+        return cls._diagnostic_text_value(getattr(service, "_last_charger_state_phase_selection", None))
+
+    @staticmethod
+    def _phase_switch_mismatch_active(service: Any) -> int:
+        """Return whether a phase-switch mismatch is currently active."""
+        active = bool(getattr(service, "_phase_switch_mismatch_active", False))
+        if active:
+            return 1
+        return int(str(getattr(service, "_last_health_reason", "")) == "phase-switch-mismatch")
+
+    @staticmethod
+    def _phase_switch_lockout_active(service: Any, now: float) -> int:
+        """Return whether a phase-switch lockout is currently active."""
+        lockout_selection = getattr(service, "_phase_switch_lockout_selection", None)
+        lockout_until = finite_float_or_none(getattr(service, "_phase_switch_lockout_until", None))
+        if lockout_selection is None or lockout_until is None:
+            return 0
+        return 1 if float(now) < lockout_until else 0
+
+    @classmethod
+    def _phase_switch_lockout_target(cls, service: Any, now: float) -> str:
+        """Return the active phase-switch lockout target or an empty string."""
+        if cls._phase_switch_lockout_active(service, now) == 0:
+            return ""
+        return cls._diagnostic_text_value(getattr(service, "_phase_switch_lockout_selection", None))
+
+    @classmethod
+    def _phase_switch_lockout_reason(cls, service: Any, now: float) -> str:
+        """Return the active phase-switch lockout reason or an empty string."""
+        if cls._phase_switch_lockout_active(service, now) == 0:
+            return ""
+        return cls._diagnostic_text_value(getattr(service, "_phase_switch_lockout_reason", None))
+
+    @staticmethod
+    def _phase_supported_configured(service: Any) -> str:
+        """Return the configured supported phase selections without runtime degradation."""
+        return ",".join(tuple(getattr(service, "supported_phase_selections", ("P1",))))
+
+    @classmethod
+    def _phase_supported_effective(cls, service: Any, now: float) -> str:
+        """Return the effective supported phase selections after lockout degradation."""
+        effective_supported = effective_supported_phase_selections(
+            getattr(service, "supported_phase_selections", ("P1",)),
+            lockout_selection=getattr(service, "_phase_switch_lockout_selection", None),
+            lockout_until=getattr(service, "_phase_switch_lockout_until", None),
+            now=now,
+        )
+        return ",".join(effective_supported)
+
+    @classmethod
+    def _phase_degraded_active(cls, service: Any, now: float) -> int:
+        """Return whether runtime phase support is currently degraded."""
+        return int(cls._phase_supported_configured(service) != cls._phase_supported_effective(service, now))
+
+    @staticmethod
+    def _switch_feedback_closed(service: Any) -> int:
+        """Return explicit switch feedback as 0/1, or -1 when unavailable."""
+        feedback_closed = getattr(service, "_last_switch_feedback_closed", None)
+        return -1 if feedback_closed is None else int(bool(feedback_closed))
+
+    @staticmethod
+    def _switch_interlock_ok(service: Any) -> int:
+        """Return explicit switch interlock state as 0/1, or -1 when unavailable."""
+        interlock_ok = getattr(service, "_last_switch_interlock_ok", None)
+        return -1 if interlock_ok is None else int(bool(interlock_ok))
+
+    @classmethod
+    def _switch_feedback_mismatch(cls, service: Any) -> int:
+        """Return whether explicit switch feedback currently disagrees with relay state."""
+        feedback_closed = getattr(service, "_last_switch_feedback_closed", None)
+        if feedback_closed is None:
+            return int(str(getattr(service, "_last_health_reason", "")) == "contactor-feedback-mismatch")
+        pm_status = getattr(service, "_last_confirmed_pm_status", None)
+        relay_on = False if not isinstance(pm_status, Mapping) else bool(pm_status.get("output", False))
+        return int(switch_feedback_mismatch(relay_on, feedback_closed))
+
+    @staticmethod
+    def _contactor_suspected_open(service: Any) -> int:
+        """Return whether runtime currently suspects an open contactor without explicit feedback."""
+        return int(str(getattr(service, "_last_health_reason", "")) == "contactor-suspected-open")
+
+    @staticmethod
+    def _contactor_suspected_welded(service: Any) -> int:
+        """Return whether runtime currently suspects a welded contactor without explicit feedback."""
+        return int(str(getattr(service, "_last_health_reason", "")) == "contactor-suspected-welded")
+
+    @staticmethod
+    def _contactor_lockout_reason(service: Any) -> str:
+        """Return the active contactor-fault lockout reason or an empty string."""
+        reason = str(getattr(service, "_contactor_lockout_reason", "") or "").strip()
+        return reason
+
+    @classmethod
+    def _contactor_lockout_active(cls, service: Any) -> int:
+        """Return whether a contactor-fault lockout is currently latched."""
+        return int(bool(cls._contactor_lockout_reason(service)))
+
+    @staticmethod
+    def _contactor_lockout_source(service: Any) -> str:
+        """Return the active contactor-fault lockout source or an empty string."""
+        source = str(getattr(service, "_contactor_lockout_source", "") or "").strip()
+        return source
+
+    @classmethod
+    def _contactor_fault_count(cls, service: Any) -> int:
+        """Return the current contactor-fault counter for the active or latched reason."""
+        counts = getattr(service, "_contactor_fault_counts", None)
+        if not isinstance(counts, dict):
+            return 0
+        reason = cls._contactor_lockout_reason(service)
+        if not reason:
+            reason = str(getattr(service, "_contactor_fault_active_reason", "") or "").strip()
+        if not reason:
+            return 0
+        return int(counts.get(reason, 0))
+
+    @classmethod
+    def _auto_phase_metric_float(cls, service: Any, field_name: str) -> float:
+        """Return one outward-safe Auto phase metric float value or -1 when absent."""
+        value = finite_float_or_none(cls._auto_metrics(service).get(field_name))
+        return -1.0 if value is None else float(value)
+
+    def publish_config_paths(self, startstop_display: int, now: float | None) -> bool:
+        """Publish configuration-like EV charger paths only when they change."""
+        self.ensure_state()
+        return self._publish_values_transactional("config", self._config_values(startstop_display, now), now)

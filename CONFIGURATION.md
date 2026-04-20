@@ -1,7 +1,7 @@
 # Configuration
 
 This guide explains how to shape a wallbox installation from
-`deploy/venus/config.shelly_wallbox.ini`.
+`deploy/venus/config.venus_evcharger.ini`.
 
 The most useful way to read the config is by decision area:
 
@@ -194,15 +194,15 @@ Operational metadata:
 Validate the full wallbox config:
 
 ```bash
-python3 -m shelly_wallbox.backend.probe validate-wallbox deploy/venus/config.shelly_wallbox.ini
+python3 -m venus_evcharger.backend.probe validate-wallbox deploy/venus/config.venus_evcharger.ini
 ```
 
 Validate adapter files individually:
 
 ```bash
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-meter.ini
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-switch.ini
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-charger.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-meter.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-switch.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-charger.ini
 ```
 
 ## Live Inspection

@@ -1,9 +1,9 @@
-# Shelly Wallbox for Victron Venus OS
+# Venus OS EV Charger Service
 
-[![CI](https://github.com/martinthebrain/dbus-shelly-evcharger/actions/workflows/ci.yml/badge.svg)](https://github.com/martinthebrain/dbus-shelly-evcharger/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/martinthebrain/dbus-shelly-evcharger/graph/badge.svg)](https://codecov.io/gh/martinthebrain/dbus-shelly-evcharger)
+[![CI](https://github.com/martinthebrain/venus-evcharger-service/actions/workflows/ci.yml/badge.svg)](https://github.com/martinthebrain/venus-evcharger-service/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/martinthebrain/venus-evcharger-service/graph/badge.svg)](https://codecov.io/gh/martinthebrain/venus-evcharger-service)
 
-`dbus-shelly-evcharger` brings EV charging setups into Victron Venus OS as a
+`venus-evcharger-service` brings EV charging setups into Victron Venus OS as a
 full EV charger service with GUI tile, DBus integration, MQTT reachability,
 Auto logic, Scheduled logic, backend abstraction, and GX-friendly deployment.
 
@@ -198,19 +198,19 @@ Software update cadence:
 
 1. Copy the repository to a writable path under `/data`, for example
    `/data/shellyWB`.
-2. Edit `deploy/venus/config.shelly_wallbox.ini`.
+2. Edit `deploy/venus/config.venus_evcharger.ini`.
 3. Run:
 
    ```bash
    cd /data/shellyWB
-   ./deploy/venus/install_shelly_wallbox.sh
+   ./deploy/venus/install_venus_evcharger_service.sh
    ```
 
    For guided first-time setup or an intentional reconfiguration, run the
    optional wizard before restarting the service:
 
    ```bash
-   ./deploy/venus/configure_wallbox.sh
+   ./deploy/venus/configure_venus_evcharger_service.sh
    ```
 
    The wizard also supports non-interactive presets, import/clone defaults from
@@ -225,18 +225,20 @@ Software update cadence:
    Split-topology presets now cover documented starter layouts such as:
    `template-stack`, `shelly-meter-goe`, `goe-external-switch-group`,
    `shelly-meter-goe-switch-group`, `shelly-io-modbus-charger`, and
-   `shelly-meter-modbus-switch-group`.
+   `shelly-meter-modbus-switch-group`. Native Modbus charger presets now also
+   cover device-specific mappings for `abb-terra-ac-modbus`,
+   `cfos-power-brain-modbus`, and `openwb-modbus-secondary`.
 
 4. Restart the service:
 
    ```bash
-   svc -t /service/dbus-shelly-wallbox
+   svc -t /service/dbus-venus-evcharger
    ```
 
 5. Verify the service:
 
    ```bash
-   svstat /service/dbus-shelly-wallbox
+   svstat /service/dbus-venus-evcharger
    dbus -y com.victronenergy.evcharger.http_60 /Connected GetValue
    ```
 
@@ -265,12 +267,12 @@ Bootstrap highlights:
 
 Useful bootstrap variables:
 
-- `SHELLY_WALLBOX_TARGET_DIR`
-- `SHELLY_WALLBOX_CHANNEL`
-- `SHELLY_WALLBOX_SOURCE_DIR`
-- `SHELLY_WALLBOX_MANIFEST_SOURCE`
-- `SHELLY_WALLBOX_BOOTSTRAP_PUBKEY`
-- `SHELLY_WALLBOX_REQUIRE_SIGNED_MANIFEST`
+- `VENUS_EVCHARGER_TARGET_DIR`
+- `VENUS_EVCHARGER_CHANNEL`
+- `VENUS_EVCHARGER_SOURCE_DIR`
+- `VENUS_EVCHARGER_MANIFEST_SOURCE`
+- `VENUS_EVCHARGER_BOOTSTRAP_PUBKEY`
+- `VENUS_EVCHARGER_REQUIRE_SIGNED_MANIFEST`
 
 The full installation walkthrough lives in [INSTALL.md](INSTALL.md).
 The bootstrap and updater flow is described in [UPDATE_FLOW.md](UPDATE_FLOW.md).
@@ -279,7 +281,7 @@ The bootstrap and updater flow is described in [UPDATE_FLOW.md](UPDATE_FLOW.md).
 
 The main deployment file is:
 
-- `deploy/venus/config.shelly_wallbox.ini`
+- `deploy/venus/config.venus_evcharger.ini`
 
 The full configuration guide lives in [CONFIGURATION.md](CONFIGURATION.md).
 
@@ -311,15 +313,15 @@ Then shape the installation in three layers:
 Validate a full wallbox config before deployment:
 
 ```bash
-python3 -m shelly_wallbox.backend.probe validate-wallbox deploy/venus/config.shelly_wallbox.ini
+python3 -m venus_evcharger.backend.probe validate-wallbox deploy/venus/config.venus_evcharger.ini
 ```
 
 Validate an individual adapter file:
 
 ```bash
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-meter.ini
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-switch.ini
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-charger.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-meter.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-switch.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-charger.ini
 ```
 
 ## Diagnostics And Operations

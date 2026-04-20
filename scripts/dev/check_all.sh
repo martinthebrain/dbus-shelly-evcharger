@@ -9,16 +9,16 @@ cd "$REPO_DIR"
 
 echo "[1/3] Syntax check"
 python3 -m py_compile \
-    dbus_shelly_wallbox.py \
-    shelly_wallbox/bootstrap/controller.py \
-    shelly_wallbox/core/common.py \
-    shelly_wallbox/ports/__init__.py \
-    shelly_wallbox/controllers/auto.py \
-    shelly_wallbox/auto/workflow.py \
-    shelly_wallbox/inputs/dbus.py \
-    shelly_wallbox/runtime/support.py \
-    shelly_wallbox/controllers/write.py \
-    shelly_wallbox/update/controller.py
+    venus_evcharger_service.py \
+    venus_evcharger/bootstrap/controller.py \
+    venus_evcharger/core/common.py \
+    venus_evcharger/ports/__init__.py \
+    venus_evcharger/controllers/auto.py \
+    venus_evcharger/auto/workflow.py \
+    venus_evcharger/inputs/dbus.py \
+    venus_evcharger/runtime/support.py \
+    venus_evcharger/controllers/write.py \
+    venus_evcharger/update/controller.py
 
 echo "[2/3] Unit tests"
 python3 -m unittest discover -s tests -p 'test_*.py'

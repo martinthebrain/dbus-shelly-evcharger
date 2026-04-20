@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, patch
 
 sys.modules["dbus"] = MagicMock()
 
-from shelly_wallbox.ops import disable_generic_shelly_once  # noqa: E402
-from shelly_wallbox.ops.disable_generic_shelly_once import disable_matching_device, load_settings, matches_device  # noqa: E402
+from venus_evcharger.ops import disable_generic_shelly_once  # noqa: E402
+from venus_evcharger.ops.disable_generic_shelly_once import disable_matching_device, load_settings, matches_device  # noqa: E402
 
 
 class TestDisableGenericShellyOnce(unittest.TestCase):
@@ -319,7 +319,7 @@ class TestDisableGenericShellyOnce(unittest.TestCase):
     def test_main_guard_raises_system_exit(self):
         module_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
-            "shelly_wallbox",
+            "venus_evcharger",
             "ops",
             "disable_generic_shelly_once.py",
         )

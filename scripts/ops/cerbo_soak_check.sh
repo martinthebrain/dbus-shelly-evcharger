@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -u
 
-SERVICE_PATH="${SERVICE_PATH:-/service/dbus-shelly-wallbox}"
+SERVICE_PATH="${SERVICE_PATH:-/service/dbus-venus-evcharger}"
 DBUS_NAME="${DBUS_NAME:-com.victronenergy.evcharger.http_60}"
-AUTO_REASON_LOG="${AUTO_REASON_LOG:-/var/volatile/log/dbus-shelly-wallbox/auto-reasons.log}"
-AUTO_SNAPSHOT_PATH="${AUTO_SNAPSHOT_PATH:-/run/dbus-shelly-wallbox-auto-60.json}"
+AUTO_REASON_LOG="${AUTO_REASON_LOG:-/var/volatile/log/dbus-venus-evcharger/auto-reasons.log}"
+AUTO_SNAPSHOT_PATH="${AUTO_SNAPSHOT_PATH:-/run/dbus-venus-evcharger-auto-60.json}"
 TAIL_LINES="${TAIL_LINES:-40}"
 
 section() {
@@ -50,8 +50,8 @@ run_cmd "svstat $SERVICE_PATH/log" svstat "$SERVICE_PATH/log"
 run_cmd "ls -l $SERVICE_PATH" ls -l "$SERVICE_PATH"
 
 section "Processes"
-run_shell "ps | grep -E 'dbus_shelly_wallbox|shelly_wallbox_auto_input_helper' | grep -v grep" \
-    "ps | grep -E 'dbus_shelly_wallbox|shelly_wallbox_auto_input_helper' | grep -v grep"
+run_shell "ps | grep -E 'venus_evcharger_service|venus_evcharger_auto_input_helper' | grep -v grep" \
+    "ps | grep -E 'venus_evcharger_service|venus_evcharger_auto_input_helper' | grep -v grep"
 
 section "DBus"
 run_cmd "dbus -y $DBUS_NAME /ProductName GetValue" dbus -y "$DBUS_NAME" /ProductName GetValue

@@ -1,1 +1,0 @@
-"""Shelly wallbox package namespace."""

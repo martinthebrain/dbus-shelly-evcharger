@@ -27,16 +27,16 @@ if [ "${1:-}" = "" ] || [ "${2:-}" != "" ]; then
 fi
 
 TARGET_DIR="$1"
-DEFAULT_REPO_SLUG="martinthebrain/dbus-shelly-evcharger"
+DEFAULT_REPO_SLUG="martinthebrain/venus-evcharger-service"
 DEFAULT_CHANNEL="main"
-REPO_SLUG="${SHELLY_WALLBOX_REPO_SLUG:-$DEFAULT_REPO_SLUG}"
-CHANNEL="${SHELLY_WALLBOX_CHANNEL:-$DEFAULT_CHANNEL}"
-SOURCE_DIR_OVERRIDE="${SHELLY_WALLBOX_SOURCE_DIR:-}"
-MANIFEST_SOURCE="${SHELLY_WALLBOX_MANIFEST_SOURCE:-}"
-MANIFEST_SIG_SOURCE="${SHELLY_WALLBOX_MANIFEST_SIG_SOURCE:-${MANIFEST_SOURCE}.sig}"
-BOOTSTRAP_PUBKEY_OVERRIDE="${SHELLY_WALLBOX_BOOTSTRAP_PUBKEY:-}"
-REQUIRE_SIGNED_MANIFEST="${SHELLY_WALLBOX_REQUIRE_SIGNED_MANIFEST:-0}"
-ARCHIVE_URL="${SHELLY_WALLBOX_ARCHIVE_URL:-https://codeload.github.com/${REPO_SLUG}/tar.gz/refs/heads/${CHANNEL}}"
+REPO_SLUG="${VENUS_EVCHARGER_REPO_SLUG:-$DEFAULT_REPO_SLUG}"
+CHANNEL="${VENUS_EVCHARGER_CHANNEL:-$DEFAULT_CHANNEL}"
+SOURCE_DIR_OVERRIDE="${VENUS_EVCHARGER_SOURCE_DIR:-}"
+MANIFEST_SOURCE="${VENUS_EVCHARGER_MANIFEST_SOURCE:-}"
+MANIFEST_SIG_SOURCE="${VENUS_EVCHARGER_MANIFEST_SIG_SOURCE:-${MANIFEST_SOURCE}.sig}"
+BOOTSTRAP_PUBKEY_OVERRIDE="${VENUS_EVCHARGER_BOOTSTRAP_PUBKEY:-}"
+REQUIRE_SIGNED_MANIFEST="${VENUS_EVCHARGER_REQUIRE_SIGNED_MANIFEST:-0}"
+ARCHIVE_URL="${VENUS_EVCHARGER_ARCHIVE_URL:-https://codeload.github.com/${REPO_SLUG}/tar.gz/refs/heads/${CHANNEL}}"
 STATE_DIR="${TARGET_DIR}/.bootstrap-state"
 INSTALLED_BUNDLE_HASH_FILE="${STATE_DIR}/installed_bundle_sha256"
 INSTALLED_VERSION_FILE="${STATE_DIR}/installed_version"
@@ -151,10 +151,10 @@ download_to() {
 
 require_source_layout() {
     src_dir="$1"
-    [ -f "${src_dir}/dbus_shelly_wallbox.py" ] || return 1
-    [ -f "${src_dir}/shelly_wallbox_auto_input_helper.py" ] || return 1
-    [ -f "${src_dir}/deploy/venus/install_shelly_wallbox.sh" ] || return 1
-    [ -d "${src_dir}/shelly_wallbox" ] || return 1
+    [ -f "${src_dir}/venus_evcharger_service.py" ] || return 1
+    [ -f "${src_dir}/venus_evcharger_auto_input_helper.py" ] || return 1
+    [ -f "${src_dir}/deploy/venus/install_venus_evcharger_service.sh" ] || return 1
+    [ -d "${src_dir}/venus_evcharger" ] || return 1
     return 0
 }
 
@@ -369,10 +369,10 @@ managed_layout_paths() {
         README.md \
         SHELLY_PROFILES.md \
         version.txt \
-        dbus_shelly_wallbox.py \
-        shelly_wallbox_auto_input_helper.py \
+        venus_evcharger_service.py \
+        venus_evcharger_auto_input_helper.py \
         deploy/venus \
-        shelly_wallbox \
+        venus_evcharger \
         scripts/ops
 }
 
@@ -389,12 +389,12 @@ EOF
 preserve_local_config() {
     preserve_dir="$1"
     active_dir=$(current_codebase_dir)
-    if [ -f "${active_dir}/deploy/venus/config.shelly_wallbox.ini" ]; then
+    if [ -f "${active_dir}/deploy/venus/config.venus_evcharger.ini" ]; then
         mkdir -p "${preserve_dir}/deploy/venus"
-        cp "${active_dir}/deploy/venus/config.shelly_wallbox.ini" "${preserve_dir}/deploy/venus/config.shelly_wallbox.ini"
-    elif [ -f "${TARGET_DIR}/deploy/venus/config.shelly_wallbox.ini" ]; then
+        cp "${active_dir}/deploy/venus/config.venus_evcharger.ini" "${preserve_dir}/deploy/venus/config.venus_evcharger.ini"
+    elif [ -f "${TARGET_DIR}/deploy/venus/config.venus_evcharger.ini" ]; then
         mkdir -p "${preserve_dir}/deploy/venus"
-        cp "${TARGET_DIR}/deploy/venus/config.shelly_wallbox.ini" "${preserve_dir}/deploy/venus/config.shelly_wallbox.ini"
+        cp "${TARGET_DIR}/deploy/venus/config.venus_evcharger.ini" "${preserve_dir}/deploy/venus/config.venus_evcharger.ini"
     fi
     if [ -f "${TARGET_DIR}/noUpdate" ]; then
         cp "${TARGET_DIR}/noUpdate" "${preserve_dir}/noUpdate"
@@ -407,9 +407,9 @@ preserve_local_config() {
 restore_local_config() {
     preserve_dir="$1"
     destination_root="$2"
-    if [ -f "${preserve_dir}/deploy/venus/config.shelly_wallbox.ini" ]; then
+    if [ -f "${preserve_dir}/deploy/venus/config.venus_evcharger.ini" ]; then
         mkdir -p "${destination_root}/deploy/venus"
-        cp "${preserve_dir}/deploy/venus/config.shelly_wallbox.ini" "${destination_root}/deploy/venus/config.shelly_wallbox.ini"
+        cp "${preserve_dir}/deploy/venus/config.venus_evcharger.ini" "${destination_root}/deploy/venus/config.venus_evcharger.ini"
     fi
     if [ "$DRY_RUN" != "1" ]; then
         if [ -f "${preserve_dir}/noUpdate" ]; then
@@ -438,8 +438,8 @@ apply_merge_result() {
 merge_local_config_template() {
     source_root="$1"
     destination_root="$2"
-    template_path="${source_root}/deploy/venus/config.shelly_wallbox.ini"
-    local_path="${destination_root}/deploy/venus/config.shelly_wallbox.ini"
+    template_path="${source_root}/deploy/venus/config.venus_evcharger.ini"
+    local_path="${destination_root}/deploy/venus/config.venus_evcharger.ini"
     [ -f "$template_path" ] || return 0
     [ -f "$local_path" ] || return 0
 
@@ -719,12 +719,12 @@ PY
 
 validate_wallbox_config() {
     destination_root="$1"
-    config_path="${destination_root}/deploy/venus/config.shelly_wallbox.ini"
+    config_path="${destination_root}/deploy/venus/config.venus_evcharger.ini"
     [ -f "$config_path" ] || return 0
-    if [ -f "${destination_root}/shelly_wallbox/backend/probe.py" ]; then
+    if [ -f "${destination_root}/venus_evcharger/backend/probe.py" ]; then
         if (
             cd "$destination_root" &&
-            python3 -m shelly_wallbox.backend.probe validate-wallbox "$config_path" >/dev/null
+            python3 -m venus_evcharger.backend.probe validate-wallbox "$config_path" >/dev/null
         ); then
             VALIDATION_PASSED=1
             CONFIG_VALIDATION_MODE="probe"
@@ -801,14 +801,14 @@ write_managed_layout() {
     fi
 
     chmod 755 "${destination_root}/install.sh" 2>/dev/null || true
-    chmod 755 "${destination_root}/dbus_shelly_wallbox.py" 2>/dev/null || true
-    chmod 755 "${destination_root}/shelly_wallbox_auto_input_helper.py" 2>/dev/null || true
-    chmod 755 "${destination_root}/deploy/venus/install_shelly_wallbox.sh" 2>/dev/null || true
-    chmod 755 "${destination_root}/deploy/venus/boot_shelly_wallbox.sh" 2>/dev/null || true
-    chmod 744 "${destination_root}/deploy/venus/restart_shelly_wallbox.sh" 2>/dev/null || true
-    chmod 744 "${destination_root}/deploy/venus/uninstall_shelly_wallbox.sh" 2>/dev/null || true
-    chmod 755 "${destination_root}/deploy/venus/service_shelly_wallbox/run" 2>/dev/null || true
-    chmod 755 "${destination_root}/deploy/venus/service_shelly_wallbox/log/run" 2>/dev/null || true
+    chmod 755 "${destination_root}/venus_evcharger_service.py" 2>/dev/null || true
+    chmod 755 "${destination_root}/venus_evcharger_auto_input_helper.py" 2>/dev/null || true
+    chmod 755 "${destination_root}/deploy/venus/install_venus_evcharger_service.sh" 2>/dev/null || true
+    chmod 755 "${destination_root}/deploy/venus/boot_venus_evcharger_service.sh" 2>/dev/null || true
+    chmod 744 "${destination_root}/deploy/venus/restart_venus_evcharger_service.sh" 2>/dev/null || true
+    chmod 744 "${destination_root}/deploy/venus/uninstall_venus_evcharger_service.sh" 2>/dev/null || true
+    chmod 755 "${destination_root}/deploy/venus/service_venus_evcharger/run" 2>/dev/null || true
+    chmod 755 "${destination_root}/deploy/venus/service_venus_evcharger/log/run" 2>/dev/null || true
 }
 
 promote_target_layout() {

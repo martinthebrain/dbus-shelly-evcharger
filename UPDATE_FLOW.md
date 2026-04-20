@@ -47,7 +47,7 @@ Responsibilities:
 - prepare versioned release directories
 - keep rollback targets available
 
-### `deploy/venus/install_shelly_wallbox.sh`
+### `deploy/venus/install_venus_evcharger_service.sh`
 
 The regular Venus installer.
 
@@ -100,7 +100,7 @@ The wallbox config is preserved with an additive merge:
 - newly introduced release options therefore appear automatically
 - local comments and formatting stay intact for unchanged parts of the file
 - if a merge rewrite is needed, the updater writes a timestamped
-  `config.shelly_wallbox.ini.bak-<timestamp>` backup first
+  `config.venus_evcharger.ini.bak-<timestamp>` backup first
 - malformed local configs are left untouched rather than being rewritten during
   the merge step, and the updater records that merge skip reason in its status
   metadata
@@ -147,9 +147,9 @@ The update flow supports detached signatures for manifests through `openssl`.
 
 Useful inputs:
 
-- `SHELLY_WALLBOX_MANIFEST_SOURCE`
-- `SHELLY_WALLBOX_BOOTSTRAP_PUBKEY`
-- `SHELLY_WALLBOX_REQUIRE_SIGNED_MANIFEST`
+- `VENUS_EVCHARGER_MANIFEST_SOURCE`
+- `VENUS_EVCHARGER_BOOTSTRAP_PUBKEY`
+- `VENUS_EVCHARGER_REQUIRE_SIGNED_MANIFEST`
 
 This makes it possible to require a signed manifest before a refresh is
 accepted.
@@ -190,21 +190,21 @@ This is useful when:
 
 ## Typical Update Variables
 
-- `SHELLY_WALLBOX_TARGET_DIR`
-- `SHELLY_WALLBOX_CHANNEL`
-- `SHELLY_WALLBOX_SOURCE_DIR`
-- `SHELLY_WALLBOX_UPDATER_SOURCE`
-- `SHELLY_WALLBOX_UPDATER_HASH_SOURCE`
-- `SHELLY_WALLBOX_MANIFEST_SOURCE`
-- `SHELLY_WALLBOX_BOOTSTRAP_PUBKEY`
-- `SHELLY_WALLBOX_REQUIRE_SIGNED_MANIFEST`
+- `VENUS_EVCHARGER_TARGET_DIR`
+- `VENUS_EVCHARGER_CHANNEL`
+- `VENUS_EVCHARGER_SOURCE_DIR`
+- `VENUS_EVCHARGER_UPDATER_SOURCE`
+- `VENUS_EVCHARGER_UPDATER_HASH_SOURCE`
+- `VENUS_EVCHARGER_MANIFEST_SOURCE`
+- `VENUS_EVCHARGER_BOOTSTRAP_PUBKEY`
+- `VENUS_EVCHARGER_REQUIRE_SIGNED_MANIFEST`
 
 ## Practical Examples
 
 ### Regular bootstrap run
 
 ```bash
-cd /data/bootstrap-wallbox
+cd /data/bootstrap-venus-evcharger
 ./install.sh
 ```
 
@@ -224,7 +224,7 @@ The dry-run prints a JSON summary that includes:
 ### Freeze updates with `noUpdate`
 
 ```bash
-cd /data/bootstrap-wallbox
+cd /data/bootstrap-venus-evcharger
 touch noUpdate
 ./install.sh
 ```
@@ -232,7 +232,7 @@ touch noUpdate
 ### Use a local source tree
 
 ```bash
-SHELLY_WALLBOX_SOURCE_DIR=/data/src/dbus-shelly-evcharger ./install.sh
+VENUS_EVCHARGER_SOURCE_DIR=/data/src/venus-evcharger-service ./install.sh
 ```
 
 ### Trigger an update through DBus or MQTT

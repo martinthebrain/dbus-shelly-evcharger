@@ -58,7 +58,7 @@ case "${action}" in
     trap 'run_start "${tty_device}"' EXIT
     run_stop "${tty_device}"
     cd "${REPO_ROOT}"
-    python3 -m shelly_wallbox.backend.probe read-charger "${config_path}"
+    python3 -m venus_evcharger.backend.probe read-charger "${config_path}"
     ;;
   *)
     usage >&2

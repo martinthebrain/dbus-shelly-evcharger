@@ -6,10 +6,10 @@ for live troubleshooting on Venus OS.
 ## Service Commands
 
 ```bash
-svstat /service/dbus-shelly-wallbox
-svc -t /service/dbus-shelly-wallbox
-tail -f /var/volatile/log/dbus-shelly-wallbox/current
-tail -f /var/volatile/log/dbus-shelly-wallbox/auto-reasons.log
+svstat /service/dbus-venus-evcharger
+svc -t /service/dbus-venus-evcharger
+tail -f /var/volatile/log/dbus-venus-evcharger/current
+tail -f /var/volatile/log/dbus-venus-evcharger/auto-reasons.log
 ```
 
 ## Backend Diagnostics
@@ -122,13 +122,13 @@ The outward update-state vocabulary is fixed and compact:
 Validate a full wallbox configuration:
 
 ```bash
-python3 -m shelly_wallbox.backend.probe validate-wallbox deploy/venus/config.shelly_wallbox.ini
+python3 -m venus_evcharger.backend.probe validate-wallbox deploy/venus/config.venus_evcharger.ini
 ```
 
 Validate individual adapters:
 
 ```bash
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-meter.ini
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-switch.ini
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-charger.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-meter.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-switch.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-charger.ini
 ```

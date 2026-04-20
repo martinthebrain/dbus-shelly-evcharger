@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+from tests.venus_evcharger_update_cycle_controller_cases_primary import TestUpdateCycleControllerPrimary
+from tests.venus_evcharger_update_cycle_controller_cases_secondary import TestUpdateCycleControllerSecondary
+from tests.venus_evcharger_update_cycle_controller_cases_tertiary import TestUpdateCycleControllerTertiary
+from tests.venus_evcharger_update_cycle_controller_cases_quaternary import TestUpdateCycleControllerQuaternary
+from tests.venus_evcharger_update_cycle_controller_cases_quinary import TestUpdateCycleControllerQuinary
+from tests.venus_evcharger_update_cycle_controller_cases_senary import TestUpdateCycleControllerSenary
+from tests.venus_evcharger_update_cycle_controller_cases_septenary import TestUpdateCycleControllerSeptenary
+from tests.venus_evcharger_update_cycle_controller_cases_octonary import TestUpdateCycleControllerOctonary
+from tests.venus_evcharger_update_cycle_controller_cases_nonary import TestUpdateCycleControllerNonary
+from tests.venus_evcharger_update_cycle_controller_cases_denary import TestUpdateCycleControllerDenary
+from tests.venus_evcharger_update_cycle_controller_cases_undenary import TestUpdateCycleControllerUndenary
+from tests.venus_evcharger_update_cycle_controller_cases_duodenary import TestUpdateCycleControllerDuodenary
+from tests.venus_evcharger_update_cycle_controller_cases_trecenary import TestUpdateCycleControllerTrecenary
+from tests.venus_evcharger_update_cycle_controller_cases_quattuordenary import TestUpdateCycleControllerQuattuordenary
+from tests.venus_evcharger_update_cycle_controller_cases_quindenary import TestUpdateCycleControllerQuindenary
+
+__all__ = [
+    "TestUpdateCycleControllerPrimary",
+    "TestUpdateCycleControllerSecondary",
+    "TestUpdateCycleControllerTertiary",
+    "TestUpdateCycleControllerQuaternary",
+    "TestUpdateCycleControllerQuinary",
+    "TestUpdateCycleControllerSenary",
+    "TestUpdateCycleControllerSeptenary",
+    "TestUpdateCycleControllerOctonary",
+    "TestUpdateCycleControllerNonary",
+    "TestUpdateCycleControllerDenary",
+    "TestUpdateCycleControllerUndenary",
+    "TestUpdateCycleControllerDuodenary",
+    "TestUpdateCycleControllerTrecenary",
+    "TestUpdateCycleControllerQuattuordenary",
+    "TestUpdateCycleControllerQuindenary",
+]

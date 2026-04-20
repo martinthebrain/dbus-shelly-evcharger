@@ -20,7 +20,7 @@ This guide covers the usual installation paths for Venus OS and Cerbo GX.
 2. Edit:
 
    ```bash
-   deploy/venus/config.shelly_wallbox.ini
+   deploy/venus/config.venus_evcharger.ini
    ```
 
 3. Set the core deployment values:
@@ -35,14 +35,14 @@ This guide covers the usual installation paths for Venus OS and Cerbo GX.
 
    ```bash
    cd /data/shellyWB
-   ./deploy/venus/install_shelly_wallbox.sh
+   ./deploy/venus/install_venus_evcharger_service.sh
    ```
 
 5. Optional: run the guided setup wizard when you want a profile-based starting
    config instead of editing the INI by hand:
 
    ```bash
-   ./deploy/venus/configure_wallbox.sh
+   ./deploy/venus/configure_venus_evcharger_service.sh
    ```
 
    The wizard writes the generated config, optional adapter files, and a small
@@ -54,20 +54,20 @@ This guide covers the usual installation paths for Venus OS and Cerbo GX.
    `--live-check` or targeted `--probe-role`, and interactive password prompts
    now keep typed secrets hidden:
 
-   - `config.shelly_wallbox.ini.wizard-result.json`
-   - `config.shelly_wallbox.ini.wizard-audit.jsonl`
-   - `config.shelly_wallbox.ini.wizard-topology.txt`
+   - `config.venus_evcharger.ini.wizard-result.json`
+   - `config.venus_evcharger.ini.wizard-audit.jsonl`
+   - `config.venus_evcharger.ini.wizard-topology.txt`
 
 6. Restart the service:
 
    ```bash
-   svc -t /service/dbus-shelly-wallbox
+   svc -t /service/dbus-venus-evcharger
    ```
 
 7. Verify the service:
 
    ```bash
-   svstat /service/dbus-shelly-wallbox
+   svstat /service/dbus-venus-evcharger
    dbus -y com.victronenergy.evcharger.http_60 /Connected GetValue
    ```
 
@@ -93,12 +93,12 @@ Bootstrap highlights:
 
 Useful variables:
 
-- `SHELLY_WALLBOX_TARGET_DIR`
-- `SHELLY_WALLBOX_CHANNEL`
-- `SHELLY_WALLBOX_SOURCE_DIR`
-- `SHELLY_WALLBOX_MANIFEST_SOURCE`
-- `SHELLY_WALLBOX_BOOTSTRAP_PUBKEY`
-- `SHELLY_WALLBOX_REQUIRE_SIGNED_MANIFEST`
+- `VENUS_EVCHARGER_TARGET_DIR`
+- `VENUS_EVCHARGER_CHANNEL`
+- `VENUS_EVCHARGER_SOURCE_DIR`
+- `VENUS_EVCHARGER_MANIFEST_SOURCE`
+- `VENUS_EVCHARGER_BOOTSTRAP_PUBKEY`
+- `VENUS_EVCHARGER_REQUIRE_SIGNED_MANIFEST`
 
 The full bootstrap and updater behavior, including `noUpdate`, is documented in
 [UPDATE_FLOW.md](UPDATE_FLOW.md).
@@ -129,19 +129,19 @@ Further backend examples live in [CHARGER_BACKENDS.md](CHARGER_BACKENDS.md) and
 Interactive guided setup:
 
 ```bash
-./deploy/venus/configure_wallbox.sh
+./deploy/venus/configure_venus_evcharger_service.sh
 ```
 
 Preview only, no writes, JSON result:
 
 ```bash
-./deploy/venus/configure_wallbox.sh --dry-run --json
+./deploy/venus/configure_venus_evcharger_service.sh --dry-run --json
 ```
 
 Reuse the current config as defaults, but only preview the result:
 
 ```bash
-./deploy/venus/configure_wallbox.sh --clone-current --dry-run --json
+./deploy/venus/configure_venus_evcharger_service.sh --clone-current --dry-run --json
 ```
 
 Role-specific non-interactive host override flags:
@@ -149,6 +149,7 @@ Role-specific non-interactive host override flags:
 - `--meter-host`
 - `--switch-host`
 - `--charger-host`
+- `--charger-preset`
 - `--live-check`
 - `--probe-role`
 - `--resume-last`
@@ -168,7 +169,7 @@ Preset/policy tuning flags:
 Non-interactive native `go-e` charger:
 
 ```bash
-./deploy/venus/configure_wallbox.sh \
+./deploy/venus/configure_venus_evcharger_service.sh \
   --non-interactive \
   --force \
   --profile native-charger \
@@ -186,7 +187,7 @@ Non-interactive native `go-e` charger:
 Non-interactive native Modbus charger over TCP:
 
 ```bash
-./deploy/venus/configure_wallbox.sh \
+./deploy/venus/configure_venus_evcharger_service.sh \
   --non-interactive \
   --force \
   --profile native-charger \
@@ -197,10 +198,58 @@ Non-interactive native Modbus charger over TCP:
   --host 192.168.1.90
 ```
 
+Non-interactive ABB Terra AC preset over Modbus TCP:
+
+```bash
+./deploy/venus/configure_venus_evcharger_service.sh \
+  --non-interactive \
+  --force \
+  --profile native-charger \
+  --charger-backend modbus_charger \
+  --charger-preset abb-terra-ac-modbus \
+  --transport tcp \
+  --transport-host terra.local \
+  --transport-port 502 \
+  --transport-unit-id 1 \
+  --host terra.local
+```
+
+Non-interactive cFos Power Brain preset over Modbus TCP:
+
+```bash
+./deploy/venus/configure_venus_evcharger_service.sh \
+  --non-interactive \
+  --force \
+  --profile native-charger \
+  --charger-backend modbus_charger \
+  --charger-preset cfos-power-brain-modbus \
+  --transport tcp \
+  --transport-host cfos.local \
+  --transport-port 4701 \
+  --transport-unit-id 1 \
+  --host cfos.local
+```
+
+Non-interactive openWB secondary preset over Modbus TCP:
+
+```bash
+./deploy/venus/configure_venus_evcharger_service.sh \
+  --non-interactive \
+  --force \
+  --profile native-charger \
+  --charger-backend modbus_charger \
+  --charger-preset openwb-modbus-secondary \
+  --transport tcp \
+  --transport-host openwb.local \
+  --transport-port 1502 \
+  --transport-unit-id 1 \
+  --host openwb.local
+```
+
 Non-interactive split topology using only template adapters:
 
 ```bash
-./deploy/venus/configure_wallbox.sh \
+./deploy/venus/configure_venus_evcharger_service.sh \
   --non-interactive \
   --force \
   --profile split-topology \
@@ -211,7 +260,7 @@ Non-interactive split topology using only template adapters:
 Non-interactive split topology with Shelly meter and native `go-e` charger:
 
 ```bash
-./deploy/venus/configure_wallbox.sh \
+./deploy/venus/configure_venus_evcharger_service.sh \
   --non-interactive \
   --force \
   --profile split-topology \
@@ -223,7 +272,7 @@ Non-interactive split topology with Shelly meter and native `go-e` charger:
 Non-interactive split topology with `go-e` plus external 3-phase switch group:
 
 ```bash
-./deploy/venus/configure_wallbox.sh \
+./deploy/venus/configure_venus_evcharger_service.sh \
   --non-interactive \
   --force \
   --profile split-topology \
@@ -236,7 +285,7 @@ Non-interactive split topology with `go-e` plus external 3-phase switch group:
 Non-interactive split topology with Shelly meter, `go-e`, and external 3-phase switch group:
 
 ```bash
-./deploy/venus/configure_wallbox.sh \
+./deploy/venus/configure_venus_evcharger_service.sh \
   --non-interactive \
   --force \
   --profile split-topology \
@@ -249,7 +298,7 @@ Non-interactive split topology with Shelly meter, `go-e`, and external 3-phase s
 Non-interactive split topology with Shelly meter/switch plus Modbus charger:
 
 ```bash
-./deploy/venus/configure_wallbox.sh \
+./deploy/venus/configure_venus_evcharger_service.sh \
   --non-interactive \
   --force \
   --profile split-topology \
@@ -265,7 +314,7 @@ Non-interactive split topology with Shelly meter/switch plus Modbus charger:
 Non-interactive split topology with Shelly meter, Modbus charger, and external 3-phase switch group:
 
 ```bash
-./deploy/venus/configure_wallbox.sh \
+./deploy/venus/configure_venus_evcharger_service.sh \
   --non-interactive \
   --force \
   --profile split-topology \
@@ -278,20 +327,38 @@ Non-interactive split topology with Shelly meter, Modbus charger, and external 3
   --host 192.168.1.94
 ```
 
+Non-interactive split topology with Shelly meter plus cFos Power Brain preset:
+
+```bash
+./deploy/venus/configure_venus_evcharger_service.sh \
+  --non-interactive \
+  --force \
+  --profile split-topology \
+  --split-preset shelly-meter-modbus-charger \
+  --charger-preset cfos-power-brain-modbus \
+  --meter-host 192.168.1.24 \
+  --charger-host cfos.local \
+  --transport tcp \
+  --transport-host cfos.local \
+  --transport-port 4701 \
+  --transport-unit-id 1 \
+  --host 192.168.1.94
+```
+
 Clone an existing config from another path and adjust only the host:
 
 ```bash
-./deploy/venus/configure_wallbox.sh \
+./deploy/venus/configure_venus_evcharger_service.sh \
   --non-interactive \
   --import-config /data/etc/old-wallbox.ini \
   --host 192.168.1.120 \
-  --config-path ./deploy/venus/config.shelly_wallbox.ini
+  --config-path ./deploy/venus/config.venus_evcharger.ini
 ```
 
 Resume from the last wizard result next to the target config and only preview:
 
 ```bash
-./deploy/venus/configure_wallbox.sh \
+./deploy/venus/configure_venus_evcharger_service.sh \
   --non-interactive \
   --dry-run \
   --json \
@@ -303,15 +370,15 @@ Resume from the last wizard result next to the target config and only preview:
 Validate the full wallbox configuration:
 
 ```bash
-python3 -m shelly_wallbox.backend.probe validate-wallbox deploy/venus/config.shelly_wallbox.ini
+python3 -m venus_evcharger.backend.probe validate-wallbox deploy/venus/config.venus_evcharger.ini
 ```
 
 Validate adapter files individually:
 
 ```bash
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-meter.ini
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-switch.ini
-python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-charger.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-meter.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-switch.ini
+python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-charger.ini
 ```
 
 ## After Installation
@@ -319,10 +386,10 @@ python3 -m shelly_wallbox.backend.probe validate /data/etc/wallbox-charger.ini
 Useful commands:
 
 ```bash
-svstat /service/dbus-shelly-wallbox
-svc -t /service/dbus-shelly-wallbox
-tail -f /var/volatile/log/dbus-shelly-wallbox/current
-tail -f /var/volatile/log/dbus-shelly-wallbox/auto-reasons.log
+svstat /service/dbus-venus-evcharger
+svc -t /service/dbus-venus-evcharger
+tail -f /var/volatile/log/dbus-venus-evcharger/current
+tail -f /var/volatile/log/dbus-venus-evcharger/auto-reasons.log
 ```
 
 Live diagnostics and DBus paths are collected in
