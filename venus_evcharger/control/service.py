@@ -109,10 +109,8 @@ class ControlApiV1Service:
         source: ControlCommandSource,
     ) -> ControlCommand:
         """Translate one canonical command payload into one concrete command."""
-        name = str(payload["name"]).strip()
-        if name not in self._COMMAND_NAMES:
-            raise ValueError(f"Unsupported control command '{name}'.")
-        command_name = name
+        raw_name = str(payload["name"]).strip()
+        command_name = self._validated_command_name(raw_name)
         path = self._resolved_command_path(command_name, payload)
         detail = str(payload.get("detail", "")).strip()
         return ControlCommand(
@@ -124,6 +122,11 @@ class ControlApiV1Service:
             command_id=str(payload.get("command_id", "")).strip(),
             idempotency_key=str(payload.get("idempotency_key", "")).strip(),
         )
+
+    def _validated_command_name(self, raw_name: str) -> ControlCommandName:
+        if raw_name not in self._COMMAND_NAMES:
+            raise ValueError(f"Unsupported control command '{raw_name}'.")
+        return raw_name
 
     def _resolved_command_path(self, command_name: ControlCommandName, payload: dict[str, Any]) -> str:
         """Return the concrete write path required for one canonical command."""
