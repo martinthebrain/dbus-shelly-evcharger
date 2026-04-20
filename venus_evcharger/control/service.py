@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from typing import Any
+from typing import TypeGuard
 from venus_evcharger.control.models import ControlCommand, ControlCommandName, ControlCommandSource
 
 
@@ -52,6 +53,22 @@ class ControlApiV1Service:
         command_name: path
         for path, command_name in _DIRECT_PATH_COMMANDS.items()
     }
+
+    @staticmethod
+    def _is_command_name(value: str) -> TypeGuard[ControlCommandName]:
+        return value in {
+            "legacy_unknown_write",
+            "reset_contactor_lockout",
+            "reset_phase_lockout",
+            "set_auto_runtime_setting",
+            "set_auto_start",
+            "set_current_setting",
+            "set_enable",
+            "set_mode",
+            "set_phase_selection",
+            "set_start_stop",
+            "trigger_software_update",
+        }
 
     def __init__(
         self,
@@ -124,7 +141,7 @@ class ControlApiV1Service:
         )
 
     def _validated_command_name(self, raw_name: str) -> ControlCommandName:
-        if raw_name not in self._COMMAND_NAMES:
+        if not self._is_command_name(raw_name):
             raise ValueError(f"Unsupported control command '{raw_name}'.")
         return raw_name
 
