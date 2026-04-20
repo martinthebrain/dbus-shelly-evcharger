@@ -38,13 +38,33 @@ This guide covers the usual installation paths for Venus OS and Cerbo GX.
    ./deploy/venus/install_shelly_wallbox.sh
    ```
 
-5. Restart the service:
+5. Optional: run the guided setup wizard when you want a profile-based starting
+   config instead of editing the INI by hand:
+
+   ```bash
+   ./deploy/venus/configure_wallbox.sh
+   ```
+
+   The wizard writes the generated config, optional adapter files, and a small
+   result/audit trail beside the main config. It can also clone defaults from
+   an existing config or resume from the last wizard result and supports
+   guarded non-interactive overwrites via `--force`. For split topologies it
+   can now separate meter, switch, and charger hosts/BaseUrls instead of
+   forcing one shared start value. Optional live probing is available through
+   `--live-check` or targeted `--probe-role`, and interactive password prompts
+   now keep typed secrets hidden:
+
+   - `config.shelly_wallbox.ini.wizard-result.json`
+   - `config.shelly_wallbox.ini.wizard-audit.jsonl`
+   - `config.shelly_wallbox.ini.wizard-topology.txt`
+
+6. Restart the service:
 
    ```bash
    svc -t /service/dbus-shelly-wallbox
    ```
 
-6. Verify the service:
+7. Verify the service:
 
    ```bash
    svstat /service/dbus-shelly-wallbox
@@ -103,6 +123,180 @@ Good fit when current control and phase layout live in different devices.
 
 Further backend examples live in [CHARGER_BACKENDS.md](CHARGER_BACKENDS.md) and
 [SHELLY_PROFILES.md](SHELLY_PROFILES.md).
+
+## Wizard CLI Examples
+
+Interactive guided setup:
+
+```bash
+./deploy/venus/configure_wallbox.sh
+```
+
+Preview only, no writes, JSON result:
+
+```bash
+./deploy/venus/configure_wallbox.sh --dry-run --json
+```
+
+Reuse the current config as defaults, but only preview the result:
+
+```bash
+./deploy/venus/configure_wallbox.sh --clone-current --dry-run --json
+```
+
+Role-specific non-interactive host override flags:
+
+- `--meter-host`
+- `--switch-host`
+- `--charger-host`
+- `--live-check`
+- `--probe-role`
+- `--resume-last`
+
+Preset/policy tuning flags:
+
+- `--request-timeout-seconds`
+- `--switch-group-phase-layout`
+- `--auto-start-surplus-watts`
+- `--auto-stop-surplus-watts`
+- `--auto-min-soc`
+- `--auto-resume-soc`
+- `--scheduled-enabled-days`
+- `--scheduled-latest-end-time`
+- `--scheduled-night-current-amps`
+
+Non-interactive native `go-e` charger:
+
+```bash
+./deploy/venus/configure_wallbox.sh \
+  --non-interactive \
+  --force \
+  --profile native-charger \
+  --charger-backend goe_charger \
+  --request-timeout-seconds 4.5 \
+  --host goe.local \
+  --phase 3P \
+  --policy-mode auto \
+  --auto-start-surplus-watts 2100 \
+  --auto-stop-surplus-watts 1650 \
+  --auto-min-soc 35 \
+  --auto-resume-soc 39
+```
+
+Non-interactive native Modbus charger over TCP:
+
+```bash
+./deploy/venus/configure_wallbox.sh \
+  --non-interactive \
+  --force \
+  --profile native-charger \
+  --charger-backend modbus_charger \
+  --transport tcp \
+  --transport-host 192.168.1.91 \
+  --transport-unit-id 7 \
+  --host 192.168.1.90
+```
+
+Non-interactive split topology using only template adapters:
+
+```bash
+./deploy/venus/configure_wallbox.sh \
+  --non-interactive \
+  --force \
+  --profile split-topology \
+  --split-preset template-stack \
+  --host adapter.local
+```
+
+Non-interactive split topology with Shelly meter and native `go-e` charger:
+
+```bash
+./deploy/venus/configure_wallbox.sh \
+  --non-interactive \
+  --force \
+  --profile split-topology \
+  --split-preset shelly-meter-goe \
+  --meter-host 192.168.1.24 \
+  --charger-host goe.local
+```
+
+Non-interactive split topology with `go-e` plus external 3-phase switch group:
+
+```bash
+./deploy/venus/configure_wallbox.sh \
+  --non-interactive \
+  --force \
+  --profile split-topology \
+  --split-preset goe-external-switch-group \
+  --switch-group-phase-layout P1,P1_P2_P3 \
+  --switch-host http://switch.local \
+  --charger-host goe.local
+```
+
+Non-interactive split topology with Shelly meter, `go-e`, and external 3-phase switch group:
+
+```bash
+./deploy/venus/configure_wallbox.sh \
+  --non-interactive \
+  --force \
+  --profile split-topology \
+  --split-preset shelly-meter-goe-switch-group \
+  --meter-host 192.168.1.24 \
+  --switch-host http://switch.local \
+  --charger-host goe.local
+```
+
+Non-interactive split topology with Shelly meter/switch plus Modbus charger:
+
+```bash
+./deploy/venus/configure_wallbox.sh \
+  --non-interactive \
+  --force \
+  --profile split-topology \
+  --split-preset shelly-io-modbus-charger \
+  --meter-host 192.168.1.20 \
+  --switch-host 192.168.1.21 \
+  --transport tcp \
+  --transport-host 192.168.1.93 \
+  --transport-unit-id 8 \
+  --host 192.168.1.92
+```
+
+Non-interactive split topology with Shelly meter, Modbus charger, and external 3-phase switch group:
+
+```bash
+./deploy/venus/configure_wallbox.sh \
+  --non-interactive \
+  --force \
+  --profile split-topology \
+  --split-preset shelly-meter-modbus-switch-group \
+  --meter-host 192.168.1.24 \
+  --switch-host http://switch.local \
+  --transport tcp \
+  --transport-host 192.168.1.95 \
+  --transport-unit-id 9 \
+  --host 192.168.1.94
+```
+
+Clone an existing config from another path and adjust only the host:
+
+```bash
+./deploy/venus/configure_wallbox.sh \
+  --non-interactive \
+  --import-config /data/etc/old-wallbox.ini \
+  --host 192.168.1.120 \
+  --config-path ./deploy/venus/config.shelly_wallbox.ini
+```
+
+Resume from the last wizard result next to the target config and only preview:
+
+```bash
+./deploy/venus/configure_wallbox.sh \
+  --non-interactive \
+  --dry-run \
+  --json \
+  --resume-last
+```
 
 ## Validation Before First Start
 

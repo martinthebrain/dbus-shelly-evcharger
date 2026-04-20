@@ -93,6 +93,40 @@ Typical preserved items include:
 - channel markers such as `update-channel`
 - the release pointers used for rollback
 
+The wallbox config is preserved with an additive merge:
+
+- existing local values stay unchanged
+- missing sections and keys from the refreshed template are added
+- newly introduced release options therefore appear automatically
+- local comments and formatting stay intact for unchanged parts of the file
+- if a merge rewrite is needed, the updater writes a timestamped
+  `config.shelly_wallbox.ini.bak-<timestamp>` backup first
+- malformed local configs are left untouched rather than being rewritten during
+  the merge step, and the updater records that merge skip reason in its status
+  metadata
+
+The shipped template also carries a config schema version. The updater uses
+that schema value as the anchor for explicit future migration steps when keys
+are renamed or their semantics change.
+
+Before a refreshed tree is activated, the updater validates the resulting full
+wallbox config. If validation fails, the update run aborts and the new release
+is not promoted.
+
+The updater records the latest apply run under `.bootstrap-state/`:
+
+- `update_status.json` for the latest result
+- `update_audit.log` as a compact append-only history
+
+These artifacts include:
+
+- old and new version
+- whether the config merge changed anything
+- which keys and sections were added
+- whether validation passed
+- whether the active `current/` release was kept
+- why promotion was aborted when an update failed
+
 ## Manifest-Based Updates
 
 The bootstrap can consume a manifest-driven update flow.
@@ -173,6 +207,19 @@ This is useful when:
 cd /data/bootstrap-wallbox
 ./install.sh
 ```
+
+### Preview an update without changing the target tree
+
+```bash
+bash deploy/venus/bootstrap_updater.sh --dry-run /data/shellyWB
+```
+
+The dry-run prints a JSON summary that includes:
+
+- the detected current and candidate version
+- which config keys and sections would be added
+- whether validation would pass
+- whether a backup would be created during a real apply run
 
 ### Freeze updates with `noUpdate`
 

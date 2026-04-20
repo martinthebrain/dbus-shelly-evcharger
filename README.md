@@ -206,6 +206,27 @@ Software update cadence:
    ./deploy/venus/install_shelly_wallbox.sh
    ```
 
+   For guided first-time setup or an intentional reconfiguration, run the
+   optional wizard before restarting the service:
+
+   ```bash
+   ./deploy/venus/configure_wallbox.sh
+   ```
+
+   The wizard also supports non-interactive presets, import/clone defaults from
+   an existing config or the last wizard result, dry-run JSON previews,
+   guarded `--force` overwrites, separate `--meter-host` / `--switch-host` /
+   `--charger-host` role inputs, hidden password prompts for interactive auth
+   setup, optional `--live-check` probing or targeted `--probe-role`
+   adapter checks, guided Auto/Scheduled starter values, preset compatibility
+   warnings, and writes a small result/audit trail plus topology summary
+   beside the config for later review.
+
+   Split-topology presets now cover documented starter layouts such as:
+   `template-stack`, `shelly-meter-goe`, `goe-external-switch-group`,
+   `shelly-meter-goe-switch-group`, `shelly-io-modbus-charger`, and
+   `shelly-meter-modbus-switch-group`.
+
 4. Restart the service:
 
    ```bash
@@ -230,6 +251,13 @@ Bootstrap highlights:
 - refreshes the local updater
 - populates the wallbox tree under a target directory
 - preserves the local wallbox config
+- additively merges newly shipped template keys into the preserved config
+  without overwriting existing local values
+- keeps existing config comments and layout where possible, and writes a
+  timestamped backup before a merge rewrite
+- validates the merged wallbox config before activating a refreshed tree
+- records updater status and audit metadata under `.bootstrap-state/`
+- supports `--dry-run` preview output for careful field updates
 - supports bundle manifests and detached signatures
 - keeps release directories under `releases/<version>/`
 - advances `current/` after the new release is ready

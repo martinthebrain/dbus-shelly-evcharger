@@ -24,6 +24,14 @@ from shelly_wallbox.core.contracts_basic import (
     timestamp_not_future,
     valid_battery_soc,
 )
+from shelly_wallbox.core.contracts_bootstrap import (
+    BOOTSTRAP_UPDATE_MODES,
+    BOOTSTRAP_UPDATE_RESULTS,
+    normalized_bootstrap_string_list,
+    normalized_bootstrap_update_mode,
+    normalized_bootstrap_update_result,
+    normalized_bootstrap_update_status_fields,
+)
 from shelly_wallbox.core.contracts_outward import (
     AUTO_METRIC_NUMERIC_FIELDS,
     AUTO_METRIC_TEXT_FIELDS,
@@ -48,6 +56,8 @@ __all__ = [
     "AUTO_METRIC_NUMERIC_FIELDS",
     "AUTO_METRIC_TEXT_FIELDS",
     "AUTO_STATE_CODES",
+    "BOOTSTRAP_UPDATE_MODES",
+    "BOOTSTRAP_UPDATE_RESULTS",
     "LEARNED_CHARGE_POWER_PHASES",
     "LEARNED_CHARGE_POWER_STATES",
     "SCHEDULED_REASON_CODES",
@@ -61,6 +71,10 @@ __all__ = [
     "non_negative_int",
     "normalize_auto_state",
     "normalize_binary_flag",
+    "normalized_bootstrap_string_list",
+    "normalized_bootstrap_update_mode",
+    "normalized_bootstrap_update_result",
+    "normalized_bootstrap_update_status_fields",
     "normalize_learning_phase",
     "normalize_learning_state",
     "normalize_optional_binary_state",

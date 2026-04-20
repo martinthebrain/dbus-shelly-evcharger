@@ -8,6 +8,8 @@ import tarfile
 import tempfile
 import unittest
 
+from shelly_wallbox.core.contracts import normalized_bootstrap_update_status_fields
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP_SCRIPT = REPO_ROOT / "install.sh"
@@ -16,6 +18,15 @@ UPDATER_HASH = REPO_ROOT / "deploy/venus/bootstrap_updater.sh.sha256"
 
 
 class TestBootstrapInstallScripts(unittest.TestCase):
+    def _read_normalized_status(self, target_dir: Path) -> dict[str, object]:
+        raw_status = json.loads((target_dir / ".bootstrap-state/update_status.json").read_text(encoding="utf-8"))
+        return normalized_bootstrap_update_status_fields(raw_status)
+
+    def _read_normalized_latest_audit(self, target_dir: Path) -> dict[str, object]:
+        audit_lines = (target_dir / ".bootstrap-state/update_audit.log").read_text(encoding="utf-8").splitlines()
+        self.assertTrue(audit_lines)
+        return normalized_bootstrap_update_status_fields(json.loads(audit_lines[-1]))
+
     def _generate_signing_keypair(self, root: Path) -> tuple[Path, Path]:
         private_key = root / "bootstrap_signing.key"
         public_key = root / "bootstrap_signing.pub"
@@ -49,7 +60,7 @@ class TestBootstrapInstallScripts(unittest.TestCase):
             (source_dir / "LICENSE").write_text("license\n", encoding="utf-8")
             (source_dir / "README.md").write_text("readme\n", encoding="utf-8")
             (source_dir / "SHELLY_PROFILES.md").write_text("profiles\n", encoding="utf-8")
-            (source_dir / "version.txt").write_text("1.2.3\n", encoding="utf-8")
+            (source_dir / "version.txt").write_text("Version: 1.2.3\n", encoding="utf-8")
             (source_dir / "dbus_shelly_wallbox.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
             (source_dir / "shelly_wallbox_auto_input_helper.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
             (source_dir / "deploy/venus/install_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
@@ -58,14 +69,38 @@ class TestBootstrapInstallScripts(unittest.TestCase):
             (source_dir / "deploy/venus/uninstall_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
             (source_dir / "deploy/venus/service_shelly_wallbox/run").write_text("#!/bin/sh\n", encoding="utf-8")
             (source_dir / "deploy/venus/service_shelly_wallbox/log/run").write_text("#!/bin/sh\n", encoding="utf-8")
-            (source_dir / "deploy/venus/config.shelly_wallbox.ini").write_text("fresh-config\n", encoding="utf-8")
+            (source_dir / "deploy/venus/config.shelly_wallbox.ini").write_text(
+                "[DEFAULT]\n"
+                "ConfigSchemaVersion=1\n"
+                "Host=template-host\n"
+                "Mode=0\n"
+                "NewToggle=1\n"
+                "\n"
+                "[Backend]\n"
+                "Type=shelly\n"
+                "ExtraSetting=42\n",
+                encoding="utf-8",
+            )
             (source_dir / "shelly_wallbox/__init__.py").write_text("# pkg\n", encoding="utf-8")
             (source_dir / "scripts/ops/example.sh").write_text("#!/bin/bash\n", encoding="utf-8")
             (source_dir / "tests/should_not_ship.txt").write_text("omit\n", encoding="utf-8")
             (source_dir / "docs/should_not_ship.txt").write_text("omit\n", encoding="utf-8")
 
             (target_dir / "deploy/venus").mkdir(parents=True, exist_ok=True)
-            (target_dir / "deploy/venus/config.shelly_wallbox.ini").write_text("keep-me\n", encoding="utf-8")
+            original_config = (
+                "[DEFAULT]\n"
+                "# keep this local host comment\n"
+                "Host=keep-me\n"
+                "Mode=2\n"
+                "\n"
+                "[Backend]\n"
+                "# keep this local backend comment\n"
+                "Type=custom\n"
+            )
+            (target_dir / "deploy/venus/config.shelly_wallbox.ini").write_text(
+                original_config,
+                encoding="utf-8",
+            )
             (target_dir / "tests").mkdir(parents=True, exist_ok=True)
             (target_dir / "tests/stale.txt").write_text("stale\n", encoding="utf-8")
 
@@ -81,12 +116,188 @@ class TestBootstrapInstallScripts(unittest.TestCase):
             self.assertTrue((target_dir / "dbus_shelly_wallbox.py").is_file())
             self.assertTrue((target_dir / "deploy/venus/install_shelly_wallbox.sh").is_file())
             self.assertTrue((target_dir / "shelly_wallbox/__init__.py").is_file())
-            self.assertEqual(
-                (target_dir / "deploy/venus/config.shelly_wallbox.ini").read_text(encoding="utf-8"),
-                "keep-me\n",
-            )
+            merged_config = (target_dir / "deploy/venus/config.shelly_wallbox.ini").read_text(encoding="utf-8")
+            self.assertIn("# keep this local host comment\n", merged_config)
+            self.assertIn("Host=keep-me\n", merged_config)
+            self.assertIn("Mode=2\n", merged_config)
+            self.assertIn("ConfigSchemaVersion=1\n", merged_config)
+            self.assertIn("NewToggle=1\n", merged_config)
+            self.assertIn("[Backend]\n", merged_config)
+            self.assertIn("# keep this local backend comment\n", merged_config)
+            self.assertIn("Type=custom\n", merged_config)
+            self.assertIn("ExtraSetting=42\n", merged_config)
             self.assertFalse((target_dir / "tests").exists())
             self.assertFalse((target_dir / "docs").exists())
+            backup_candidates = sorted((target_dir / "deploy/venus").glob("config.shelly_wallbox.ini.bak-*"))
+            self.assertEqual(len(backup_candidates), 1)
+            self.assertEqual(backup_candidates[0].read_text(encoding="utf-8"), original_config)
+            status = self._read_normalized_status(target_dir)
+            self.assertEqual(status["result"], "success")
+            self.assertTrue(status["config_merge_changed"])
+            self.assertTrue(status["config_merge_comment_preserved"])
+            self.assertTrue(status["config_validation_passed"])
+            self.assertEqual(status["config_schema_before"], "0")
+            self.assertEqual(status["config_schema_target"], "1")
+            self.assertEqual(status["new_version"], "1.2.3")
+            self.assertIn("DEFAULT.ConfigSchemaVersion", status["config_merge_added_keys"])
+            self.assertIn("DEFAULT.NewToggle", status["config_merge_added_keys"])
+            self.assertIn("Backend.ExtraSetting", status["config_merge_added_keys"])
+            self.assertEqual(status["config_merge_backup_path"], str(backup_candidates[0]))
+            self.assertTrue((target_dir / ".bootstrap-state/update_audit.log").is_file())
+            self.assertEqual(self._read_normalized_latest_audit(target_dir), status)
+            self.assertEqual((target_dir / ".bootstrap-state/installed_version").read_text(encoding="utf-8"), "1.2.3\n")
+
+    def test_bootstrap_updater_rejects_invalid_preserved_config_when_validation_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_dir = root / "source"
+            target_dir = root / "target"
+
+            (source_dir / "deploy/venus/service_shelly_wallbox/log").mkdir(parents=True, exist_ok=True)
+            (source_dir / "shelly_wallbox").mkdir(parents=True, exist_ok=True)
+            (source_dir / "scripts/ops").mkdir(parents=True, exist_ok=True)
+
+            (source_dir / "install.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (source_dir / "LICENSE").write_text("license\n", encoding="utf-8")
+            (source_dir / "README.md").write_text("readme\n", encoding="utf-8")
+            (source_dir / "SHELLY_PROFILES.md").write_text("profiles\n", encoding="utf-8")
+            (source_dir / "version.txt").write_text("1.2.3\n", encoding="utf-8")
+            (source_dir / "dbus_shelly_wallbox.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            (source_dir / "shelly_wallbox_auto_input_helper.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            (source_dir / "deploy/venus/install_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (source_dir / "deploy/venus/boot_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (source_dir / "deploy/venus/restart_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (source_dir / "deploy/venus/uninstall_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (source_dir / "deploy/venus/service_shelly_wallbox/run").write_text("#!/bin/sh\n", encoding="utf-8")
+            (source_dir / "deploy/venus/service_shelly_wallbox/log/run").write_text("#!/bin/sh\n", encoding="utf-8")
+            (source_dir / "deploy/venus/config.shelly_wallbox.ini").write_text(
+                "[DEFAULT]\nHost=template-host\nNewToggle=1\n",
+                encoding="utf-8",
+            )
+            (source_dir / "shelly_wallbox/__init__.py").write_text("# pkg\n", encoding="utf-8")
+            (source_dir / "scripts/ops/example.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+
+            (target_dir / "deploy/venus").mkdir(parents=True, exist_ok=True)
+            preserved_text = "this is not a valid ini file\nwithout = separators\n"
+            (target_dir / "deploy/venus/config.shelly_wallbox.ini").write_text(preserved_text, encoding="utf-8")
+
+            with self.assertRaises(subprocess.CalledProcessError):
+                subprocess.run(
+                    ["bash", str(UPDATER_SCRIPT), str(target_dir)],
+                    check=True,
+                    env={
+                        **os.environ,
+                        "SHELLY_WALLBOX_SOURCE_DIR": str(source_dir),
+                    },
+                )
+
+            self.assertEqual(
+                (target_dir / "deploy/venus/config.shelly_wallbox.ini").read_text(encoding="utf-8"),
+                preserved_text,
+            )
+            self.assertFalse((target_dir / "dbus_shelly_wallbox.py").exists())
+            status = self._read_normalized_status(target_dir)
+            self.assertEqual(status["result"], "failed")
+            self.assertEqual(status["failure_reason"], "config-validation-failed")
+            self.assertEqual(status["config_merge_skipped_reason"], "malformed-local-config")
+            self.assertFalse(status["config_validation_passed"])
+            self.assertEqual(self._read_normalized_latest_audit(target_dir), status)
+
+    def test_bootstrap_updater_keeps_current_release_when_staged_manifest_config_fails_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_dir = root / "source"
+            target_dir = root / "target"
+            release_dir = root / "release"
+            current_release = target_dir / "releases/1.0.0"
+
+            (source_dir / "deploy/venus/service_shelly_wallbox/log").mkdir(parents=True, exist_ok=True)
+            (source_dir / "shelly_wallbox").mkdir(parents=True, exist_ok=True)
+            (source_dir / "scripts/ops").mkdir(parents=True, exist_ok=True)
+
+            (source_dir / "install.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (source_dir / "LICENSE").write_text("license\n", encoding="utf-8")
+            (source_dir / "README.md").write_text("readme\n", encoding="utf-8")
+            (source_dir / "SHELLY_PROFILES.md").write_text("profiles\n", encoding="utf-8")
+            (source_dir / "version.txt").write_text("9.9.9\n", encoding="utf-8")
+            (source_dir / "dbus_shelly_wallbox.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            (source_dir / "shelly_wallbox_auto_input_helper.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            (source_dir / "deploy/venus/install_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (source_dir / "deploy/venus/boot_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (source_dir / "deploy/venus/restart_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (source_dir / "deploy/venus/uninstall_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (source_dir / "deploy/venus/service_shelly_wallbox/run").write_text("#!/bin/sh\n", encoding="utf-8")
+            (source_dir / "deploy/venus/service_shelly_wallbox/log/run").write_text("#!/bin/sh\n", encoding="utf-8")
+            (source_dir / "deploy/venus/config.shelly_wallbox.ini").write_text(
+                "[DEFAULT]\nHost=template-host\nNewToggle=1\n",
+                encoding="utf-8",
+            )
+            (source_dir / "shelly_wallbox/__init__.py").write_text("# pkg\n", encoding="utf-8")
+            (source_dir / "scripts/ops/example.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+
+            release_dir.mkdir()
+            bundle_path = release_dir / "wallbox-bundle.tar.gz"
+            with tarfile.open(bundle_path, "w:gz") as tar:
+                for rel_path in (
+                    "install.sh",
+                    "LICENSE",
+                    "README.md",
+                    "SHELLY_PROFILES.md",
+                    "version.txt",
+                    "dbus_shelly_wallbox.py",
+                    "shelly_wallbox_auto_input_helper.py",
+                    "deploy/venus",
+                    "shelly_wallbox",
+                    "scripts/ops",
+                ):
+                    tar.add(source_dir / rel_path, arcname=rel_path)
+
+            bundle_hash = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+            signing_key, public_key = self._generate_signing_keypair(root)
+            manifest = {
+                "format": 1,
+                "channel": "stable",
+                "version": "9.9.9",
+                "bundle_url": str(bundle_path),
+                "bundle_sha256": bundle_hash,
+            }
+            manifest_path = release_dir / "bootstrap_manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            manifest_sig_path = release_dir / "bootstrap_manifest.json.sig"
+            subprocess.run(
+                ["openssl", "dgst", "-sha256", "-sign", str(signing_key), "-out", str(manifest_sig_path), str(manifest_path)],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            (current_release / "deploy/venus").mkdir(parents=True, exist_ok=True)
+            preserved_text = "this is not a valid ini file\nwithout = separators\n"
+            (current_release / "deploy/venus/config.shelly_wallbox.ini").write_text(preserved_text, encoding="utf-8")
+            (target_dir / "current").parent.mkdir(parents=True, exist_ok=True)
+            (target_dir / "current").symlink_to(current_release)
+
+            with self.assertRaises(subprocess.CalledProcessError):
+                subprocess.run(
+                    ["bash", str(UPDATER_SCRIPT), str(target_dir)],
+                    check=True,
+                    env={
+                        **os.environ,
+                        "SHELLY_WALLBOX_MANIFEST_SOURCE": str(manifest_path),
+                        "SHELLY_WALLBOX_MANIFEST_SIG_SOURCE": str(manifest_sig_path),
+                        "SHELLY_WALLBOX_BOOTSTRAP_PUBKEY": str(public_key),
+                        "SHELLY_WALLBOX_REQUIRE_SIGNED_MANIFEST": "1",
+                    },
+                )
+
+            self.assertTrue((target_dir / "current").is_symlink())
+            self.assertEqual(os.readlink(target_dir / "current"), str(current_release))
+            self.assertFalse((target_dir / "releases/9.9.9").exists())
+            status = self._read_normalized_status(target_dir)
+            self.assertEqual(status["result"], "failed")
+            self.assertEqual(status["promotion_aborted_reason"], "config-validation-failed")
+            self.assertTrue(status["current_preserved"])
+            self.assertEqual(self._read_normalized_latest_audit(target_dir), status)
 
     def test_bootstrap_installer_refreshes_local_updater_and_runs_target_installer(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -112,7 +323,10 @@ class TestBootstrapInstallScripts(unittest.TestCase):
             (source_dir / "deploy/venus/uninstall_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
             (source_dir / "deploy/venus/service_shelly_wallbox/run").write_text("#!/bin/sh\n", encoding="utf-8")
             (source_dir / "deploy/venus/service_shelly_wallbox/log/run").write_text("#!/bin/sh\n", encoding="utf-8")
-            (source_dir / "deploy/venus/config.shelly_wallbox.ini").write_text("fresh-config\n", encoding="utf-8")
+            (source_dir / "deploy/venus/config.shelly_wallbox.ini").write_text(
+                "[DEFAULT]\nHost=template-host\n",
+                encoding="utf-8",
+            )
             (source_dir / "shelly_wallbox/__init__.py").write_text("# pkg\n", encoding="utf-8")
             (source_dir / "scripts/ops/example.sh").write_text("#!/bin/bash\n", encoding="utf-8")
             (source_dir / "deploy/venus/install_shelly_wallbox.sh").write_text(
@@ -187,7 +401,10 @@ class TestBootstrapInstallScripts(unittest.TestCase):
             (source_dir / "deploy/venus/uninstall_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
             (source_dir / "deploy/venus/service_shelly_wallbox/run").write_text("#!/bin/sh\n", encoding="utf-8")
             (source_dir / "deploy/venus/service_shelly_wallbox/log/run").write_text("#!/bin/sh\n", encoding="utf-8")
-            (source_dir / "deploy/venus/config.shelly_wallbox.ini").write_text("fresh-config\n", encoding="utf-8")
+            (source_dir / "deploy/venus/config.shelly_wallbox.ini").write_text(
+                "[DEFAULT]\nHost=template-host\n",
+                encoding="utf-8",
+            )
             (source_dir / "shelly_wallbox/__init__.py").write_text("# pkg\n", encoding="utf-8")
             (source_dir / "scripts/ops/example.sh").write_text("#!/bin/bash\n", encoding="utf-8")
 
@@ -266,6 +483,67 @@ class TestBootstrapInstallScripts(unittest.TestCase):
 
             self.assertTrue(sentinel.is_file())
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
+
+    def test_bootstrap_updater_dry_run_reports_preview_without_modifying_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_dir = root / "source"
+            target_dir = root / "target"
+
+            (source_dir / "deploy/venus/service_shelly_wallbox/log").mkdir(parents=True, exist_ok=True)
+            (source_dir / "shelly_wallbox").mkdir(parents=True, exist_ok=True)
+            (source_dir / "scripts/ops").mkdir(parents=True, exist_ok=True)
+
+            (source_dir / "install.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (source_dir / "LICENSE").write_text("license\n", encoding="utf-8")
+            (source_dir / "README.md").write_text("readme\n", encoding="utf-8")
+            (source_dir / "SHELLY_PROFILES.md").write_text("profiles\n", encoding="utf-8")
+            (source_dir / "version.txt").write_text("Version: 2.0.0\n", encoding="utf-8")
+            (source_dir / "dbus_shelly_wallbox.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            (source_dir / "shelly_wallbox_auto_input_helper.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            (source_dir / "deploy/venus/install_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (source_dir / "deploy/venus/boot_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (source_dir / "deploy/venus/restart_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (source_dir / "deploy/venus/uninstall_shelly_wallbox.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (source_dir / "deploy/venus/service_shelly_wallbox/run").write_text("#!/bin/sh\n", encoding="utf-8")
+            (source_dir / "deploy/venus/service_shelly_wallbox/log/run").write_text("#!/bin/sh\n", encoding="utf-8")
+            (source_dir / "deploy/venus/config.shelly_wallbox.ini").write_text(
+                "[DEFAULT]\n"
+                "ConfigSchemaVersion=1\n"
+                "Host=template-host\n"
+                "NewToggle=1\n",
+                encoding="utf-8",
+            )
+            (source_dir / "shelly_wallbox/__init__.py").write_text("# pkg\n", encoding="utf-8")
+            (source_dir / "scripts/ops/example.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+
+            (target_dir / "deploy/venus").mkdir(parents=True, exist_ok=True)
+            original_config = "[DEFAULT]\nHost=keep-me\n"
+            (target_dir / "deploy/venus/config.shelly_wallbox.ini").write_text(original_config, encoding="utf-8")
+
+            completed = subprocess.run(
+                ["bash", str(UPDATER_SCRIPT), "--dry-run", str(target_dir)],
+                check=True,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "SHELLY_WALLBOX_SOURCE_DIR": str(source_dir),
+                },
+            )
+
+            preview = normalized_bootstrap_update_status_fields(json.loads(completed.stdout.strip()))
+            self.assertEqual(preview["mode"], "dry-run")
+            self.assertEqual(preview["result"], "preview")
+            self.assertEqual(preview["new_version"], "2.0.0")
+            self.assertTrue(preview["config_merge_changed"])
+            self.assertTrue(preview["config_merge_backup_required"])
+            self.assertTrue(preview["config_validation_passed"])
+            self.assertIn("DEFAULT.ConfigSchemaVersion", preview["config_merge_added_keys"])
+            self.assertIn("DEFAULT.NewToggle", preview["config_merge_added_keys"])
+            self.assertEqual((target_dir / "deploy/venus/config.shelly_wallbox.ini").read_text(encoding="utf-8"), original_config)
+            self.assertFalse((target_dir / "dbus_shelly_wallbox.py").exists())
+            self.assertFalse((target_dir / ".bootstrap-state/update_status.json").exists())
 
     def test_bootstrap_rolls_back_to_previous_release_when_current_installer_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -20,6 +20,7 @@ GENERIC_SHELLY_HELPER="$REPO_DIR/shelly_wallbox/ops/disable_generic_shelly_once.
 BOOT_HELPER="$SCRIPT_DIR/boot_shelly_wallbox.sh"
 MAIN_ENTRYPOINT="$REPO_DIR/dbus_shelly_wallbox.py"
 AUTO_INPUT_HELPER="$REPO_DIR/shelly_wallbox_auto_input_helper.py"
+CONFIGURE_HELPER="$SCRIPT_DIR/configure_wallbox.sh"
 RESTART_HELPER="$SCRIPT_DIR/restart_shelly_wallbox.sh"
 UNINSTALL_HELPER="$SCRIPT_DIR/uninstall_shelly_wallbox.sh"
 SOAK_HELPER="$REPO_DIR/scripts/ops/cerbo_soak_check.sh"
@@ -46,6 +47,11 @@ fi
 if [ -f "$AUTO_INPUT_HELPER" ]; then
     chmod a+x "$AUTO_INPUT_HELPER"
     chmod 755 "$AUTO_INPUT_HELPER"
+fi
+
+if [ -f "$CONFIGURE_HELPER" ]; then
+    chmod a+x "$CONFIGURE_HELPER"
+    chmod 755 "$CONFIGURE_HELPER"
 fi
 
 if [ -f "$RESTART_HELPER" ]; then
