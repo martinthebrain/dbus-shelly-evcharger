@@ -16,6 +16,7 @@ switch, charger, and phase-switch components.
 - Victron EV charger service on DBus for Venus OS and Cerbo GX
 - Manual, Auto, and Scheduled/Plan charging modes
 - DBus and MQTT control surface for day-to-day runtime settings
+- Optional local HTTP Control API v1 for process-local automation
 - Native Shelly backends plus configurable HTTP and Modbus adapters
 - Native charger integrations for go-e, SimpleEVSE, and SmartEVSE
 - External phase-switch coordination through switch backends and `switch_group`
@@ -192,17 +193,67 @@ Software update cadence:
 - fixed outward update states including `available-blocked` for
   "update exists and local policy blocks installation"
 
+## Local HTTP Control API
+
+For process-local automation, the service can also expose a small versioned
+HTTP control surface on top of the same canonical command handling used by
+DBus writes.
+
+Config keys:
+
+- `ControlApiEnabled`
+- `ControlApiHost`
+- `ControlApiPort`
+- `ControlApiAuthToken`
+- `ControlApiReadToken`
+- `ControlApiControlToken`
+- `ControlApiLocalhostOnly`
+- `ControlApiUnixSocketPath`
+
+Endpoints:
+
+- `GET /v1/openapi.json`
+- `GET /v1/capabilities`
+- `GET /v1/control/health`
+- `POST /v1/control/command`
+- `GET /v1/events`
+- `GET /v1/state/config-effective`
+- `GET /v1/state/summary`
+- `GET /v1/state/runtime`
+- `GET /v1/state/operational`
+- `GET /v1/state/dbus-diagnostics`
+- `GET /v1/state/topology`
+- `GET /v1/state/update`
+- `GET /v1/state/health`
+
+The full request/response contract, auth rules, idempotency behavior, event
+stream, and `curl` examples live in [CONTROL_API.md](CONTROL_API.md).
+
+For read-only local inspection, the same listener also exposes:
+
+- `GET /v1/state/summary`
+- `GET /v1/state/runtime`
+- `GET /v1/state/operational`
+- `GET /v1/state/dbus-diagnostics`
+- `GET /v1/state/topology`
+- `GET /v1/state/update`
+- `GET /v1/state/config-effective`
+- `GET /v1/state/health`
+
+The stable state/read contract lives in [STATE_API.md](STATE_API.md). Formal
+stability rules for `v1` live in [API_VERSIONING.md](API_VERSIONING.md).
+
 ## Install On Cerbo GX / Venus OS
 
 ### Quick Start
 
 1. Copy the repository to a writable path under `/data`, for example
-   `/data/shellyWB`.
+   `/data/venus-evcharger-service`.
 2. Edit `deploy/venus/config.venus_evcharger.ini`.
 3. Run:
 
    ```bash
-   cd /data/shellyWB
+   cd /data/venus-evcharger-service
    ./deploy/venus/install_venus_evcharger_service.sh
    ```
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from venus_evcharger.control import ControlCommand, ControlResult
 from venus_evcharger.controllers.auto import AutoDecisionController
 from .factory import ServiceControllerFactoryMixin
 
@@ -93,9 +94,22 @@ class DbusAutoLogicMixin(ServiceControllerFactoryMixin):
         self._ensure_auto_controller()
         return cast(bool, self._auto_controller.auto_decide_relay(relay_on, pv_power, battery_soc, grid_power))
 
-    def _handle_write(self, path: str, value: Any) -> bool:
+    def _control_command_from_write(self, path: str, value: Any, source: str = "dbus") -> ControlCommand:
         self._ensure_write_controller()
-        return cast(bool, self._write_controller.handle_write(path, value))
+        return cast(ControlCommand, self._write_controller.build_control_command(path, value, source=source))
+
+    def _handle_control_command(self, command: ControlCommand) -> ControlResult:
+        self._ensure_write_controller()
+        result = cast(ControlResult, self._write_controller.handle_control_command(command))
+        publish_event = getattr(self, "_publish_control_api_command_event", None)
+        if callable(publish_event):
+            publish_event(command, result)
+        return result
+
+    def _handle_write(self, path: str, value: Any) -> bool:
+        command = self._control_command_from_write(path, value, source="dbus")
+        result = self._handle_control_command(command)
+        return bool(result.accepted)
 
     def _register_paths(self) -> None:
         self._ensure_bootstrap_controller()

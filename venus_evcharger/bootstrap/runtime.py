@@ -174,6 +174,7 @@ class _ServiceBootstrapRuntimeMixin(_ComposableControllerMixin):
         """Register DBus paths, start background workers, and arm timers."""
         svc = self.service
         svc._start_io_worker()
+        svc._start_control_api_server()
         logging.info(
             "Initialized Venus EV charger service pid=%s runtime_state=%s %s",
             os.getpid(),

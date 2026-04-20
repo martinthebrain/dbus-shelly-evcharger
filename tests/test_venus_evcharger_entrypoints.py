@@ -54,6 +54,9 @@ class TestShellyWallboxEntrypoints(unittest.TestCase):
             def _config_path():
                 return "/tmp/config.venus_evcharger.ini"
 
+        class ControlApiMixin:
+            pass
+
         class RuntimeHelperMixin:
             pass
 
@@ -63,6 +66,7 @@ class TestShellyWallboxEntrypoints(unittest.TestCase):
         class UpdateCycleMixin:
             pass
 
+        bindings_module.ControlApiMixin = ControlApiMixin
         bindings_module.StatePublishMixin = StatePublishMixin
         bindings_module.RuntimeHelperMixin = RuntimeHelperMixin
         bindings_module.DbusAutoLogicMixin = DbusAutoLogicMixin

@@ -176,6 +176,10 @@ class TestServiceBootstrapControllerConfig(ServiceBootstrapControllerTestCase):
                     "ServiceName": "com.example.ev",
                     "Connection": "Custom RPC",
                     "RuntimeStatePath": "/tmp/runtime.json",
+                    "ControlApiEnabled": "true",
+                    "ControlApiHost": "127.0.0.1",
+                    "ControlApiPort": "9876",
+                    "ControlApiAuthToken": "token-123",
                     "AutoPvService": "com.example.pv",
                     "AutoPvServicePrefix": "com.example.pvprefix",
                     "AutoPvPath": "/Pv/Power",
@@ -242,6 +246,12 @@ class TestServiceBootstrapControllerConfig(ServiceBootstrapControllerTestCase):
         self.assertEqual(service.service_name, "com.example.ev")
         self.assertEqual(service.connection_name, "Custom RPC")
         self.assertEqual(service.runtime_state_path, "/tmp/runtime.json")
+        self.assertTrue(service.control_api_enabled)
+        self.assertEqual(service.control_api_host, "127.0.0.1")
+        self.assertEqual(service.control_api_port, 9876)
+        self.assertEqual(service.control_api_auth_token, "token-123")
+        self.assertEqual(service.control_api_listen_host, "")
+        self.assertEqual(service.control_api_listen_port, 0)
         self.assertEqual(service.backend_mode, "combined")
         self.assertEqual(service.meter_backend_type, "shelly_combined")
         self.assertEqual(service.switch_backend_type, "shelly_combined")

@@ -11,6 +11,7 @@ The most useful way to read the config is by decision area:
 4. Auto policy
 5. Scheduled policy
 6. runtime control and persistence
+7. optional local HTTP control API
 
 ## Core Deployment Values
 
@@ -188,6 +189,50 @@ Operational metadata:
 
 - `/Auto/RuntimeOverridesActive`
 - `/Auto/RuntimeOverridesPath`
+
+## Local HTTP Control API
+
+An optional process-local HTTP control surface can be enabled when another
+local service or script should drive the charger without going through DBus
+directly.
+
+Main config values:
+
+- `ControlApiEnabled`
+- `ControlApiHost`
+- `ControlApiPort`
+- `ControlApiAuthToken`
+- `ControlApiReadToken`
+- `ControlApiControlToken`
+- `ControlApiLocalhostOnly`
+- `ControlApiUnixSocketPath`
+
+Recommended shape:
+
+- keep `ControlApiLocalhostOnly=1`
+- keep `ControlApiHost=127.0.0.1`
+- prefer split `ControlApiReadToken` and `ControlApiControlToken` for local clients with different scopes
+- use `ControlApiAuthToken` only when one shared token is enough
+- treat this as a command surface, not a general telemetry interface
+
+The formal JSON contract, the OpenAPI `3.1` document, HTTP status mapping, and
+`curl` examples live in [CONTROL_API.md](CONTROL_API.md).
+
+The same listener also exposes `GET /v1/capabilities` for stable topology and
+command discovery, `GET /v1/events` for NDJSON event streaming, and the
+state endpoints:
+
+- `GET /v1/state/summary`
+- `GET /v1/state/runtime`
+- `GET /v1/state/operational`
+- `GET /v1/state/dbus-diagnostics`
+- `GET /v1/state/topology`
+- `GET /v1/state/update`
+- `GET /v1/state/config-effective`
+- `GET /v1/state/health`
+
+For read-only local inspection on the same listener, see [STATE_API.md](STATE_API.md).
+For stability rules inside `v1`, see [API_VERSIONING.md](API_VERSIONING.md).
 
 ## Validation Before Start
 

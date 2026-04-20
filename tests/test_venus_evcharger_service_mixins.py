@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import unittest
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.modules["vedbus"] = MagicMock()
 
+from venus_evcharger.control import ControlCommand
 from venus_evcharger.service.factory import ServiceControllerFactoryMixin
 from venus_evcharger.service.auto import DbusAutoLogicMixin
+from venus_evcharger.service.control import ControlApiMixin
 from venus_evcharger.service.runtime import RuntimeHelperMixin
 from venus_evcharger.service.state_publish import StatePublishMixin
 from venus_evcharger.service.update import UpdateCycleMixin
@@ -48,6 +50,20 @@ class _StateService(StatePublishMixin):
 
     def _ensure_dbus_publisher(self):
         return None
+
+
+class _ControlService(ControlApiMixin):
+    def _ensure_write_controller(self):
+        return None
+
+    def _ensure_dbus_publisher(self):
+        return None
+
+    def _state_summary(self):
+        return "mode=1 enable=1"
+
+    def _current_runtime_state(self):
+        return {"mode": 1, "autostart": 1}
 
 
 class _FactoryService(ServiceControllerFactoryMixin):
@@ -162,6 +178,141 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         io.set_relay.assert_called_once_with(True)
         io.phase_selection_requires_pause.assert_called_once_with()
         io.set_phase_selection.assert_called_once_with("P1_P2")
+
+    def test_control_api_mixin_builds_commands_and_manages_http_server(self):
+        service = _ControlService()
+        service._write_controller = MagicMock()
+        service._write_controller.build_control_command_from_payload.return_value = ControlCommand(
+            name="set_mode",
+            path="/Mode",
+            value=1,
+            source="http",
+        )
+        service._control_api_server = MagicMock(bound_host="127.0.0.1", bound_port=8765)
+        service.control_api_enabled = True
+
+        command = service._control_command_from_payload({"name": "set_mode", "value": 1}, source="http")
+        service._start_control_api_server()
+        service._stop_control_api_server()
+
+        self.assertEqual(command.name, "set_mode")
+        service._write_controller.build_control_command_from_payload.assert_called_once_with(
+            {"name": "set_mode", "value": 1},
+            source="http",
+        )
+        service._control_api_server.start.assert_called_once_with()
+        self.assertEqual(service.control_api_listen_host, "127.0.0.1")
+        self.assertEqual(service.control_api_listen_port, 8765)
+        service._control_api_server.stop.assert_called_once_with()
+
+    def test_control_api_mixin_exposes_capabilities_and_state_payloads(self):
+        service = _ControlService()
+        service.virtual_mode = 1
+        service.virtual_enable = 1
+        service.virtual_startstop = 0
+        service.virtual_autostart = 1
+        service.active_phase_selection = "P1"
+        service.requested_phase_selection = "P1_P2"
+        service.backend_mode = "split"
+        service.meter_backend_type = "template_meter"
+        service.switch_backend_type = "switch_group"
+        service.charger_backend_type = "goe_charger"
+        service._last_auto_state = "charging"
+        service._last_auto_state_code = 3
+        service._last_health_reason = ""
+        service._software_update_state = "available"
+        service._software_update_available = 1
+        service._software_update_no_update_active = 0
+        service._runtime_overrides_active = True
+        service.runtime_overrides_path = "/run/runtime.ini"
+        service.control_api_auth_token = "secret"
+        service.supported_phase_selections = ("P1", "P1_P2", "P1_P2_P3")
+        service._dbus_publisher = MagicMock()
+        service._dbus_publisher._diagnostic_counter_values.return_value = {"/Auto/State": "charging"}
+        service._dbus_publisher._diagnostic_age_values.return_value = {"/Auto/LastShellyReadAge": 0.2}
+
+        capabilities = service._control_api_capabilities_payload()
+        summary = service._state_api_summary_payload()
+        runtime = service._state_api_runtime_payload()
+        operational = service._state_api_operational_payload()
+        diagnostics = service._state_api_dbus_diagnostics_payload()
+        topology = service._state_api_topology_payload()
+        update = service._state_api_update_payload()
+        config_effective = service._state_api_config_effective_payload()
+        health = service._state_api_health_payload()
+        snapshot = service._state_api_event_snapshot_payload()
+
+        self.assertTrue(capabilities["auth_required"])
+        self.assertIn("set_mode", capabilities["command_names"])
+        self.assertIn("/v1/capabilities", capabilities["endpoints"])
+        self.assertIn("/v1/events", capabilities["versioning"]["experimental_endpoints"])
+        self.assertTrue(capabilities["features"]["multi_phase_selection"])
+        self.assertEqual(capabilities["topology"]["charger_backend"], "goe_charger")
+        self.assertEqual(capabilities["supported_phase_selections"], ["P1", "P1_P2", "P1_P2_P3"])
+        self.assertEqual(capabilities["available_modes"], [0, 1, 2])
+        self.assertEqual(summary["kind"], "summary")
+        self.assertEqual(summary["summary"], "mode=1 enable=1")
+        self.assertEqual(runtime["kind"], "runtime")
+        self.assertEqual(runtime["state"]["mode"], 1)
+        self.assertEqual(operational["kind"], "operational")
+        self.assertEqual(operational["state"]["backend_mode"], "split")
+        self.assertEqual(operational["state"]["auto_state"], "charging")
+        self.assertEqual(operational["state"]["software_update_state"], "available")
+        self.assertEqual(operational["state"]["runtime_overrides_path"], "/run/runtime.ini")
+        self.assertEqual(diagnostics["kind"], "dbus-diagnostics")
+        self.assertEqual(diagnostics["state"]["/Auto/State"], "charging")
+        self.assertEqual(diagnostics["state"]["/Auto/LastShellyReadAge"], 0.2)
+        self.assertEqual(topology["kind"], "topology")
+        self.assertEqual(topology["state"]["charger_backend"], "goe_charger")
+        self.assertEqual(update["kind"], "update")
+        self.assertEqual(config_effective["kind"], "config-effective")
+        self.assertEqual(config_effective["state"]["runtime_overrides_path"], "/run/runtime.ini")
+        self.assertEqual(health["kind"], "health")
+        self.assertFalse(health["state"]["update_stale"])
+        self.assertIn("summary", snapshot)
+        self.assertIn("health", snapshot)
+
+    def test_control_api_mixin_health_payload_uses_stale_callback_and_event_bus_is_reused(self):
+        service = _ControlService()
+        service._last_health_reason = "init"
+        service._is_update_stale = lambda now: now >= 0.0
+
+        health = service._state_api_health_payload()
+        event_bus_a = service._control_api_event_bus()
+        event_bus_b = service._control_api_event_bus()
+
+        self.assertTrue(health["state"]["update_stale"])
+        self.assertIs(event_bus_a, event_bus_b)
+
+    def test_control_api_mixin_skips_disabled_server_and_can_create_one(self):
+        service = _ControlService()
+        service.control_api_enabled = False
+        service._start_control_api_server()
+        self.assertFalse(hasattr(service, "_control_api_server"))
+
+        service.control_api_enabled = True
+        service.control_api_host = "127.0.0.1"
+        service.control_api_port = 8765
+        service.control_api_auth_token = "token"
+
+        fake_server = MagicMock(bound_host="127.0.0.1", bound_port=8765)
+        with patch("venus_evcharger.service.control.LocalControlApiHttpServer", return_value=fake_server) as factory:
+            service._start_control_api_server()
+
+        factory.assert_called_once_with(
+            service,
+            host="127.0.0.1",
+            port=8765,
+            auth_token="token",
+            read_token="",
+            control_token="",
+            localhost_only=True,
+            unix_socket_path="",
+        )
+        fake_server.start.assert_called_once_with()
+
+        empty_service = _ControlService()
+        empty_service._stop_control_api_server()
 
     def test_update_cycle_mixin_delegates_all_calls(self):
         service = _UpdateService()
@@ -339,6 +490,8 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service._set_health("running", cached=True)
         service._auto_decide_relay(False, 2200.0, 55.0, -1800.0)
         service._handle_write("/Mode", 1)
+        service._control_command_from_write("/AutoStart", 1, source="mqtt")
+        service._handle_control_command(ControlCommand(name="set_mode", path="/Mode", value=1))
         service._register_paths()
         service._fetch_device_info_with_fallback()
 
@@ -362,6 +515,13 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         auto.is_within_auto_daytime_window.assert_called_once_with(None)
         auto.set_health.assert_called_once_with("running", True)
         auto.auto_decide_relay.assert_called_once_with(False, 2200.0, 55.0, -1800.0)
-        service._write_controller.handle_write.assert_called_once_with("/Mode", 1)
+        service._write_controller.build_control_command.assert_any_call("/Mode", 1, source="dbus")
+        service._write_controller.build_control_command.assert_any_call("/AutoStart", 1, source="mqtt")
+        service._write_controller.handle_control_command.assert_any_call(
+            service._write_controller.build_control_command.return_value
+        )
+        service._write_controller.handle_control_command.assert_any_call(
+            ControlCommand(name="set_mode", path="/Mode", value=1)
+        )
         service._bootstrap_controller.register_paths.assert_called_once_with()
         service._bootstrap_controller.fetch_device_info_with_fallback.assert_called_once_with()

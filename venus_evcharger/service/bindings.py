@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 from .auto import DbusAutoLogicMixin
+from .control import ControlApiMixin
 from .factory import ServiceControllerFactoryMixin
 from .runtime import RuntimeHelperMixin
 from .state_publish import StatePublishMixin
 from .update import UpdateCycleMixin
 
 __all__ = [
+    "ControlApiMixin",
     "DbusAutoLogicMixin",
     "RuntimeHelperMixin",
     "ServiceControllerFactoryMixin",

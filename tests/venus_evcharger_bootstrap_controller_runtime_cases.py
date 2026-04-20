@@ -148,6 +148,7 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
         gobject_module = MagicMock()
         service = SimpleNamespace(
             _start_io_worker=MagicMock(),
+            _start_control_api_server=MagicMock(),
             runtime_state_path="/run/state.json",
             _state_summary=MagicMock(return_value="mode=1"),
             poll_interval_ms=1000,
@@ -173,6 +174,7 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
         controller.start_runtime_loops()
 
         service._start_io_worker.assert_called_once_with()
+        service._start_control_api_server.assert_called_once_with()
         gobject_module.timeout_add.assert_any_call(1000, service._update)
         gobject_module.timeout_add.assert_any_call(600000, service._sign_of_life)
 

@@ -21,6 +21,8 @@ import logging
 from typing import Any, Callable
 
 from venus_evcharger.auto.policy import AutoPolicy, validate_auto_policy
+from venus_evcharger.control import ControlApiV1Service, ControlCommand, ControlResult
+from venus_evcharger.control.models import ControlCommandSource
 from venus_evcharger.core.contracts import write_failure_is_reversible
 from venus_evcharger.controllers.write_support import _DbusWriteSupportMixin
 from venus_evcharger.controllers.write_snapshot import (
@@ -92,8 +94,35 @@ class DbusWriteController(_DbusWriteSupportMixin):
 
     def __init__(self, port: Any) -> None:
         self.port = port
+        self._control_api = ControlApiV1Service(
+            current_setting_paths=self.CURRENT_SETTING_PATHS,
+            auto_runtime_setting_paths=self.AUTO_RUNTIME_SETTING_PATHS,
+        )
         self._external_side_effect_started = False
 
+    @staticmethod
+    def _write_failure_detail(error: Exception) -> str:
+        """Return a compact error detail for Control API results."""
+        return str(error) or error.__class__.__name__
+
+    def build_control_command(
+        self,
+        path: str,
+        value: Any,
+        *,
+        source: ControlCommandSource = "dbus",
+    ) -> ControlCommand:
+        """Build one canonical control command from one transport-level write."""
+        return self._control_api.command_for_write(path, value, source=source)
+
+    def build_control_command_from_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        source: ControlCommandSource = "http",
+    ) -> ControlCommand:
+        """Build one canonical control command from one structured API payload."""
+        return self._control_api.command_from_payload(payload, source=source)
 
     def _handle_mode_write(self, requested_mode: int) -> None:
         port = self.port
@@ -288,6 +317,10 @@ class DbusWriteController(_DbusWriteSupportMixin):
         port.publish_dbus_path("/Auto/SoftwareUpdateRun", 0, current_time, force=True)
         logging.info("DBus write /Auto/SoftwareUpdateRun=1 queued a software update request %s", port.state_summary())
 
+    @staticmethod
+    def _handle_unknown_write(_path: str, _value: Any) -> None:
+        """Keep legacy unknown writes as a no-op compatibility path."""
+
     def _handle_mode_value_write(self, value: Any) -> None:
         """Normalize and dispatch one /Mode write value."""
         self._handle_mode_write(int(value))
@@ -300,57 +333,51 @@ class DbusWriteController(_DbusWriteSupportMixin):
         """Normalize and dispatch one /Enable write value."""
         self._handle_enable_write(bool(int(value)))
 
-    def _direct_write_handlers(self) -> dict[str, Callable[[Any], None]]:
-        """Return dedicated write handlers for scalar DBus paths."""
-        return {
-            "/Mode": self._handle_mode_value_write,
-            "/AutoStart": self._handle_autostart_write,
-            "/StartStop": self._handle_startstop_value_write,
-            "/Enable": self._handle_enable_value_write,
-            "/PhaseSelection": self._handle_phase_selection_write,
-            "/Auto/PhaseLockoutReset": self._handle_phase_lockout_reset_write,
-            "/Auto/ContactorLockoutReset": self._handle_contactor_lockout_reset_write,
-            "/Auto/SoftwareUpdateRun": self._handle_software_update_run_write,
-        }
-
-    def _execute_write(self, path: str, value: Any) -> None:
-        """Dispatch one writable DBus path to its dedicated handler."""
-        handler = self._direct_write_handlers().get(path)
-        if handler is not None:
-            handler(value)
-            return
-        if path in self.CURRENT_SETTING_PATHS:
-            self._handle_current_setting_write(path, value)
-            return
-        if path in self.AUTO_RUNTIME_SETTING_PATHS:
-            self._handle_auto_runtime_setting_write(path, value)
-
-    def handle_write(self, path: str, value: Any) -> bool:
-        """Handle writable DBus path updates from Venus OS."""
+    def handle_control_command(self, command: ControlCommand) -> ControlResult:
+        """Handle one canonical Control API command using existing write semantics."""
         port = self.port
         snapshot = self._snapshot_write_state(port._service)
         self._external_side_effect_started = False
         try:
-            self._execute_write(path, value)
+            self._control_api.execute(self, command)
             port.save_runtime_state()
             port.save_runtime_overrides()
-            return True
+            return ControlResult.applied_result(
+                command,
+                external_side_effect_started=self._external_side_effect_started,
+            )
         except Exception as error:  # pylint: disable=broad-except
+            detail = self._write_failure_detail(error)
             if write_failure_is_reversible(self._external_side_effect_started):
                 self._restore_write_state(port._service, snapshot)
-                logging.warning("Write to %s=%s failed: %s", path, value, error, exc_info=error)
-                return False
+                logging.warning(
+                    "Control command %s path=%s value=%s failed: %s",
+                    command.name,
+                    command.path,
+                    command.value,
+                    error,
+                    exc_info=error,
+                )
+                return ControlResult.rejected_result(command, detail=detail)
             logging.warning(
-                "Write to %s=%s failed after external side effects started; keeping in-flight state: %s",
-                path,
-                value,
+                "Control command %s path=%s value=%s failed after external side effects started; "
+                "keeping in-flight state: %s",
+                command.name,
+                command.path,
+                command.value,
                 error,
                 exc_info=error,
             )
-            # Once a relay or native charger command was accepted, the DBus
-            # write is no longer safely reversible. Report success so callers
-            # do not treat an in-flight external transition as if it had been
-            # rejected.
-            return True
+            return ControlResult.accepted_in_flight_result(
+                command,
+                detail=detail,
+                external_side_effect_started=self._external_side_effect_started,
+            )
         finally:
             self._external_side_effect_started = False
+
+    def handle_write(self, path: str, value: Any) -> bool:
+        """Handle writable DBus path updates from Venus OS."""
+        command = self.build_control_command(path, value, source="dbus")
+        result = self.handle_control_command(command)
+        return result.accepted

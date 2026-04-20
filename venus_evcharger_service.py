@@ -52,6 +52,7 @@ from venus_evcharger.core.common import (
     read_version,
 )
 from venus_evcharger.service.bindings import (
+    ControlApiMixin,
     DbusAutoLogicMixin,
     RuntimeHelperMixin,
     StatePublishMixin,
@@ -77,7 +78,7 @@ __all__ = [
 ]
 
 
-class ShellyWallboxService(StatePublishMixin, RuntimeHelperMixin, DbusAutoLogicMixin, UpdateCycleMixin):
+class ShellyWallboxService(ControlApiMixin, StatePublishMixin, RuntimeHelperMixin, DbusAutoLogicMixin, UpdateCycleMixin):
     """Expose a Shelly relay meter as a Venus OS EV charger tile."""
     _normalize_mode_func = staticmethod(normalize_mode)
     _mode_uses_auto_logic_func = staticmethod(mode_uses_auto_logic)

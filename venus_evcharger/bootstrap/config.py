@@ -129,6 +129,27 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
             "RuntimeOverridesPath",
             getattr(svc, "runtime_overrides_path", f"/run/dbus-venus-evcharger-overrides-{svc.deviceinstance}.ini"),
         ).strip()
+        svc.control_api_enabled = defaults.get("ControlApiEnabled", "0").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        svc.control_api_host = defaults.get("ControlApiHost", "127.0.0.1").strip() or "127.0.0.1"
+        svc.control_api_port = int(_config_value(defaults, "ControlApiPort", 8765))
+        svc.control_api_auth_token = defaults.get("ControlApiAuthToken", "").strip()
+        svc.control_api_read_token = defaults.get("ControlApiReadToken", "").strip()
+        svc.control_api_control_token = defaults.get("ControlApiControlToken", "").strip()
+        svc.control_api_localhost_only = defaults.get("ControlApiLocalhostOnly", "1").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        svc.control_api_unix_socket_path = defaults.get("ControlApiUnixSocketPath", "").strip()
+        svc.control_api_listen_host = ""
+        svc.control_api_listen_port = 0
+        svc.control_api_bound_unix_socket_path = ""
 
     def _load_auto_source_config(self, defaults: configparser.SectionProxy) -> None:
         """Load PV, battery, and grid source configuration for Auto mode."""
