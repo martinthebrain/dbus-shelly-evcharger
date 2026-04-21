@@ -108,10 +108,18 @@ Together these answer:
 
 ## Client starting points
 
+<!-- BEGIN:API_OVERVIEW_CLIENT_STARTING_POINTS -->
 Practical local client entrypoints in this repository:
 
 - Python example: [examples/control_api_client.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/examples/control_api_client.py)
 - Small CLI: [venus_evchargerctl.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/venus_evchargerctl.py)
 
+Typical first commands:
+
+- `python3 ./venus_evchargerctl.py --token READ-TOKEN health`
+- `python3 ./venus_evchargerctl.py --token READ-TOKEN capabilities`
+- `python3 ./venus_evchargerctl.py --token CONTROL-TOKEN command set-mode 1`
+
 These sit on top of the same canonical command and state contract described in
 [CONTROL_API.md](CONTROL_API.md) and [STATE_API.md](STATE_API.md).
+<!-- END:API_OVERVIEW_CLIENT_STARTING_POINTS -->

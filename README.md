@@ -247,10 +247,18 @@ The full request/response contract, auth rules, idempotency behavior, event
 stream, `curl` examples, Python example, and CLI snippets live in
 [CONTROL_API.md](CONTROL_API.md).
 
-Small local helper:
+<!-- BEGIN:README_LOCAL_HTTP_CONTROL_API_GETTING_STARTED -->
+Quick start:
 
+- `python3 ./venus_evchargerctl.py --token READ-TOKEN health`
+- `python3 ./venus_evchargerctl.py --token READ-TOKEN capabilities`
 - `python3 ./venus_evchargerctl.py --token READ-TOKEN state summary`
 - `python3 ./venus_evchargerctl.py --token CONTROL-TOKEN command set-mode 1`
+- `python3 ./venus_evchargerctl.py --unix-socket /run/venus-evcharger-control.sock --token READ-TOKEN events --kind command --once`
+
+For direct HTTP usage, `curl` snippets, optimistic concurrency with `If-Match`,
+and a small Python example, see [CONTROL_API.md](CONTROL_API.md).
+<!-- END:README_LOCAL_HTTP_CONTROL_API_GETTING_STARTED -->
 
 API audit and idempotency metadata are intentionally runtime-only. Keep their
 paths on `/run/...` or `/tmp/...`; they are not meant for flash-backed storage.

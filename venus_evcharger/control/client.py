@@ -85,6 +85,12 @@ class LocalControlApiClient:
     def capabilities(self, *, headers: Mapping[str, str] | None = None) -> ControlApiClientResponse:
         return self.get("/v1/capabilities", headers=headers)
 
+    def health(self, *, headers: Mapping[str, str] | None = None) -> ControlApiClientResponse:
+        return self.get("/v1/control/health", headers=headers)
+
+    def openapi(self, *, headers: Mapping[str, str] | None = None) -> ControlApiClientResponse:
+        return self.get("/v1/openapi.json", headers=headers)
+
     def events(
         self,
         *,

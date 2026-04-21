@@ -21,6 +21,12 @@ class _FakeClientForCliMainGuard:
     def state(self, name: str) -> ControlApiClientResponse:
         return ControlApiClientResponse(status=200, headers={}, body=json.dumps({"kind": name, "ok": True}))
 
+    def health(self) -> ControlApiClientResponse:
+        return ControlApiClientResponse(status=200, headers={}, body=json.dumps({"ok": True, "kind": "health"}))
+
+    def openapi(self) -> ControlApiClientResponse:
+        return ControlApiClientResponse(status=200, headers={}, body=json.dumps({"openapi": "3.1.0"}))
+
 
 class TestVenusEvchargerControlCli(unittest.TestCase):
     def test_parse_cli_value_covers_common_scalar_shapes(self) -> None:
@@ -76,6 +82,31 @@ class TestVenusEvchargerControlCli(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 cli.main([])
 
+    def test_run_health_and_openapi_paths_are_covered(self) -> None:
+        with patch.object(cli, "_client") as client_factory:
+            client_factory.return_value.health.return_value = ControlApiClientResponse(
+                status=200,
+                headers={},
+                body='{"ok":true,"kind":"health"}',
+            )
+            client_factory.return_value.openapi.return_value = ControlApiClientResponse(
+                status=200,
+                headers={},
+                body='{"openapi":"3.1.0"}',
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                health_rc = cli._run_health(SimpleNamespace(compact=False))
+            self.assertEqual(health_rc, 0)
+            self.assertEqual(json.loads(stdout.getvalue())["kind"], "health")
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                openapi_rc = cli._run_openapi(SimpleNamespace(compact=True))
+            self.assertEqual(openapi_rc, 0)
+            self.assertEqual(json.loads(stdout.getvalue())["openapi"], "3.1.0")
+
     def test_cli_module_main_guard_runs(self) -> None:
         stdout = io.StringIO()
         argv = sys.argv[:]
@@ -99,6 +130,12 @@ class TestVenusEvchargerControlCli(unittest.TestCase):
                 f"http://{server.bound_host}:{server.bound_port}",
             ]
 
+            health_stdout = io.StringIO()
+            with redirect_stdout(health_stdout):
+                rc = cli.main([*base_args, "health"])
+            self.assertEqual(rc, 0)
+            self.assertTrue(json.loads(health_stdout.getvalue())["ok"])
+
             state_stdout = io.StringIO()
             with redirect_stdout(state_stdout):
                 rc = cli.main([*base_args, "--token", "read-token", "state", "summary"])
@@ -110,6 +147,12 @@ class TestVenusEvchargerControlCli(unittest.TestCase):
                 rc = cli.main([*base_args, "--token", "control-token", "command", "set-mode", "1"])
             self.assertEqual(rc, 0)
             self.assertEqual(json.loads(command_stdout.getvalue())["result"]["status"], "applied")
+
+            openapi_stdout = io.StringIO()
+            with redirect_stdout(openapi_stdout):
+                rc = cli.main([*base_args, "openapi"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(json.loads(openapi_stdout.getvalue())["openapi"], "3.1.0")
 
             events_stdout = io.StringIO()
             with redirect_stdout(events_stdout):

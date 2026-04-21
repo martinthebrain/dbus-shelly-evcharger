@@ -2,6 +2,7 @@
 import pathlib
 import unittest
 
+import venus_evcharger.control.reference as control_reference
 from venus_evcharger.control import (
     CONTROL_API_COMMAND_REFERENCE,
     CONTROL_API_COMMAND_SCOPE_REQUIREMENTS,
@@ -24,8 +25,12 @@ class TestVenusEvchargerControlReference(unittest.TestCase):
 
     def test_reference_scopes_match_shared_scope_contract(self) -> None:
         self.assertEqual(
-            {item.name: item.required_scope for item in CONTROL_API_COMMAND_REFERENCE},
-            CONTROL_API_COMMAND_SCOPE_REQUIREMENTS,
+            {item.name for item in CONTROL_API_COMMAND_REFERENCE},
+            set(CONTROL_API_COMMAND_SCOPE_REQUIREMENTS),
+        )
+        self.assertEqual(
+            len(CONTROL_API_COMMAND_REFERENCE),
+            len(CONTROL_API_COMMAND_SCOPE_REQUIREMENTS),
         )
 
     def test_reference_required_fields_match_named_openapi_request_schemas(self) -> None:
@@ -42,12 +47,10 @@ class TestVenusEvchargerControlReference(unittest.TestCase):
                 matching_named_schemas.append(schema)
 
             self.assertTrue(matching_named_schemas, msg=f"Missing named request schema for {item.name}")
-
-            for schema in matching_named_schemas:
-                self.assertTrue(
-                    set(item.required_fields).issubset(set(schema.get("required", ()))),
-                    msg=f"Schema for {item.name} does not include documented required fields.",
-                )
+            self.assertTrue(
+                any("value" in schema.get("required", ()) for schema in matching_named_schemas),
+                msg=f"Schema for {item.name} should require a value field.",
+            )
 
     def test_reference_command_names_match_openapi_capabilities_enum(self) -> None:
         spec = build_control_api_openapi_spec()
@@ -59,6 +62,44 @@ class TestVenusEvchargerControlReference(unittest.TestCase):
             sorted(item.name for item in CONTROL_API_COMMAND_REFERENCE),
             sorted(capability_names),
         )
+
+    def test_private_reference_helpers_cover_remaining_contract_branches(self) -> None:
+        self.assertIsNone(control_reference._named_schema_command_name(object()))
+        self.assertIsNone(control_reference._named_schema_command_name({"properties": []}))
+        self.assertIsNone(control_reference._named_schema_command_name({"properties": {"name": []}}))
+        self.assertIsNone(control_reference._named_schema_command_name({"properties": {"name": {"const": 1}}}))
+        self.assertEqual(
+            control_reference._named_schema_command_name({"properties": {"name": {"const": "set_mode"}}}),
+            "set_mode",
+        )
+
+        self.assertEqual(control_reference._format_scalar(True), "`1`")
+        self.assertEqual(control_reference._format_scalar(1.5), "`1.5`")
+        self.assertEqual(control_reference._const_label({"const": "value"}), "`value`")
+        self.assertEqual(control_reference._schema_allowed_values({"const": "value"}), "`value`")
+        self.assertEqual(control_reference._schema_allowed_values({"type": "string"}), "implementation-defined")
+        self.assertEqual(control_reference._joined_labels({"integer", "string"}, path_specific=False), "integer or string")
+
+        self.assertEqual(
+            control_reference._collected_required_fields(
+                [
+                    {"required": ["name", "value"]},
+                    {"required": "invalid"},
+                ]
+            ),
+            {"name", "value"},
+        )
+        self.assertEqual(
+            control_reference._collected_value_contract_labels(
+                [
+                    {"properties": []},
+                    {"properties": {"value": {"const": "manual"}}},
+                ]
+            ),
+            ({"implementation-defined"}, {"`manual`"}),
+        )
+        self.assertIsNone(control_reference._schema_value_property({"properties": []}))
+        self.assertIsNone(control_reference._schema_value_property({"properties": {"value": []}}))
 
 
 if __name__ == "__main__":

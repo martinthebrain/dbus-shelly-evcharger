@@ -331,17 +331,17 @@ machine-readable validation rules, treat `GET /v1/openapi.json` as normative.
 <!-- BEGIN:CONTROL_API_COMMAND_MATRIX -->
 | Command name | Required fields | Value type | Allowed values / ranges | Idempotent shape | `accepted_in_flight` | Required scope | Typical restrictions |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `set_mode` | `name`, `value` | integer | `0`, `1`, `2` | yes | possible | `control_basic` | mode-specific runtime rules |
-| `set_auto_start` | `name`, `value` | boolean or `0/1` | binary | yes | uncommon | `control_basic` | none beyond local policy |
-| `set_start_stop` | `name`, `value` | boolean or `0/1` | binary | yes | possible | `control_basic` | mode/backend policy |
-| `set_enable` | `name`, `value` | boolean or `0/1` | binary | yes | possible | `control_basic` | backend/health policy |
+| `set_mode` | `name`, `path`, `value` | integer | `0`, `1`, `2` | yes | possible | `control_basic` | mode-specific runtime rules |
+| `set_auto_start` | `name`, `path`, `value` | boolean or `0/1` | binary | yes | uncommon | `control_basic` | none beyond local policy |
+| `set_start_stop` | `name`, `path`, `value` | boolean or `0/1` | binary | yes | possible | `control_basic` | mode/backend policy |
+| `set_enable` | `name`, `path`, `value` | boolean or `0/1` | binary | yes | possible | `control_basic` | backend/health policy |
 | `set_current_setting` | `name`, `path`, `value` | number | `>= 0` | yes | possible | `control_basic` | backend/current limits |
-| `set_phase_selection` | `name`, `value` | string | `P1`, `P1_P2`, `P1_P2_P3` | yes | possible | `control_basic` | supported topology and phase hardware |
-| `set_auto_runtime_setting` | `name`, `path`, `value` | float, integer, string, or binary depending on `path` | path-specific schema | yes | uncommon | `control_admin` | only supported runtime-setting paths |
-| `reset_phase_lockout` | `name`, `value` | boolean or `0/1` | binary | no | uncommon | `control_admin` | only meaningful when lockout exists |
-| `reset_contactor_lockout` | `name`, `value` | boolean or `0/1` | binary | no | uncommon | `control_admin` | only meaningful when lockout exists |
-| `trigger_software_update` | `name`, `value` | boolean or `0/1` | binary | no | possible | `update_admin` | update policy, availability, current update state |
-| `legacy_unknown_write` | `name`, `path`, `value` | implementation-defined | only for explicitly mapped compatibility writes | compatibility-only | implementation-defined | `control_admin` | not for new clients |
+| `set_phase_selection` | `name`, `path`, `value` | string | `P1`, `P1_P2`, `P1_P2_P3` | yes | possible | `control_basic` | supported topology and phase hardware |
+| `set_auto_runtime_setting` | `name`, `path`, `value` | boolean or `0/1`, integer, number, or string depending on `path` | path-specific schema | yes | uncommon | `control_admin` | only supported runtime-setting paths |
+| `reset_phase_lockout` | `name`, `path`, `value` | boolean or `0/1` | binary | no | uncommon | `control_admin` | only meaningful when lockout exists |
+| `reset_contactor_lockout` | `name`, `path`, `value` | boolean or `0/1` | binary | no | uncommon | `control_admin` | only meaningful when lockout exists |
+| `trigger_software_update` | `name`, `path`, `value` | boolean or `0/1` | binary | no | possible | `update_admin` | update policy, availability, current update state |
+| `legacy_unknown_write` | `name`, `path`, `value` | implementation-defined | implementation-defined | compatibility-only | implementation-defined | `control_admin` | not for new clients |
 <!-- END:CONTROL_API_COMMAND_MATRIX -->
 
 Notes:
@@ -469,10 +469,22 @@ curl -N \
 
 ## Client examples
 
+<!-- BEGIN:CONTROL_API_GETTING_STARTED -->
 Official example files:
 
 - Python example: [examples/control_api_client.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/examples/control_api_client.py)
 - Small CLI: [venus_evchargerctl.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/venus_evchargerctl.py)
+
+CLI quick start:
+
+```bash
+python3 ./venus_evchargerctl.py --token READ-TOKEN health
+python3 ./venus_evchargerctl.py --token READ-TOKEN capabilities
+python3 ./venus_evchargerctl.py --token READ-TOKEN state summary
+python3 ./venus_evchargerctl.py --token CONTROL-TOKEN command set-mode 1
+python3 ./venus_evchargerctl.py --token CONTROL-TOKEN command set-current-setting 12.5 --path /SetCurrent
+python3 ./venus_evchargerctl.py --unix-socket /run/venus-evcharger-control.sock --token READ-TOKEN events --kind command --once
+```
 
 Read capabilities with `curl`:
 
@@ -519,7 +531,7 @@ curl -s \
   http://127.0.0.1:8765/v1/control/command
 ```
 
-Small Python example:
+Python quick start:
 
 ```python
 from venus_evcharger.control.client import LocalControlApiClient
@@ -530,22 +542,14 @@ client = LocalControlApiClient(
 )
 
 summary = client.state("summary").json()
-state_token = client.state("health").headers["X-State-Token"]
+state_token = client.state("health").headers.get("X-State-Token", "")
 result = client.command(
     {"name": "set_mode", "value": 1},
-    command_id="example-set-mode",
-    idempotency_key="example-set-mode-1",
+    idempotency_key="set-mode-1",
     if_match=state_token,
 ).json()
 ```
-
-CLI examples:
-
-```bash
-python3 ./venus_evchargerctl.py --token READ-TOKEN state summary
-python3 ./venus_evchargerctl.py --token CONTROL-TOKEN command set-mode 1
-python3 ./venus_evchargerctl.py --unix-socket /run/venus-evcharger-control.sock --token READ-TOKEN events --kind command --once
-```
+<!-- END:CONTROL_API_GETTING_STARTED -->
 
 ## Versioning
 

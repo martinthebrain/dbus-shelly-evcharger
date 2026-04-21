@@ -63,6 +63,23 @@ class TestVenusEvchargerControlClient(unittest.TestCase):
         client.get.assert_called_once_with("/v1/state/runtime", headers=None)
         self.assertEqual(client._request_headers(None, json_payload=None), {"Accept": "application/json"})
 
+    def test_health_and_openapi_delegate_to_get(self) -> None:
+        client = LocalControlApiClient(base_url="http://127.0.0.1:8765", bearer_token="")
+        client.get = MagicMock(return_value=ControlApiClientResponse(status=200, headers={}, body='{"ok":true}'))  # type: ignore[method-assign]
+
+        health_response = client.health()
+        openapi_response = client.openapi()
+
+        self.assertEqual(health_response.status, 200)
+        self.assertEqual(openapi_response.status, 200)
+        self.assertEqual(
+            client.get.call_args_list,
+            [
+                unittest.mock.call("/v1/control/health", headers=None),
+                unittest.mock.call("/v1/openapi.json", headers=None),
+            ],
+        )
+
     def test_request_uses_connection_and_returns_normalized_response(self) -> None:
         client = LocalControlApiClient(base_url="http://127.0.0.1:8765", bearer_token="token")
         fake_connection = MagicMock()

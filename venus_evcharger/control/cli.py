@@ -60,6 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
     capabilities_parser = subparsers.add_parser("capabilities", help="Read the capabilities payload.")
     capabilities_parser.set_defaults(state_name="")
 
+    subparsers.add_parser("health", help="Read the local API health payload.")
+    subparsers.add_parser("openapi", help="Read the OpenAPI 3.1 description.")
+
     command_parser = subparsers.add_parser("command", help="Send one canonical control command.")
     command_parser.add_argument("name", help="Canonical command name, for example set-mode.")
     command_parser.add_argument("value", help="Command value. JSON scalars such as 1, 12.5, true are accepted.")
@@ -105,6 +108,18 @@ def _run_state(namespace: argparse.Namespace) -> int:
 
 def _run_capabilities(namespace: argparse.Namespace) -> int:
     response = _client(namespace).capabilities()
+    _write_json(response.json(), compact=namespace.compact)
+    return 0 if 200 <= response.status < 300 else 1
+
+
+def _run_health(namespace: argparse.Namespace) -> int:
+    response = _client(namespace).health()
+    _write_json(response.json(), compact=namespace.compact)
+    return 0 if 200 <= response.status < 300 else 1
+
+
+def _run_openapi(namespace: argparse.Namespace) -> int:
+    response = _client(namespace).openapi()
     _write_json(response.json(), compact=namespace.compact)
     return 0 if 200 <= response.status < 300 else 1
 
@@ -169,6 +184,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     handlers = {
         "state": _run_state,
         "capabilities": _run_capabilities,
+        "health": _run_health,
+        "openapi": _run_openapi,
         "command": _run_command,
         "events": _run_events,
     }
