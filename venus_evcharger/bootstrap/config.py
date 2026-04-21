@@ -25,6 +25,7 @@ from typing import Any
 from venus_evcharger.auto.policy import load_auto_policy_from_config
 from venus_evcharger.backend.config import load_backend_selection
 from venus_evcharger.core.common import DEFAULT_SCHEDULED_ENABLED_DAYS, normalize_hhmm_text, scheduled_enabled_days_text
+from venus_evcharger.energy import load_energy_source_settings
 from venus_evcharger.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
 
 MONTH_WINDOW_DEFAULTS: dict[int, tuple[str, str]] = {
@@ -194,10 +195,15 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
             "com.victronenergy.battery",
         ).strip()
         svc.auto_battery_scan_interval_seconds = float(_config_value(defaults, "AutoBatteryScanIntervalSeconds", 60))
+        svc.auto_battery_capacity_wh = float(_config_value(defaults, "AutoBatteryCapacityWh", 0))
+        svc.auto_battery_power_path = defaults.get("AutoBatteryPowerPath", "").strip()
+        svc.auto_battery_ac_power_path = defaults.get("AutoBatteryAcPowerPath", "").strip()
         svc.auto_allow_without_battery_soc = defaults.get(
             "AutoAllowWithoutBatterySoc",
             "1",
         ).strip().lower() in ("1", "true", "yes", "on")
+        svc.auto_energy_sources, svc.auto_use_combined_battery_soc = load_energy_source_settings(defaults)
+        svc.auto_energy_source_ids = tuple(source.source_id for source in svc.auto_energy_sources)
         svc.auto_dbus_backoff_base_seconds = float(_config_value(defaults, "AutoDbusBackoffBaseSeconds", 5))
         svc.auto_dbus_backoff_max_seconds = float(_config_value(defaults, "AutoDbusBackoffMaxSeconds", 60))
         svc.auto_grid_service = defaults.get("AutoGridService", "com.victronenergy.system").strip()

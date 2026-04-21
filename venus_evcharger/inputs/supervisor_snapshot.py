@@ -13,6 +13,20 @@ from venus_evcharger.core.contracts import paired_optional_values, timestamp_not
 
 
 class _AutoInputSupervisorSnapshotMixin:
+    OPTIONAL_NUMERIC_FIELDS = (
+        "battery_combined_soc",
+        "battery_combined_usable_capacity_wh",
+        "battery_combined_charge_power_w",
+        "battery_combined_discharge_power_w",
+        "battery_combined_net_power_w",
+        "battery_combined_ac_power_w",
+    )
+    OPTIONAL_COUNT_FIELDS = (
+        "battery_source_count",
+        "battery_online_source_count",
+        "battery_valid_soc_source_count",
+    )
+
     @staticmethod
     def _coerce_snapshot_timestamp(value: Any) -> float | None:
         if value is None or isinstance(value, bool):
@@ -158,13 +172,21 @@ class _AutoInputSupervisorSnapshotMixin:
         normalized: dict[str, Any],
     ) -> dict[str, Any] | None:
         battery_soc = normalized.get("battery_soc")
-        if valid_battery_soc(battery_soc):
+        combined_soc = normalized.get("battery_combined_soc")
+        if not valid_battery_soc(battery_soc):
+            return self._invalid_snapshot(
+                "auto-input-helper-schema-invalid",
+                path,
+                "Auto input helper snapshot %s has out-of-range battery_soc=%r",
+                snapshot.get("battery_soc"),
+            )
+        if combined_soc is None or valid_battery_soc(combined_soc):
             return normalized
         return self._invalid_snapshot(
             "auto-input-helper-schema-invalid",
             path,
-            "Auto input helper snapshot %s has out-of-range battery_soc=%r",
-            snapshot.get("battery_soc"),
+            "Auto input helper snapshot %s has out-of-range battery_combined_soc=%r",
+            snapshot.get("battery_combined_soc"),
         )
 
     def _validate_snapshot_shape(self, path: str, snapshot: Any) -> int | None:
@@ -221,7 +243,88 @@ class _AutoInputSupervisorSnapshotMixin:
             "numeric",
         ):
             return None
+        if not self._normalize_snapshot_fields(
+            path,
+            snapshot,
+            normalized,
+            self.OPTIONAL_NUMERIC_FIELDS,
+            self._coerce_snapshot_number,
+            "numeric",
+        ):
+            return None
+        if not self._normalize_snapshot_count_fields(path, snapshot, normalized):
+            return None
+        if not self._normalize_snapshot_structured_fields(path, snapshot, normalized):
+            return None
         return normalized
+
+    def _normalize_snapshot_count_fields(
+        self,
+        path: str,
+        snapshot: dict[str, Any],
+        normalized: dict[str, Any],
+    ) -> bool:
+        for key in self.OPTIONAL_COUNT_FIELDS:
+            raw_value = snapshot.get(key)
+            if raw_value is None:
+                normalized[key] = 0
+                continue
+            if isinstance(raw_value, bool):
+                self._invalid_snapshot(
+                    "auto-input-helper-schema-invalid",
+                    path,
+                    "Auto input helper snapshot %s has invalid count field %s=%r",
+                    key,
+                    raw_value,
+                )
+                return False
+            try:
+                normalized[key] = max(0, int(raw_value))
+            except (TypeError, ValueError):
+                self._invalid_snapshot(
+                    "auto-input-helper-schema-invalid",
+                    path,
+                    "Auto input helper snapshot %s has invalid count field %s=%r",
+                    key,
+                    raw_value,
+                )
+                return False
+        return True
+
+    def _normalize_snapshot_structured_fields(
+        self,
+        path: str,
+        snapshot: dict[str, Any],
+        normalized: dict[str, Any],
+    ) -> bool:
+        sources = snapshot.get("battery_sources")
+        if sources is None:
+            normalized["battery_sources"] = []
+        elif isinstance(sources, list):
+            normalized["battery_sources"] = [dict(item) if isinstance(item, dict) else item for item in sources]
+        else:
+            self._invalid_snapshot(
+                "auto-input-helper-schema-invalid",
+                path,
+                "Auto input helper snapshot %s has invalid battery_sources payload",
+            )
+            return False
+        learning_profiles = snapshot.get("battery_learning_profiles")
+        if learning_profiles is None:
+            normalized["battery_learning_profiles"] = {}
+        elif isinstance(learning_profiles, dict):
+            normalized["battery_learning_profiles"] = {
+                str(key): dict(value) if isinstance(value, dict) else value
+                for key, value in learning_profiles.items()
+            }
+        else:
+            self._invalid_snapshot(
+                "auto-input-helper-schema-invalid",
+                path,
+                "Auto input helper snapshot %s has invalid battery_learning_profiles payload",
+            )
+            return False
+        return True
 
     def _validate_snapshot_semantics(
         self,

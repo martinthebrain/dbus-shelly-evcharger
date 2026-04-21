@@ -95,6 +95,8 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
         svc._last_pv_missing_warning = None
         svc._resolved_auto_battery_service = None
         svc._auto_battery_last_scan = 0.0
+        svc._resolved_auto_energy_services = {}
+        svc._auto_energy_last_scan = {}
         svc._last_battery_missing_warning = None
         svc._last_battery_allow_warning = None
         svc._last_grid_missing_warning = None
@@ -114,6 +116,10 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
         svc._last_grid_at = None
         svc._last_battery_soc_value = None
         svc._last_battery_soc_at = None
+        svc._last_combined_battery_soc_value = None
+        svc._last_combined_battery_soc_at = None
+        svc._last_energy_cluster = {}
+        svc._last_energy_learning_profiles = {}
         svc._last_pm_status = None
         svc._last_pm_status_at = None
         svc._last_pm_status_confirmed = False
@@ -229,6 +235,17 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
             "pv_power": None,
             "battery_captured_at": None,
             "battery_soc": None,
+            "battery_combined_soc": None,
+            "battery_combined_usable_capacity_wh": None,
+            "battery_combined_charge_power_w": None,
+            "battery_combined_discharge_power_w": None,
+            "battery_combined_net_power_w": None,
+            "battery_combined_ac_power_w": None,
+            "battery_source_count": 0,
+            "battery_online_source_count": 0,
+            "battery_valid_soc_source_count": 0,
+            "battery_sources": [],
+            "battery_learning_profiles": {},
             "grid_captured_at": None,
             "grid_power": None,
             "auto_mode_active": False,
@@ -240,6 +257,15 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
         cloned = dict(snapshot)
         if isinstance(cloned.get("pm_status"), dict):
             cloned["pm_status"] = dict(cloned["pm_status"])
+        if isinstance(cloned.get("battery_sources"), list):
+            cloned["battery_sources"] = [
+                dict(item) if isinstance(item, dict) else item for item in cloned["battery_sources"]
+            ]
+        if isinstance(cloned.get("battery_learning_profiles"), dict):
+            cloned["battery_learning_profiles"] = {
+                str(key): dict(value) if isinstance(value, dict) else value
+                for key, value in cloned["battery_learning_profiles"].items()
+            }
         return cloned
 
     def init_worker_state(self) -> None:

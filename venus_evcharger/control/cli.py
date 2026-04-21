@@ -181,17 +181,23 @@ def _response_ok(response: Any) -> bool:
 
 
 def _response_payload(response: Any) -> dict[str, Any]:
-    return response.json()
+    payload = response.json()
+    if isinstance(payload, dict):
+        return payload
+    return {"value": payload}
 
 
 def _state_token_from_response(response: Any) -> str:
-    header_token = response.headers.get("X-State-Token", "").strip()
+    raw_header_token = response.headers.get("X-State-Token", "")
+    header_token = str(raw_header_token).strip()
     if header_token:
         return header_token.strip('"')
     payload = _response_payload(response)
     state = payload.get("state", {})
     if isinstance(state, dict):
-        return str(state.get("state_token", "")).strip().strip('"')
+        state_token = state.get("state_token", "")
+        if isinstance(state_token, str):
+            return state_token.strip().strip('"')
     return ""
 
 

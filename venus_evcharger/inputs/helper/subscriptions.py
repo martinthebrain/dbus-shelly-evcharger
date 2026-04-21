@@ -81,13 +81,16 @@ class _AutoInputHelperSubscriptionMixin:
 
     def _desired_battery_subscription_specs(self: Any) -> list[tuple[str, str, str]]:
         """Return the battery SOC path that should be monitored."""
-        try:
-            battery_service = self._resolve_auto_battery_service()
-        except Exception:  # pylint: disable=broad-except
-            battery_service = None
-        if not battery_service:
-            return []
-        return [("battery", battery_service, self.auto_battery_soc_path)]
+        desired: list[tuple[str, str, str]] = []
+        for source in tuple(getattr(self, "auto_energy_sources", ()) or (self._primary_energy_source(),)):
+            try:
+                service_name = self._resolve_energy_source_service(source)
+            except Exception:  # pylint: disable=broad-except
+                continue
+            for path in (source.soc_path, source.battery_power_path, source.ac_power_path):
+                if path:
+                    desired.append(("battery", service_name, path))
+        return desired
 
     def _desired_grid_subscription_specs(self: Any) -> list[tuple[str, str, str]]:
         """Return the configured grid power paths that should be monitored."""
@@ -166,6 +169,7 @@ class _AutoInputHelperSubscriptionMixin:
         return bool(
             (self.auto_pv_service and name == self.auto_pv_service)
             or (self.auto_battery_service and name == self.auto_battery_service)
+            or any(source.service_name and name == source.service_name for source in getattr(self, "auto_energy_sources", ()))
         )
 
     def _matches_discovery_prefix(self: Any, name: str) -> bool:
@@ -173,6 +177,7 @@ class _AutoInputHelperSubscriptionMixin:
         return bool(
             name.startswith(self.auto_pv_service_prefix)
             or name.startswith(self.auto_battery_service_prefix)
+            or any(source.service_prefix and name.startswith(source.service_prefix) for source in getattr(self, "auto_energy_sources", ()))
         )
 
     def _refresh_subscriptions_timer(self: Any) -> bool:

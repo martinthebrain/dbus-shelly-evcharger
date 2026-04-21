@@ -64,7 +64,18 @@ class _ControlService(ControlApiMixin):
         return "mode=1 enable=1"
 
     def _current_runtime_state(self):
-        return {"mode": 1, "autostart": 1}
+        return {"mode": 1, "autostart": 1, "combined_battery_soc": 62.0}
+
+    def _get_worker_snapshot(self):
+        return {
+            "battery_combined_soc": 62.0,
+            "battery_source_count": 2,
+            "battery_online_source_count": 2,
+            "battery_combined_charge_power_w": 800.0,
+            "battery_combined_discharge_power_w": 1200.0,
+            "battery_sources": [{"source_id": "victron"}, {"source_id": "hybrid"}],
+            "battery_learning_profiles": {"hybrid": {"sample_count": 3}},
+        }
 
 
 class _FactoryService(ServiceControllerFactoryMixin):
@@ -282,11 +293,14 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         self.assertEqual(summary["summary"], "mode=1 enable=1")
         self.assertEqual(runtime["kind"], "runtime")
         self.assertEqual(runtime["state"]["mode"], 1)
+        self.assertEqual(runtime["state"]["combined_battery_soc"], 62.0)
         self.assertEqual(operational["kind"], "operational")
         self.assertEqual(operational["state"]["backend_mode"], "split")
         self.assertEqual(operational["state"]["auto_state"], "charging")
         self.assertEqual(operational["state"]["software_update_state"], "available")
         self.assertEqual(operational["state"]["runtime_overrides_path"], "/run/runtime.ini")
+        self.assertEqual(operational["state"]["combined_battery_soc"], 62.0)
+        self.assertEqual(operational["state"]["combined_battery_source_count"], 2)
         self.assertEqual(diagnostics["kind"], "dbus-diagnostics")
         self.assertEqual(diagnostics["state"]["/Auto/State"], "charging")
         self.assertEqual(diagnostics["state"]["/Auto/LastShellyReadAge"], 0.2)

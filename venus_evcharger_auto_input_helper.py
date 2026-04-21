@@ -22,6 +22,7 @@ from venus_evcharger.core.shared import (
     compact_json,
     write_text_atomically,
 )
+from venus_evcharger.energy import load_energy_source_settings
 
 try:
     import dbus.mainloop.glib as dbus_glib_mainloop
@@ -113,6 +114,9 @@ class AutoInputHelper(
             "com.victronenergy.battery.socketcan_can1",
         ).strip()
         self.auto_battery_soc_path = self.config.get("AutoBatterySocPath", "/Soc").strip()
+        self.auto_battery_capacity_wh = float(self.config.get("AutoBatteryCapacityWh", 0) or 0)
+        self.auto_battery_power_path = self.config.get("AutoBatteryPowerPath", "").strip()
+        self.auto_battery_ac_power_path = self.config.get("AutoBatteryAcPowerPath", "").strip()
         self.auto_battery_service_prefix = self.config.get(
             "AutoBatteryServicePrefix",
             "com.victronenergy.battery",
@@ -121,6 +125,8 @@ class AutoInputHelper(
             0.0,
             float(self.config.get("AutoBatteryScanIntervalSeconds", 60)),
         )
+        self.auto_energy_sources, self.auto_use_combined_battery_soc = load_energy_source_settings(self.config)
+        self.auto_energy_source_ids = tuple(source.source_id for source in self.auto_energy_sources)
         self.auto_grid_service = self.config.get("AutoGridService", "com.victronenergy.system").strip()
         self.auto_grid_l1_path = self.config.get("AutoGridL1Path", "/Ac/Grid/L1/Power").strip()
         self.auto_grid_l2_path = self.config.get("AutoGridL2Path", "/Ac/Grid/L2/Power").strip()
@@ -149,10 +155,13 @@ class AutoInputHelper(
         self._auto_pv_last_scan = 0.0
         self._resolved_auto_battery_service = None
         self._auto_battery_last_scan = 0.0
+        self._resolved_auto_energy_services: dict[str, str] = {}
+        self._auto_energy_last_scan: dict[str, float] = {}
+        self._energy_learning_profiles: dict[str, Any] = {}
         self._source_retry_after: dict[str, float] = {}
         self._warning_state: dict[str, float] = {}
         self._last_payload: str | None = None
-        self._last_snapshot_state: dict[str, float | int | None] = self._empty_snapshot()
+        self._last_snapshot_state: dict[str, object] = self._empty_snapshot()
         self._next_source_poll_at = {
             "pv": 0.0,
             "battery": 0.0,
@@ -206,7 +215,7 @@ class AutoInputHelper(
             self._warning_state[key] = now
 
     @staticmethod
-    def _empty_snapshot(captured_at: float | None = None) -> dict[str, float | int | None]:
+    def _empty_snapshot(captured_at: float | None = None) -> dict[str, object]:
         """Return an empty helper snapshot payload."""
         return {
             "snapshot_version": AutoInputHelper.SNAPSHOT_SCHEMA_VERSION,
@@ -216,6 +225,17 @@ class AutoInputHelper(
             "pv_power": None,
             "battery_captured_at": None,
             "battery_soc": None,
+            "battery_combined_soc": None,
+            "battery_combined_usable_capacity_wh": None,
+            "battery_combined_charge_power_w": None,
+            "battery_combined_discharge_power_w": None,
+            "battery_combined_net_power_w": None,
+            "battery_combined_ac_power_w": None,
+            "battery_source_count": 0,
+            "battery_online_source_count": 0,
+            "battery_valid_soc_source_count": 0,
+            "battery_sources": [],
+            "battery_learning_profiles": {},
             "grid_captured_at": None,
             "grid_power": None,
         }

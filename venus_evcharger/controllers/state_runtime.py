@@ -125,6 +125,28 @@ class _StateRuntimeMixin:
             "contactor_lockout_at": self._coerce_optional_runtime_past_time(getattr(svc, "_contactor_lockout_at", None)),
         }
 
+    @staticmethod
+    def _energy_runtime_state(svc: Any) -> dict[str, object]:
+        snapshot: dict[str, Any] = {}
+        get_snapshot = getattr(svc, "_get_worker_snapshot", None)
+        if callable(get_snapshot):
+            raw_snapshot = get_snapshot()
+            if isinstance(raw_snapshot, dict):
+                snapshot = dict(raw_snapshot)
+        return {
+            "combined_battery_soc": snapshot.get("battery_combined_soc"),
+            "combined_battery_usable_capacity_wh": snapshot.get("battery_combined_usable_capacity_wh"),
+            "combined_battery_charge_power_w": snapshot.get("battery_combined_charge_power_w"),
+            "combined_battery_discharge_power_w": snapshot.get("battery_combined_discharge_power_w"),
+            "combined_battery_net_power_w": snapshot.get("battery_combined_net_power_w"),
+            "combined_battery_ac_power_w": snapshot.get("battery_combined_ac_power_w"),
+            "combined_battery_source_count": snapshot.get("battery_source_count", 0),
+            "combined_battery_online_source_count": snapshot.get("battery_online_source_count", 0),
+            "combined_battery_valid_soc_source_count": snapshot.get("battery_valid_soc_source_count", 0),
+            "combined_battery_sources": list(snapshot.get("battery_sources", []) or []),
+            "combined_battery_learning_profiles": dict(snapshot.get("battery_learning_profiles", {}) or {}),
+        }
+
     def current_runtime_state(self) -> dict[str, object]:
         svc = self.service
         runtime_state = self._base_runtime_state(svc)
@@ -132,6 +154,7 @@ class _StateRuntimeMixin:
         runtime_state.update(self._phase_selection_runtime_state(svc))
         runtime_state.update(self._phase_switch_runtime_state(svc))
         runtime_state.update(self._contactor_runtime_state(svc))
+        runtime_state.update(self._energy_runtime_state(svc))
         return runtime_state
 
     @classmethod

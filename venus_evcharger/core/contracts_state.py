@@ -118,6 +118,11 @@ def normalized_state_api_operational_state_fields(payload: Mapping[str, Any] | N
         "software_update_no_update_active": software_update_no_update_active,
         "runtime_overrides_active": normalize_binary_flag(raw.get("runtime_overrides_active")),
         "runtime_overrides_path": _normalized_text(raw.get("runtime_overrides_path")),
+        "combined_battery_soc": non_negative_float_or_none(raw.get("combined_battery_soc")),
+        "combined_battery_source_count": non_negative_int(raw.get("combined_battery_source_count")),
+        "combined_battery_online_source_count": non_negative_int(raw.get("combined_battery_online_source_count")),
+        "combined_battery_charge_power_w": non_negative_float_or_none(raw.get("combined_battery_charge_power_w")),
+        "combined_battery_discharge_power_w": non_negative_float_or_none(raw.get("combined_battery_discharge_power_w")),
     }
 
 

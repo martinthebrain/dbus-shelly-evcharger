@@ -23,6 +23,12 @@ from venus_evcharger.core.shared import (
     should_assume_zero_pv,
     sum_dbus_numeric,
 )
+from venus_evcharger.energy import (
+    EnergySourceDefinition,
+    EnergySourceSnapshot,
+    aggregate_energy_sources,
+    update_energy_learning_profiles,
+)
 
 
 
@@ -208,6 +214,25 @@ class _AutoInputHelperSourceMixin:
         """Force the next battery lookup to re-scan DBus services."""
         self._resolved_auto_battery_service = None
         self._auto_battery_last_scan = 0.0
+        if isinstance(getattr(self, "_resolved_auto_energy_services", None), dict):
+            self._resolved_auto_energy_services.pop("primary_battery", None)
+        if isinstance(getattr(self, "_auto_energy_last_scan", None), dict):
+            self._auto_energy_last_scan.pop("primary_battery", None)
+
+    def _primary_energy_source(self: Any) -> EnergySourceDefinition:
+        sources = tuple(getattr(self, "auto_energy_sources", ()) or ())
+        if sources:
+            return cast(EnergySourceDefinition, sources[0])
+        return EnergySourceDefinition(
+            source_id="primary_battery",
+            role="battery",
+            service_name=str(getattr(self, "auto_battery_service", "") or ""),
+            service_prefix=str(getattr(self, "auto_battery_service_prefix", "") or ""),
+            soc_path=str(getattr(self, "auto_battery_soc_path", "/Soc") or "/Soc"),
+            usable_capacity_wh=getattr(self, "auto_battery_capacity_wh", None),
+            battery_power_path=str(getattr(self, "auto_battery_power_path", "") or ""),
+            ac_power_path=str(getattr(self, "auto_battery_ac_power_path", "") or ""),
+        )
 
     def _battery_service_has_soc(self: Any, service_name: str) -> bool:
         """Return whether the candidate battery service currently exposes SOC."""
@@ -216,25 +241,53 @@ class _AutoInputHelperSourceMixin:
         except Exception:
             return False
 
+    def _energy_service_has_readable_field(self: Any, service_name: str, path: str) -> bool:
+        if not path:
+            return False
+        try:
+            return self._get_dbus_value(service_name, path) is not None
+        except Exception:
+            return False
+
+    def _energy_source_has_readable_data(self: Any, source: EnergySourceDefinition, service_name: str) -> bool:
+        return any(
+            (
+                self._energy_service_has_readable_field(service_name, source.soc_path),
+                self._energy_service_has_readable_field(service_name, source.battery_power_path),
+                self._energy_service_has_readable_field(service_name, source.ac_power_path),
+            )
+        )
+
     def _resolve_auto_battery_service(self: Any) -> str:
         """Resolve battery service from config or DBus discovery."""
         now = time.time()
-        configured_service = cast(str | None, self._configured_auto_battery_service(now))
+        configured_service = self._configured_auto_battery_service(now)
         if configured_service is not None:
-            return configured_service
-        cached_service = cast(str | None, self._cached_auto_battery_service(now))
+            resolved_configured_service: str = configured_service
+            return resolved_configured_service
+        cached_service = self._cached_auto_battery_service(now)
         if cached_service is not None:
-            return cached_service
-        return cast(str, self._discovered_auto_battery_service(now))
+            resolved_cached_service: str = cached_service
+            return resolved_cached_service
+        discovered_service = self._discovered_auto_battery_service(now)
+        resolved_discovered_service: str = discovered_service
+        return resolved_discovered_service
 
     def _configured_auto_battery_service(self: Any, now: float) -> str | None:
         """Return configured battery override when it currently exposes SOC."""
-        if not self.auto_battery_service:
+        source = self._primary_energy_source()
+        if not source.service_name:
             return None
         try:
-            if self._get_dbus_value(self.auto_battery_service, self.auto_battery_soc_path) is not None:
-                self._resolved_auto_battery_service = self.auto_battery_service
+            if self._energy_source_has_readable_data(source, source.service_name):
+                self._resolved_auto_battery_service = source.service_name
                 self._auto_battery_last_scan = now
+                if not isinstance(getattr(self, "_resolved_auto_energy_services", None), dict):
+                    self._resolved_auto_energy_services = {}
+                if not isinstance(getattr(self, "_auto_energy_last_scan", None), dict):
+                    self._auto_energy_last_scan = {}
+                self._resolved_auto_energy_services[source.source_id] = source.service_name
+                self._auto_energy_last_scan[source.source_id] = now
                 return str(self._resolved_auto_battery_service)
         except Exception:
             return None
@@ -253,33 +306,173 @@ class _AutoInputHelperSourceMixin:
 
     def _discovered_auto_battery_service(self: Any, now: float) -> str:
         """Return one auto-discovered battery service exposing SOC."""
+        source = self._primary_energy_source()
+        battery_service_prefix = str(getattr(self, "auto_battery_service_prefix", "") or "")
         service_name = first_matching_prefixed_service(
             self._list_dbus_services(),
-            self.auto_battery_service_prefix,
+            source.service_prefix or battery_service_prefix,
             self._battery_service_has_soc,
         )
         if service_name is not None:
             self._resolved_auto_battery_service = service_name
             self._auto_battery_last_scan = now
+            if not isinstance(getattr(self, "_resolved_auto_energy_services", None), dict):
+                self._resolved_auto_energy_services = {}
+            if not isinstance(getattr(self, "_auto_energy_last_scan", None), dict):
+                self._auto_energy_last_scan = {}
+            self._resolved_auto_energy_services[source.source_id] = service_name
+            self._auto_energy_last_scan[source.source_id] = now
             resolved_service: str = self._resolved_auto_battery_service
             return resolved_service
-        raise ValueError(f"No DBus service found with prefix '{self.auto_battery_service_prefix}'")
+        raise ValueError(f"No DBus service found with prefix '{source.service_prefix or battery_service_prefix}'")
 
-    def _get_battery_soc(self: Any) -> float | None:
-        """Read battery SOC from the resolved battery service."""
-        if not self._source_retry_ready("battery"):
+    def _cached_energy_service(self: Any, source_id: str, now: float) -> str | None:
+        resolved = getattr(self, "_resolved_auto_energy_services", {})
+        scans = getattr(self, "_auto_energy_last_scan", {})
+        cached_service = resolved.get(source_id) if isinstance(resolved, dict) else None
+        cached_at = scans.get(source_id, 0.0) if isinstance(scans, dict) else 0.0
+        if discovery_cache_valid(
+            cached_service,
+            cached_at,
+            self.auto_battery_scan_interval_seconds,
+            now,
+        ):
+            return cast(str | None, cached_service)
+        return None
+
+    def _resolve_energy_source_service(self: Any, source: EnergySourceDefinition) -> str:
+        now = time.time()
+        if source.source_id == self._primary_energy_source().source_id:
+            primary_service = self._resolve_auto_battery_service()
+            resolved_primary_service: str = primary_service
+            return resolved_primary_service
+        if not isinstance(getattr(self, "_resolved_auto_energy_services", None), dict):
+            self._resolved_auto_energy_services = {}
+        if not isinstance(getattr(self, "_auto_energy_last_scan", None), dict):
+            self._auto_energy_last_scan = {}
+        if source.service_name and self._energy_source_has_readable_data(source, source.service_name):
+            self._resolved_auto_energy_services[source.source_id] = source.service_name
+            self._auto_energy_last_scan[source.source_id] = now
+            return source.service_name
+        cached_service = self._cached_energy_service(source.source_id, now)
+        if cached_service is not None:
+            resolved_cached_service: str = cached_service
+            return resolved_cached_service
+        if not source.service_prefix:
+            raise ValueError(f"No readable DBus service configured for energy source '{source.source_id}'")
+        service_name = first_matching_prefixed_service(
+            self._list_dbus_services(),
+            source.service_prefix,
+            lambda candidate: self._energy_source_has_readable_data(source, candidate),
+        )
+        if service_name is None:
+            raise ValueError(f"No DBus service found for energy source '{source.source_id}'")
+        self._resolved_auto_energy_services[source.source_id] = service_name
+        self._auto_energy_last_scan[source.source_id] = now
+        return service_name
+
+    def _read_optional_energy_value(self: Any, service_name: str, path: str) -> float | None:
+        if not path:
             return None
+        value = self._get_dbus_value(service_name, path)
+        return cast(float | None, self._battery_soc_numeric(value))
+
+    def _battery_source_snapshot(self: Any, source: EnergySourceDefinition, now: float) -> EnergySourceSnapshot:
+        service_name = self._resolve_energy_source_service(source)
         try:
-            service_name = self._resolve_auto_battery_service()
-            value = self._get_dbus_value(service_name, self.auto_battery_soc_path)
-            numeric_value = self._battery_soc_numeric(value)
-            if numeric_value is None:
-                return None
-            return cast(float | None, self._validated_battery_soc(numeric_value, service_name))
+            soc_value = self._read_optional_energy_value(service_name, source.soc_path)
+            net_battery_power = self._read_optional_energy_value(service_name, source.battery_power_path)
+            ac_power = self._read_optional_energy_value(service_name, source.ac_power_path)
+        except Exception:
+            if source.source_id != self._primary_energy_source().source_id:
+                raise
+            self._invalidate_auto_battery_service()
+            service_name = self._resolve_energy_source_service(source)
+            soc_value = self._read_optional_energy_value(service_name, source.soc_path)
+            net_battery_power = self._read_optional_energy_value(service_name, source.battery_power_path)
+            ac_power = self._read_optional_energy_value(service_name, source.ac_power_path)
+        if soc_value is not None and not 0.0 <= soc_value <= 100.0:
+            self._warning_throttled(
+                "auto-helper-battery-soc-invalid",
+                max(5.0, self.auto_battery_scan_interval_seconds or 5.0),
+                "Auto input helper ignored out-of-range battery SOC %s from %s %s",
+                soc_value,
+                service_name,
+                source.soc_path,
+            )
+            self._delay_source_retry("battery")
+            soc_value = None
+        return EnergySourceSnapshot(
+            source_id=source.source_id,
+            role=source.role,
+            service_name=service_name,
+            soc=soc_value,
+            usable_capacity_wh=source.usable_capacity_wh,
+            net_battery_power_w=net_battery_power,
+            ac_power_w=ac_power,
+            online=True,
+            confidence=1.0,
+            captured_at=now,
+        )
+
+    def _get_battery_snapshot(self: Any) -> dict[str, object]:
+        """Read combined battery data from one or more energy sources."""
+        if not self._source_retry_ready("battery"):
+            return {"battery_soc": None}
+        try:
+            now = time.time()
+            source_snapshots = tuple(
+                self._battery_source_snapshot(cast(EnergySourceDefinition, source), now)
+                for source in tuple(getattr(self, "auto_energy_sources", ()) or (self._primary_energy_source(),))
+            )
+            cluster = aggregate_energy_sources(source_snapshots)
+            primary_soc = cluster.sources[0].soc if cluster.sources else None
+            effective_soc = cluster.effective_soc if bool(getattr(self, "auto_use_combined_battery_soc", True)) else primary_soc
+            self._energy_learning_profiles = update_energy_learning_profiles(
+                getattr(self, "_energy_learning_profiles", {}),
+                cluster.sources,
+                now,
+            )
+            return {
+                "battery_soc": effective_soc,
+                "battery_combined_soc": cluster.combined_soc,
+                "battery_combined_usable_capacity_wh": cluster.combined_usable_capacity_wh,
+                "battery_combined_charge_power_w": cluster.combined_charge_power_w,
+                "battery_combined_discharge_power_w": cluster.combined_discharge_power_w,
+                "battery_combined_net_power_w": cluster.combined_net_battery_power_w,
+                "battery_combined_ac_power_w": cluster.combined_ac_power_w,
+                "battery_source_count": cluster.source_count,
+                "battery_online_source_count": cluster.online_source_count,
+                "battery_valid_soc_source_count": cluster.valid_soc_source_count,
+                "battery_sources": [source.as_dict() for source in cluster.sources],
+                "battery_learning_profiles": {
+                    source_id: profile.as_dict()
+                    for source_id, profile in getattr(self, "_energy_learning_profiles", {}).items()
+                },
+            }
         except Exception:
             self._invalidate_auto_battery_service()
             self._delay_source_retry("battery")
-            return None
+            return {
+                "battery_soc": None,
+                "battery_combined_soc": None,
+                "battery_combined_usable_capacity_wh": None,
+                "battery_combined_charge_power_w": None,
+                "battery_combined_discharge_power_w": None,
+                "battery_combined_net_power_w": None,
+                "battery_combined_ac_power_w": None,
+                "battery_source_count": 0,
+                "battery_online_source_count": 0,
+                "battery_valid_soc_source_count": 0,
+                "battery_sources": [],
+                "battery_learning_profiles": {},
+            }
+
+    def _get_battery_soc(self: Any) -> float | None:
+        """Read battery SOC from the aggregated energy snapshot."""
+        snapshot = self._get_battery_snapshot()
+        battery_soc = snapshot.get("battery_soc")
+        return None if battery_soc is None else float(battery_soc)
 
     @staticmethod
     def _battery_soc_numeric(value: object) -> float | None:

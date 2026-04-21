@@ -76,6 +76,9 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
     def _state_api_operational_payload(self) -> dict[str, Any]:
         auto_state = getattr(self, "_last_auto_state", "idle")
         auto_state_code = getattr(self, "_last_auto_state_code", 0)
+        get_worker_snapshot = getattr(self, "_get_worker_snapshot", None)
+        raw_worker_snapshot = get_worker_snapshot() if callable(get_worker_snapshot) else {}
+        worker_snapshot = cast(dict[str, Any], raw_worker_snapshot if isinstance(raw_worker_snapshot, dict) else {})
         fault_reason, fault_active = normalized_fault_state(evse_fault_reason(getattr(self, "_last_health_reason", "")))
         software_update_state, software_update_state_code, software_update_available, software_update_no_update_active = (
             normalized_software_update_state_fields(
@@ -110,6 +113,11 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
                     "software_update_no_update_active": software_update_no_update_active,
                     "runtime_overrides_active": getattr(self, "_runtime_overrides_active", False),
                     "runtime_overrides_path": getattr(self, "runtime_overrides_path", ""),
+                    "combined_battery_soc": worker_snapshot.get("battery_combined_soc"),
+                    "combined_battery_source_count": worker_snapshot.get("battery_source_count", 0),
+                    "combined_battery_online_source_count": worker_snapshot.get("battery_online_source_count", 0),
+                    "combined_battery_charge_power_w": worker_snapshot.get("battery_combined_charge_power_w"),
+                    "combined_battery_discharge_power_w": worker_snapshot.get("battery_combined_discharge_power_w"),
                 },
             }
         )
@@ -219,6 +227,9 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
                     "max_current": getattr(self, "max_current", 0.0),
                     "min_current": getattr(self, "min_current", 0.0),
                     "auto_daytime_only": bool(getattr(self, "auto_daytime_only", False)),
+                    "auto_use_combined_battery_soc": bool(getattr(self, "auto_use_combined_battery_soc", True)),
+                    "auto_energy_source_ids": list(getattr(self, "auto_energy_source_ids", ())),
+                    "auto_energy_source_count": len(tuple(getattr(self, "auto_energy_source_ids", ()))),
                     "auto_scheduled_enabled_days": getattr(self, "auto_scheduled_enabled_days", ""),
                     "auto_scheduled_latest_end_time": getattr(self, "auto_scheduled_latest_end_time", ""),
                     "auto_scheduled_night_current_amps": getattr(self, "auto_scheduled_night_current_amps", 0.0),
