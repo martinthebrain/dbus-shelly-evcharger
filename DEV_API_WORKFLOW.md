@@ -54,6 +54,12 @@ Health check:
 python3 ./venus_evchargerctl.py --token dev-read-token health
 ```
 
+Doctor/self-test:
+
+```bash
+python3 ./venus_evchargerctl.py --token dev-read-token doctor
+```
+
 Capabilities:
 
 ```bash
@@ -80,6 +86,14 @@ Set mode through the canonical command form:
 python3 ./venus_evchargerctl.py \
   --token dev-control-token \
   command set-mode 1
+```
+
+Set mode with automatic optimistic concurrency:
+
+```bash
+python3 ./venus_evchargerctl.py \
+  --token dev-control-token \
+  safe-write set-mode 1
 ```
 
 Change current with an explicit compatibility path:
@@ -115,6 +129,14 @@ Read one small batch:
 python3 ./venus_evchargerctl.py \
   --token dev-read-token \
   events --kind command --once
+```
+
+Use the ergonomic watch alias:
+
+```bash
+python3 ./venus_evchargerctl.py \
+  --token dev-read-token \
+  watch --kind command --once
 ```
 
 Follow the stream live over TCP:

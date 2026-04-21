@@ -28,6 +28,12 @@ Recommended practice:
 
 Both entrypoints talk to the same local API contract.
 
+Useful bundled subcommands:
+
+- `doctor` for a quick local API/CLI self-test
+- `watch` for a friendlier event-stream follow mode
+- `safe-write` for one optimistic-concurrency write without manually fetching `If-Match`
+
 There is also a prepared future target-side smoke-test skeleton:
 
 - `./deploy/venus/gx_api_smoke_test_skeleton.sh`

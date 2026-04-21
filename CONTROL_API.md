@@ -481,11 +481,13 @@ CLI quick start:
 
 ```bash
 python3 ./venus_evchargerctl.py --token READ-TOKEN health
+python3 ./venus_evchargerctl.py --token READ-TOKEN doctor
 python3 ./venus_evchargerctl.py --token READ-TOKEN capabilities
 python3 ./venus_evchargerctl.py --token READ-TOKEN state summary
 python3 ./venus_evchargerctl.py --token CONTROL-TOKEN command set-mode 1
+python3 ./venus_evchargerctl.py --token CONTROL-TOKEN safe-write set-mode 1
 python3 ./venus_evchargerctl.py --token CONTROL-TOKEN command set-current-setting 12.5 --path /SetCurrent
-python3 ./venus_evchargerctl.py --unix-socket /run/venus-evcharger-control.sock --token READ-TOKEN events --kind command --once
+python3 ./venus_evchargerctl.py --unix-socket /run/venus-evcharger-control.sock --token READ-TOKEN watch --kind command --once
 ```
 
 Read capabilities with `curl`:

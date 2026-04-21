@@ -120,8 +120,10 @@ Practical local client entrypoints in this repository:
 Typical first commands:
 
 - `python3 ./venus_evchargerctl.py --token READ-TOKEN health`
+- `python3 ./venus_evchargerctl.py --token READ-TOKEN doctor`
 - `python3 ./venus_evchargerctl.py --token READ-TOKEN capabilities`
 - `python3 ./venus_evchargerctl.py --token CONTROL-TOKEN command set-mode 1`
+- `python3 ./venus_evchargerctl.py --token CONTROL-TOKEN safe-write set-mode 1`
 
 These sit on top of the same canonical command and state contract described in
 [CONTROL_API.md](CONTROL_API.md) and [STATE_API.md](STATE_API.md).

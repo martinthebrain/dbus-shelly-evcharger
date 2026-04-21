@@ -116,6 +116,40 @@ class TestVenusEvchargerControlCli(unittest.TestCase):
             self.assertEqual(openapi_rc, 0)
             self.assertEqual(json.loads(stdout.getvalue())["openapi"], "3.1.0")
 
+    def test_safe_write_result_reports_missing_state_token(self) -> None:
+        fake_state_response = ControlApiClientResponse(status=200, headers={}, body='{"ok":true,"state":{}}')
+        with patch.object(cli, "_client_for_token") as client_factory:
+            client_factory.return_value.state.return_value = fake_state_response
+            exit_code, payload = cli._safe_write_result(
+                SimpleNamespace(
+                    url="http://127.0.0.1:8765",
+                    unix_socket="",
+                    timeout=5.0,
+                    token="control-token",
+                    read_token="read-token",
+                    idempotency_key="",
+                    command_id="",
+                ),
+                token="control-token",
+                state_endpoint="health",
+                payload={"name": "set_mode", "value": 1},
+            )
+        self.assertEqual(exit_code, cli.EXIT_REQUEST_FAILED)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"], "missing_state_token")
+
+    def test_doctor_without_tokens_still_reports_health_and_skips_authenticated_checks(self) -> None:
+        with started_control_api_server() as (_service, server):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                rc = cli.main(["--url", f"http://{server.bound_host}:{server.bound_port}", "doctor"])
+            self.assertEqual(rc, 0)
+            payload = json.loads(stdout.getvalue())
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["kind"], "doctor")
+            self.assertEqual(payload["checks"][0]["name"], "health")
+            self.assertGreaterEqual(payload["summary"]["skipped"], 1)
+
     def test_cli_module_main_guard_runs(self) -> None:
         stdout = io.StringIO()
         argv = sys.argv[:]
@@ -180,6 +214,65 @@ class TestVenusEvchargerControlCli(unittest.TestCase):
             events = json.loads(events_stdout.getvalue())
             self.assertTrue(events)
             self.assertEqual(events[-1]["kind"], "command")
+
+    def test_doctor_safe_write_and_watch_work_against_live_server(self) -> None:
+        with started_control_api_server() as (_service, server):
+            base_args = ["--url", f"http://{server.bound_host}:{server.bound_port}"]
+
+            doctor_stdout = io.StringIO()
+            with redirect_stdout(doctor_stdout):
+                rc = cli.main(
+                    [
+                        *base_args,
+                        "--token",
+                        "read-token",
+                        "doctor",
+                        "--control-token",
+                        "control-token",
+                        "--safe-write",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            doctor_payload = json.loads(doctor_stdout.getvalue())
+            self.assertTrue(doctor_payload["ok"])
+            self.assertIn("safe-write.set-mode", [item["name"] for item in doctor_payload["checks"]])
+
+            safe_write_stdout = io.StringIO()
+            with redirect_stdout(safe_write_stdout):
+                rc = cli.main(
+                    [
+                        *base_args,
+                        "--token",
+                        "control-token",
+                        "safe-write",
+                        "set-mode",
+                        "1",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            safe_write_payload = json.loads(safe_write_stdout.getvalue())
+            self.assertTrue(safe_write_payload["ok"])
+            self.assertTrue(safe_write_payload["state_token"])
+            self.assertEqual(safe_write_payload["response"]["result"]["status"], "applied")
+
+            cli.main([*base_args, "--token", "control-token", "command", "set-mode", "1"])
+            watch_stdout = io.StringIO()
+            with redirect_stdout(watch_stdout):
+                rc = cli.main(
+                    [
+                        *base_args,
+                        "--token",
+                        "read-token",
+                        "watch",
+                        "--kind",
+                        "command",
+                        "--once",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            watch_lines = [json.loads(line) for line in watch_stdout.getvalue().splitlines() if line.strip()]
+            self.assertTrue(watch_lines)
+            self.assertEqual(watch_lines[-1]["kind"], "command")
 
 
 if __name__ == "__main__":
