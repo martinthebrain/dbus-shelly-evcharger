@@ -199,6 +199,14 @@ For process-local automation, the service can also expose a small versioned
 HTTP control surface on top of the same canonical command handling used by
 DBus writes.
 
+Reference docs:
+
+- [API_OVERVIEW.md](API_OVERVIEW.md)
+- [CONTROL_API.md](CONTROL_API.md)
+- [STATE_API.md](STATE_API.md)
+- [API_VERSIONING.md](API_VERSIONING.md)
+- [examples/control_api_client.py](examples/control_api_client.py)
+
 Config keys:
 
 - `ControlApiEnabled`
@@ -236,7 +244,13 @@ Endpoints:
 - `GET /v1/state/health`
 
 The full request/response contract, auth rules, idempotency behavior, event
-stream, and `curl` examples live in [CONTROL_API.md](CONTROL_API.md).
+stream, `curl` examples, Python example, and CLI snippets live in
+[CONTROL_API.md](CONTROL_API.md).
+
+Small local helper:
+
+- `python3 ./venus_evchargerctl.py --token READ-TOKEN state summary`
+- `python3 ./venus_evchargerctl.py --token CONTROL-TOKEN command set-mode 1`
 
 API audit and idempotency metadata are intentionally runtime-only. Keep their
 paths on `/run/...` or `/tmp/...`; they are not meant for flash-backed storage.

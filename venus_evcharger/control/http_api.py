@@ -22,6 +22,7 @@ from venus_evcharger.control.idempotency import ControlApiIdempotencyStore
 from venus_evcharger.control.models import ControlCommand, ControlResult
 from venus_evcharger.control.openapi import build_control_api_openapi_spec
 from venus_evcharger.control.rate_limit import ControlApiRateLimiter
+from venus_evcharger.control.reference import CONTROL_API_COMMAND_SCOPE_REQUIREMENTS
 from venus_evcharger.core.contracts import (
     CONTROL_API_EVENT_KINDS,
     normalized_control_api_capabilities_fields,
@@ -72,19 +73,7 @@ class LocalControlApiHttpServer:
     )
     _RETRY_HEADER = "X-Control-Api-Retry-Ms"
     _STATE_TOKEN_HEADER = "X-State-Token"
-    _COMMAND_SCOPE_REQUIREMENTS: dict[str, str] = {
-        "legacy_unknown_write": "control_admin",
-        "reset_contactor_lockout": "control_admin",
-        "reset_phase_lockout": "control_admin",
-        "set_auto_runtime_setting": "control_admin",
-        "set_auto_start": "control_basic",
-        "set_current_setting": "control_basic",
-        "set_enable": "control_basic",
-        "set_mode": "control_basic",
-        "set_phase_selection": "control_basic",
-        "set_start_stop": "control_basic",
-        "trigger_software_update": "update_admin",
-    }
+    _COMMAND_SCOPE_REQUIREMENTS: dict[str, str] = dict(CONTROL_API_COMMAND_SCOPE_REQUIREMENTS)
     _SCOPE_ORDER: dict[str, int] = {
         "read": 0,
         "control_basic": 1,

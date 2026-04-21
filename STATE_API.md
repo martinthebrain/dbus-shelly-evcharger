@@ -3,6 +3,9 @@
 The local HTTP API also exposes a read/state surface beside the command
 endpoint.
 
+For the short architectural overview of Control vs State vs Events, see
+[API_OVERVIEW.md](API_OVERVIEW.md).
+
 This API is intentionally:
 
 - local-first

@@ -2,6 +2,9 @@
 
 The local HTTP API is versioned as `v1`.
 
+For the high-level role split between Control, State, Events, and OpenAPI, see
+[API_OVERVIEW.md](API_OVERVIEW.md).
+
 ## Stable within `v1`
 
 The following are considered stable contracts within `v1`:
