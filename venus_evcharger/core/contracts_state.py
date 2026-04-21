@@ -37,6 +37,12 @@ def _normalized_text(value: Any, default: str = "") -> str:
     return text or default
 
 
+def _optional_float(value: Any) -> float | None:
+    if not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
 def normalized_state_api_version(value: Any) -> str:
     version = _normalized_text(value)
     return version if version in STATE_API_VERSIONS else "v1"
@@ -123,6 +129,15 @@ def normalized_state_api_operational_state_fields(payload: Mapping[str, Any] | N
         "combined_battery_online_source_count": non_negative_int(raw.get("combined_battery_online_source_count")),
         "combined_battery_charge_power_w": non_negative_float_or_none(raw.get("combined_battery_charge_power_w")),
         "combined_battery_discharge_power_w": non_negative_float_or_none(raw.get("combined_battery_discharge_power_w")),
+        "combined_battery_net_power_w": _optional_float(raw.get("combined_battery_net_power_w")),
+        "combined_battery_ac_power_w": _optional_float(raw.get("combined_battery_ac_power_w")),
+        "combined_battery_learning_profile_count": non_negative_int(raw.get("combined_battery_learning_profile_count")),
+        "combined_battery_observed_max_charge_power_w": non_negative_float_or_none(
+            raw.get("combined_battery_observed_max_charge_power_w")
+        ),
+        "combined_battery_observed_max_discharge_power_w": non_negative_float_or_none(
+            raw.get("combined_battery_observed_max_discharge_power_w")
+        ),
     }
 
 

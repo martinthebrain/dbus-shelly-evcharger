@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any, cast
 
+from venus_evcharger.energy import summarize_energy_learning_profiles
 from venus_evcharger.core.common import confirmed_relay_state_max_age_seconds as _confirmed_relay_state_max_age_seconds
 from venus_evcharger.core.contracts import cutover_confirmed_off
 from venus_evcharger.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
@@ -414,6 +415,12 @@ class _AutoDecisionGatesMixin(_ComposableControllerMixin):
             float(avg_grid_power),
             adaptive_alpha,
         )
+        battery_activity = self._combined_battery_activity_context()
+        raw_decision_surplus_power = float(decision_surplus_power)
+        surplus_penalty_w = self._non_negative_optional_float(battery_activity.get("surplus_penalty_w")) or 0.0
+        learning_profile_count = battery_activity.get("learning_profile_count")
+        normalized_learning_profile_count = int(learning_profile_count) if isinstance(learning_profile_count, int) else 0
+        decision_surplus_power = raw_decision_surplus_power - surplus_penalty_w
         learned_charge_power_state = self._current_learned_charge_power_state(now)
         learned_charge_power = self._active_learned_charge_power(now)
         threshold_scale = float(self._learned_charge_power_scale(now))
@@ -421,6 +428,7 @@ class _AutoDecisionGatesMixin(_ComposableControllerMixin):
             "surplus": float(decision_surplus_power),
             "grid": float(decision_grid_power),
             "raw_surplus": float(avg_surplus_power),
+            "decision_surplus_before_battery_penalty": raw_decision_surplus_power,
             "raw_grid": float(avg_grid_power),
             "soc": float(battery_soc),
             "profile": threshold_profile,
@@ -433,8 +441,124 @@ class _AutoDecisionGatesMixin(_ComposableControllerMixin):
             "stop_alpha": float(adaptive_alpha),
             "stop_alpha_stage": adaptive_alpha_stage,
             "surplus_volatility": float(surplus_volatility) if surplus_volatility is not None else None,
+            "battery_surplus_penalty_w": surplus_penalty_w,
+            "battery_support_mode": battery_activity["mode"],
+            "battery_charge_power_w": battery_activity["charge_power_w"],
+            "battery_discharge_power_w": battery_activity["discharge_power_w"],
+            "battery_charge_activity_ratio": battery_activity["charge_activity_ratio"],
+            "battery_discharge_activity_ratio": battery_activity["discharge_activity_ratio"],
+            "battery_learning_profile_count": normalized_learning_profile_count,
+            "battery_observed_max_charge_power_w": battery_activity["observed_max_charge_power_w"],
+            "battery_observed_max_discharge_power_w": battery_activity["observed_max_discharge_power_w"],
         }
         return float(decision_surplus_power), float(decision_grid_power)
+
+    def _combined_battery_activity_context(self) -> dict[str, float | int | str | None]:
+        """Return a conservative battery activity picture used to de-bias surplus decisions."""
+        svc = self.service
+        raw_cluster = getattr(svc, "_last_energy_cluster", {})
+        cluster = raw_cluster if isinstance(raw_cluster, dict) else {}
+        raw_sources = cluster.get("battery_sources", [])
+        sources = raw_sources if isinstance(raw_sources, list) else []
+        raw_profiles = getattr(svc, "_last_energy_learning_profiles", {})
+        profiles = raw_profiles if isinstance(raw_profiles, dict) else {}
+        learning_summary = summarize_energy_learning_profiles(profiles)
+        charge_penalty = 0.0
+        discharge_penalty = 0.0
+        max_charge_ratio: float | None = None
+        max_discharge_ratio: float | None = None
+
+        if sources:
+            for raw_source in sources:
+                if not isinstance(raw_source, dict):
+                    continue
+                source_id = str(raw_source.get("source_id", "")).strip()
+                charge_power = self._non_negative_optional_float(raw_source.get("charge_power_w"))
+                discharge_power = self._non_negative_optional_float(raw_source.get("discharge_power_w"))
+                profile = profiles.get(source_id, {})
+                observed_max_charge = self._learning_observed_value(profile, "observed_max_charge_power_w")
+                observed_max_discharge = self._learning_observed_value(profile, "observed_max_discharge_power_w")
+                charge_active, charge_ratio = self._active_battery_power(charge_power, observed_max_charge)
+                discharge_active, discharge_ratio = self._active_battery_power(discharge_power, observed_max_discharge)
+                if charge_active is not None:
+                    charge_penalty += charge_active
+                if discharge_active is not None:
+                    discharge_penalty += discharge_active
+                max_charge_ratio = self._max_optional_ratio(max_charge_ratio, charge_ratio)
+                max_discharge_ratio = self._max_optional_ratio(max_discharge_ratio, discharge_ratio)
+        else:
+            charge_power = self._non_negative_optional_float(cluster.get("battery_combined_charge_power_w"))
+            discharge_power = self._non_negative_optional_float(cluster.get("battery_combined_discharge_power_w"))
+            observed_max_charge = self._non_negative_optional_float(learning_summary.get("observed_max_charge_power_w"))
+            observed_max_discharge = self._non_negative_optional_float(
+                learning_summary.get("observed_max_discharge_power_w")
+            )
+            charge_active, max_charge_ratio = self._active_battery_power(charge_power, observed_max_charge)
+            discharge_active, max_discharge_ratio = self._active_battery_power(discharge_power, observed_max_discharge)
+            if charge_active is not None:
+                charge_penalty += charge_active
+            if discharge_active is not None:
+                discharge_penalty += discharge_active
+
+        mode = "idle"
+        if charge_penalty > 0.0 and discharge_penalty > 0.0:
+            mode = "mixed"
+        elif discharge_penalty > 0.0:
+            mode = "discharging"
+        elif charge_penalty > 0.0:
+            mode = "charging"
+        return {
+            "surplus_penalty_w": float(charge_penalty + discharge_penalty),
+            "charge_power_w": charge_penalty if charge_penalty > 0.0 else None,
+            "discharge_power_w": discharge_penalty if discharge_penalty > 0.0 else None,
+            "charge_activity_ratio": max_charge_ratio,
+            "discharge_activity_ratio": max_discharge_ratio,
+            "learning_profile_count": int(learning_summary.get("profile_count", 0) or 0),
+            "observed_max_charge_power_w": self._non_negative_optional_float(
+                learning_summary.get("observed_max_charge_power_w")
+            ),
+            "observed_max_discharge_power_w": self._non_negative_optional_float(
+                learning_summary.get("observed_max_discharge_power_w")
+            ),
+            "mode": mode,
+        }
+
+    @staticmethod
+    def _learning_observed_value(profile: object, key: str) -> float | None:
+        if not isinstance(profile, dict):
+            return None
+        return _AutoDecisionGatesMixin._non_negative_optional_float(profile.get(key))
+
+    @staticmethod
+    def _active_battery_power(
+        current_power_w: float | None,
+        observed_max_power_w: float | None,
+    ) -> tuple[float | None, float | None]:
+        if current_power_w is None or current_power_w <= 0.0:
+            return None, None
+        if observed_max_power_w is None or observed_max_power_w <= 0.0:
+            return float(current_power_w), None
+        ratio = float(current_power_w) / float(observed_max_power_w)
+        if ratio < 0.05:
+            return None, ratio
+        return float(current_power_w), ratio
+
+    @staticmethod
+    def _non_negative_optional_float(value: object) -> float | None:
+        if not isinstance(value, (int, float)):
+            return None
+        numeric_value = float(value)
+        if numeric_value < 0.0:
+            return None
+        return numeric_value
+
+    @staticmethod
+    def _max_optional_ratio(current: float | None, candidate: float | None) -> float | None:
+        if candidate is None:
+            return current
+        if current is None:
+            return float(candidate)
+        return max(float(current), float(candidate))
 
     def _smoothed_decision_metrics(
         self,

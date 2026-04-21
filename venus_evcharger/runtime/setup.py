@@ -118,6 +118,14 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
         svc._last_battery_soc_at = None
         svc._last_combined_battery_soc_value = None
         svc._last_combined_battery_soc_at = None
+        svc._last_combined_battery_charge_power_w = None
+        svc._last_combined_battery_charge_power_at = None
+        svc._last_combined_battery_discharge_power_w = None
+        svc._last_combined_battery_discharge_power_at = None
+        svc._last_combined_battery_net_power_w = None
+        svc._last_combined_battery_net_power_at = None
+        svc._last_combined_battery_ac_power_w = None
+        svc._last_combined_battery_ac_power_at = None
         svc._last_energy_cluster = {}
         svc._last_energy_learning_profiles = {}
         svc._last_pm_status = None
@@ -138,6 +146,15 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
             "stop_alpha": None,
             "stop_alpha_stage": "base",
             "surplus_volatility": None,
+            "battery_surplus_penalty_w": 0.0,
+            "battery_support_mode": "idle",
+            "battery_charge_power_w": None,
+            "battery_discharge_power_w": None,
+            "battery_charge_activity_ratio": None,
+            "battery_discharge_activity_ratio": None,
+            "battery_learning_profile_count": 0,
+            "battery_observed_max_charge_power_w": None,
+            "battery_observed_max_discharge_power_w": None,
         }
         svc._last_voltage = None
         svc._last_dbus_ok_at = None

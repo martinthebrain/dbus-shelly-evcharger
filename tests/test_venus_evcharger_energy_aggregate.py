@@ -5,6 +5,7 @@ from venus_evcharger.energy import (
     EnergySourceSnapshot,
     aggregate_energy_sources,
     load_energy_source_settings,
+    summarize_energy_learning_profiles,
     update_energy_learning_profiles,
 )
 
@@ -148,3 +149,27 @@ class TestVenusEvchargerEnergyAggregate(unittest.TestCase):
         self.assertEqual(profile.observed_max_charge_power_w, 1800.0)
         self.assertEqual(profile.observed_max_ac_power_w, 3500.0)
         self.assertEqual(profile.last_change_at, 110.0)
+
+    def test_summarize_energy_learning_profiles_sums_observed_maxima(self) -> None:
+        summary = summarize_energy_learning_profiles(
+            {
+                "victron": {
+                    "sample_count": 2,
+                    "observed_max_charge_power_w": 700.0,
+                    "observed_max_discharge_power_w": 900.0,
+                    "observed_max_ac_power_w": 1100.0,
+                },
+                "hybrid": {
+                    "sample_count": 3,
+                    "observed_max_charge_power_w": 500.0,
+                    "observed_max_discharge_power_w": 1300.0,
+                    "observed_max_ac_power_w": 1500.0,
+                },
+            }
+        )
+
+        self.assertEqual(summary["profile_count"], 2)
+        self.assertEqual(summary["sample_count"], 5)
+        self.assertEqual(summary["observed_max_charge_power_w"], 1200.0)
+        self.assertEqual(summary["observed_max_discharge_power_w"], 2200.0)
+        self.assertEqual(summary["observed_max_ac_power_w"], 2600.0)

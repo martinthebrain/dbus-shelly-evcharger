@@ -284,6 +284,50 @@ class TestAutoDecisionControllerPrimary(AutoDecisionControllerTestCase):
         self.assertIsNone(service._stop_smoothed_surplus_power)
         self.assertIsNone(service._stop_smoothed_grid_power)
 
+    def test_combined_battery_activity_penalizes_surplus_when_batteries_are_active(self):
+        controller, service = self._make_controller()
+        service._add_auto_sample = MagicMock()
+        service._average_auto_metric = MagicMock(side_effect=[1200.0, 100.0])
+        service._last_energy_cluster = {
+            "battery_sources": [
+                {"source_id": "hybrid", "charge_power_w": 0.0, "discharge_power_w": 400.0},
+                {"source_id": "victron", "charge_power_w": 200.0, "discharge_power_w": 0.0},
+            ]
+        }
+        service._last_energy_learning_profiles = {
+            "hybrid": {"observed_max_discharge_power_w": 1000.0, "sample_count": 3},
+            "victron": {"observed_max_charge_power_w": 500.0, "sample_count": 2},
+        }
+
+        surplus, grid = controller._update_average_metrics(100.0, 2200.0, 400.0, 60.0, False)
+
+        self.assertEqual(surplus, 600.0)
+        self.assertEqual(grid, 100.0)
+        self.assertEqual(service._last_auto_metrics["battery_surplus_penalty_w"], 600.0)
+        self.assertEqual(service._last_auto_metrics["battery_support_mode"], "mixed")
+        self.assertEqual(service._last_auto_metrics["battery_learning_profile_count"], 2)
+        self.assertEqual(service._last_auto_metrics["battery_observed_max_charge_power_w"], 500.0)
+        self.assertEqual(service._last_auto_metrics["battery_observed_max_discharge_power_w"], 1000.0)
+
+    def test_tiny_battery_activity_below_learned_ratio_threshold_is_ignored(self):
+        controller, service = self._make_controller()
+        service._add_auto_sample = MagicMock()
+        service._average_auto_metric = MagicMock(side_effect=[1200.0, 100.0])
+        service._last_energy_cluster = {
+            "battery_sources": [
+                {"source_id": "hybrid", "charge_power_w": 0.0, "discharge_power_w": 30.0},
+            ]
+        }
+        service._last_energy_learning_profiles = {
+            "hybrid": {"observed_max_discharge_power_w": 1000.0, "sample_count": 5},
+        }
+
+        surplus, _grid = controller._update_average_metrics(100.0, 2200.0, 400.0, 60.0, False)
+
+        self.assertEqual(surplus, 1200.0)
+        self.assertEqual(service._last_auto_metrics["battery_surplus_penalty_w"], 0.0)
+        self.assertEqual(service._last_auto_metrics["battery_discharge_activity_ratio"], 0.03)
+
     def test_adaptive_stop_alpha_uses_stable_medium_and_volatile_stages(self):
         controller, service = self._make_controller()
         service.auto_samples = deque(

@@ -73,8 +73,13 @@ class _ControlService(ControlApiMixin):
             "battery_online_source_count": 2,
             "battery_combined_charge_power_w": 800.0,
             "battery_combined_discharge_power_w": 1200.0,
+            "battery_combined_net_power_w": 400.0,
+            "battery_combined_ac_power_w": 1800.0,
             "battery_sources": [{"source_id": "victron"}, {"source_id": "hybrid"}],
-            "battery_learning_profiles": {"hybrid": {"sample_count": 3}},
+            "battery_learning_profiles": {
+                "victron": {"sample_count": 2, "observed_max_charge_power_w": 700.0},
+                "hybrid": {"sample_count": 3, "observed_max_discharge_power_w": 1400.0},
+            },
         }
 
 
@@ -301,6 +306,13 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         self.assertEqual(operational["state"]["runtime_overrides_path"], "/run/runtime.ini")
         self.assertEqual(operational["state"]["combined_battery_soc"], 62.0)
         self.assertEqual(operational["state"]["combined_battery_source_count"], 2)
+        self.assertEqual(operational["state"]["combined_battery_charge_power_w"], 800.0)
+        self.assertEqual(operational["state"]["combined_battery_discharge_power_w"], 1200.0)
+        self.assertEqual(operational["state"]["combined_battery_net_power_w"], 400.0)
+        self.assertEqual(operational["state"]["combined_battery_ac_power_w"], 1800.0)
+        self.assertEqual(operational["state"]["combined_battery_learning_profile_count"], 2)
+        self.assertEqual(operational["state"]["combined_battery_observed_max_charge_power_w"], 700.0)
+        self.assertEqual(operational["state"]["combined_battery_observed_max_discharge_power_w"], 1400.0)
         self.assertEqual(diagnostics["kind"], "dbus-diagnostics")
         self.assertEqual(diagnostics["state"]["/Auto/State"], "charging")
         self.assertEqual(diagnostics["state"]["/Auto/LastShellyReadAge"], 0.2)

@@ -18,6 +18,7 @@ from venus_evcharger.control import (
 )
 from venus_evcharger.control.events import ControlApiEventBus
 from venus_evcharger.core.common import evse_fault_reason
+from venus_evcharger.energy import summarize_energy_learning_profiles
 from venus_evcharger.core.contracts import (
     CONTROL_API_ENDPOINTS,
     CONTROL_API_EXPERIMENTAL_ENDPOINTS,
@@ -79,6 +80,8 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
         get_worker_snapshot = getattr(self, "_get_worker_snapshot", None)
         raw_worker_snapshot = get_worker_snapshot() if callable(get_worker_snapshot) else {}
         worker_snapshot = cast(dict[str, Any], raw_worker_snapshot if isinstance(raw_worker_snapshot, dict) else {})
+        learning_profiles = worker_snapshot.get("battery_learning_profiles")
+        learning_summary = summarize_energy_learning_profiles(learning_profiles if isinstance(learning_profiles, dict) else {})
         fault_reason, fault_active = normalized_fault_state(evse_fault_reason(getattr(self, "_last_health_reason", "")))
         software_update_state, software_update_state_code, software_update_available, software_update_no_update_active = (
             normalized_software_update_state_fields(
@@ -118,6 +121,15 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
                     "combined_battery_online_source_count": worker_snapshot.get("battery_online_source_count", 0),
                     "combined_battery_charge_power_w": worker_snapshot.get("battery_combined_charge_power_w"),
                     "combined_battery_discharge_power_w": worker_snapshot.get("battery_combined_discharge_power_w"),
+                    "combined_battery_net_power_w": worker_snapshot.get("battery_combined_net_power_w"),
+                    "combined_battery_ac_power_w": worker_snapshot.get("battery_combined_ac_power_w"),
+                    "combined_battery_learning_profile_count": learning_summary.get("profile_count", 0),
+                    "combined_battery_observed_max_charge_power_w": learning_summary.get(
+                        "observed_max_charge_power_w"
+                    ),
+                    "combined_battery_observed_max_discharge_power_w": learning_summary.get(
+                        "observed_max_discharge_power_w"
+                    ),
                 },
             }
         )

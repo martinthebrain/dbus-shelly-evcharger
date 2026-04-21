@@ -36,6 +36,7 @@ class _UpdateCycleInputCacheMixin:
         max_age_seconds: float | None = None,
     ) -> tuple[Any, bool]:
         """Use fresh input values immediately and short-lived cached values as fallback."""
+        cache_owner = getattr(svc, "_service", svc)
         cache_max_age = float(svc.auto_input_cache_seconds)
         if max_age_seconds is not None:
             cache_max_age = min(cache_max_age, float(max_age_seconds))
@@ -46,11 +47,11 @@ class _UpdateCycleInputCacheMixin:
             max_age_seconds,
         )
         if value is not None:
-            setattr(svc, last_value_attr, value)
-            setattr(svc, last_at_attr, now if snapshot_at is None else float(snapshot_at))
+            setattr(cache_owner, last_value_attr, value)
+            setattr(cache_owner, last_at_attr, now if snapshot_at is None else float(snapshot_at))
             return value, False
         return cls._cached_input_from_service(
-            svc,
+            cache_owner,
             last_value_attr,
             last_at_attr,
             now,
@@ -96,15 +97,15 @@ class _UpdateCycleInputCacheMixin:
     @classmethod
     def _cached_input_from_service(
         cls,
-        svc: Any,
+        cache_owner: Any,
         last_value_attr: str,
         last_at_attr: str,
         now: float,
         cache_max_age: float,
     ) -> tuple[Any, bool]:
         """Return a recent cached helper-fed value when direct input is unavailable."""
-        last_value = getattr(svc, last_value_attr)
-        last_at = getattr(svc, last_at_attr)
+        last_value = getattr(cache_owner, last_value_attr, None)
+        last_at = getattr(cache_owner, last_at_attr, None)
         if (
             last_value is not None
             and last_at is not None
@@ -133,6 +134,7 @@ class _UpdateCycleInputCacheMixin:
     ) -> tuple[Any, Any, Any]:
         """Resolve Auto inputs from helper snapshots with short cache fallback."""
         svc = self.service
+        cache_owner = getattr(svc, "_service", svc)
         if not auto_mode_active:
             svc._auto_cached_inputs_used = False
             return None, None, None
@@ -172,6 +174,69 @@ class _UpdateCycleInputCacheMixin:
                 "auto_battery_poll_interval_seconds",
             ),
         )
+        combined_charge_power, _ = self.resolve_cached_input_value(
+            svc,
+            worker_snapshot.get("battery_combined_charge_power_w"),
+            worker_snapshot.get("battery_captured_at", worker_snapshot.get("captured_at")),
+            "_last_combined_battery_charge_power_w",
+            "_last_combined_battery_charge_power_at",
+            now,
+            max_age_seconds=self._auto_input_source_max_age_seconds(
+                svc,
+                "auto_battery_poll_interval_seconds",
+            ),
+        )
+        combined_discharge_power, _ = self.resolve_cached_input_value(
+            svc,
+            worker_snapshot.get("battery_combined_discharge_power_w"),
+            worker_snapshot.get("battery_captured_at", worker_snapshot.get("captured_at")),
+            "_last_combined_battery_discharge_power_w",
+            "_last_combined_battery_discharge_power_at",
+            now,
+            max_age_seconds=self._auto_input_source_max_age_seconds(
+                svc,
+                "auto_battery_poll_interval_seconds",
+            ),
+        )
+        combined_net_power, _ = self.resolve_cached_input_value(
+            svc,
+            worker_snapshot.get("battery_combined_net_power_w"),
+            worker_snapshot.get("battery_captured_at", worker_snapshot.get("captured_at")),
+            "_last_combined_battery_net_power_w",
+            "_last_combined_battery_net_power_at",
+            now,
+            max_age_seconds=self._auto_input_source_max_age_seconds(
+                svc,
+                "auto_battery_poll_interval_seconds",
+            ),
+        )
+        combined_ac_power, _ = self.resolve_cached_input_value(
+            svc,
+            worker_snapshot.get("battery_combined_ac_power_w"),
+            worker_snapshot.get("battery_captured_at", worker_snapshot.get("captured_at")),
+            "_last_combined_battery_ac_power_w",
+            "_last_combined_battery_ac_power_at",
+            now,
+            max_age_seconds=self._auto_input_source_max_age_seconds(
+                svc,
+                "auto_battery_poll_interval_seconds",
+            ),
+        )
+        cache_owner._last_energy_cluster = {
+            "battery_combined_soc": worker_snapshot.get("battery_combined_soc"),
+            "battery_combined_usable_capacity_wh": worker_snapshot.get("battery_combined_usable_capacity_wh"),
+            "battery_combined_charge_power_w": combined_charge_power,
+            "battery_combined_discharge_power_w": combined_discharge_power,
+            "battery_combined_net_power_w": combined_net_power,
+            "battery_combined_ac_power_w": combined_ac_power,
+            "battery_source_count": worker_snapshot.get("battery_source_count", 0),
+            "battery_online_source_count": worker_snapshot.get("battery_online_source_count", 0),
+            "battery_valid_soc_source_count": worker_snapshot.get("battery_valid_soc_source_count", 0),
+            "battery_sources": list(worker_snapshot.get("battery_sources", []) or []),
+        }
+        raw_learning_profiles = worker_snapshot.get("battery_learning_profiles", {})
+        if isinstance(raw_learning_profiles, dict):
+            cache_owner._last_energy_learning_profiles = dict(raw_learning_profiles)
         svc._auto_cached_inputs_used = pv_cached or grid_cached or battery_cached
         if svc._auto_cached_inputs_used:
             svc._error_state["cache_hits"] += 1

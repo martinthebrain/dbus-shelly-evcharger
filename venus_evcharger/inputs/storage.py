@@ -13,7 +13,12 @@ from venus_evcharger.core.shared import (
     first_matching_prefixed_service,
     grid_values_complete_enough,
 )
-from venus_evcharger.energy import EnergySourceDefinition, EnergySourceSnapshot, aggregate_energy_sources
+from venus_evcharger.energy import (
+    EnergySourceDefinition,
+    EnergySourceSnapshot,
+    aggregate_energy_sources,
+    update_energy_learning_profiles,
+)
 from venus_evcharger.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
 
 
@@ -114,7 +119,8 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
         now = time.time()
         if source.source_id == self._primary_energy_source().source_id:
             primary_service = self.service._resolve_auto_battery_service()
-            return primary_service
+            resolved_primary_service: str = str(primary_service)
+            return resolved_primary_service
         if source.service_name and self._energy_source_has_readable_data(source, source.service_name):
             return self._remember_energy_service(source.source_id, source.service_name, now)
         cached_service = self._energy_cache_valid(source.source_id, now)
@@ -211,6 +217,12 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
             effective_soc = cluster.effective_soc if bool(getattr(svc, "auto_use_combined_battery_soc", True)) else primary_soc
             if effective_soc is None and not any(source.soc is not None for source in cluster.sources):
                 raise TypeError("Battery SOC is not numeric")
+            cache_owner = getattr(svc, "_service", svc)
+            cache_owner._last_energy_learning_profiles = update_energy_learning_profiles(
+                getattr(cache_owner, "_last_energy_learning_profiles", {}),
+                cluster.sources,
+                now,
+            )
             self._mark_source_recovery("battery", "Battery SOC readings recovered")
             battery_payload: dict[str, object] = {
                 "battery_soc": effective_soc,
@@ -224,8 +236,11 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
                 "battery_online_source_count": cluster.online_source_count,
                 "battery_valid_soc_source_count": cluster.valid_soc_source_count,
                 "battery_sources": [source.as_dict() for source in cluster.sources],
+                "battery_learning_profiles": {
+                    source_id: profile.as_dict()
+                    for source_id, profile in getattr(cache_owner, "_last_energy_learning_profiles", {}).items()
+                },
             }
-            cache_owner = getattr(svc, "_service", svc)
             setattr(cache_owner, "_last_energy_cluster", dict(battery_payload))
             return battery_payload
         except Exception as error:  # pylint: disable=broad-except
@@ -253,6 +268,7 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
                 "battery_online_source_count": 0,
                 "battery_valid_soc_source_count": 0,
                 "battery_sources": [],
+                "battery_learning_profiles": {},
             }
 
     def get_battery_soc(self) -> float | None:

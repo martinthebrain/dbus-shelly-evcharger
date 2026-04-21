@@ -3,7 +3,7 @@
 
 from .aggregate import aggregate_energy_sources
 from .config import load_energy_source_definitions, load_energy_source_settings
-from .learning import update_energy_learning_profiles
+from .learning import summarize_energy_learning_profiles, update_energy_learning_profiles
 from .models import (
     ENERGY_SOURCE_ROLES,
     EnergyClusterSnapshot,
@@ -21,5 +21,6 @@ __all__ = [
     "aggregate_energy_sources",
     "load_energy_source_definitions",
     "load_energy_source_settings",
+    "summarize_energy_learning_profiles",
     "update_energy_learning_profiles",
 ]
