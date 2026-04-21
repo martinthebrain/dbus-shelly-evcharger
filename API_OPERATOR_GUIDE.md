@@ -28,6 +28,14 @@ Recommended practice:
 
 Both entrypoints talk to the same local API contract.
 
+There is also a prepared future target-side smoke-test skeleton:
+
+- `./deploy/venus/gx_api_smoke_test_skeleton.sh`
+
+Use that only when you have a real Venus/GX device available and want a small
+manual checklist for runit, auth, state reads, events, and one optional safe
+write. It is intentionally not part of the normal PC-side test suite.
+
 ## CLI exit codes
 
 The CLI uses a deliberately small exit-code contract:

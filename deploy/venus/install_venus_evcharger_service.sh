@@ -24,6 +24,7 @@ CONFIGURE_HELPER="$SCRIPT_DIR/configure_venus_evcharger_service.sh"
 RESTART_HELPER="$SCRIPT_DIR/restart_venus_evcharger_service.sh"
 UNINSTALL_HELPER="$SCRIPT_DIR/uninstall_venus_evcharger_service.sh"
 CONTROL_API_CLI_HELPER="$SCRIPT_DIR/venus_evchargerctl.sh"
+GX_SMOKE_HELPER="$SCRIPT_DIR/gx_api_smoke_test_skeleton.sh"
 SOAK_HELPER="$REPO_DIR/scripts/ops/cerbo_soak_check.sh"
 RC_LOCAL_FILE=/data/rc.local
 
@@ -73,6 +74,11 @@ fi
 if [ -f "$CONTROL_API_CLI_HELPER" ]; then
     chmod a+x "$CONTROL_API_CLI_HELPER"
     chmod 755 "$CONTROL_API_CLI_HELPER"
+fi
+
+if [ -f "$GX_SMOKE_HELPER" ]; then
+    chmod a+x "$GX_SMOKE_HELPER"
+    chmod 755 "$GX_SMOKE_HELPER"
 fi
 
 if [ -f "$SOAK_HELPER" ]; then

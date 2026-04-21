@@ -86,6 +86,19 @@ This guide covers the usual installation paths for Venus OS and Cerbo GX.
    - `1` API request failed or was rejected
    - `2` local CLI usage error
 
+9. Optional: keep the prepared GX smoke-test skeleton for the day you have a
+   real target device at hand again:
+
+   ```bash
+   ./deploy/venus/gx_api_smoke_test_skeleton.sh
+   ```
+
+   It is intentionally a manual target-side checklist, not part of the normal
+   PC-side suite and not an automatic post-install step. For authenticated
+   checks, provide tokens through environment variables such as
+   `CONTROL_API_READ_TOKEN`, `CONTROL_API_CONTROL_TOKEN`, and set `TRY_WRITE=1`
+   only when you intentionally want to attempt one safe live write.
+
 ## One-File Bootstrap Install
 
 `install.sh` supports a small bootstrap flow for GX deployments.

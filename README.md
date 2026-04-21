@@ -202,6 +202,7 @@ DBus writes.
 Reference docs:
 
 - [API_OVERVIEW.md](API_OVERVIEW.md)
+- [DEV_API_WORKFLOW.md](DEV_API_WORKFLOW.md)
 - [API_OPERATOR_GUIDE.md](API_OPERATOR_GUIDE.md)
 - [CONTROL_API.md](CONTROL_API.md)
 - [STATE_API.md](STATE_API.md)
@@ -259,6 +260,8 @@ Quick start:
 
 For direct HTTP usage, `curl` snippets, optimistic concurrency with `If-Match`,
 and a small Python example, see [CONTROL_API.md](CONTROL_API.md).
+For a short local developer runbook on a normal PC, see
+[DEV_API_WORKFLOW.md](DEV_API_WORKFLOW.md).
 <!-- END:README_LOCAL_HTTP_CONTROL_API_GETTING_STARTED -->
 
 On the installed Venus/GX target, use the deploy wrapper:

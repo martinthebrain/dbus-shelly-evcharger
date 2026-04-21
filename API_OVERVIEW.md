@@ -38,6 +38,7 @@ mental model for new clients.
 See:
 
 - [CONTROL_API.md](CONTROL_API.md)
+- [DEV_API_WORKFLOW.md](DEV_API_WORKFLOW.md)
 - [API_OPERATOR_GUIDE.md](API_OPERATOR_GUIDE.md)
 
 ### State = snapshots
@@ -127,3 +128,5 @@ These sit on top of the same canonical command and state contract described in
 <!-- END:API_OVERVIEW_CLIENT_STARTING_POINTS -->
 
 For day-to-day operator checks, use [API_OPERATOR_GUIDE.md](API_OPERATOR_GUIDE.md).
+For local PC-based development and quick iteration, use
+[DEV_API_WORKFLOW.md](DEV_API_WORKFLOW.md).

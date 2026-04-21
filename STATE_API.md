@@ -8,6 +8,8 @@ For the short architectural overview of Control vs State vs Events, see
 
 For operator quick checks and target-system CLI examples, see
 [API_OPERATOR_GUIDE.md](API_OPERATOR_GUIDE.md).
+For local PC-based development and API/CLI iteration, see
+[DEV_API_WORKFLOW.md](DEV_API_WORKFLOW.md).
 
 This API is intentionally:
 

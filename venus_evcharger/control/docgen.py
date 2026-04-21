@@ -27,6 +27,7 @@ def render_control_api_getting_started_markdown() -> str:
             "- Python example: [examples/control_api_client.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/examples/control_api_client.py)",
             "- Small CLI: [venus_evchargerctl.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/venus_evchargerctl.py)",
             "- Target-system wrapper: [venus_evchargerctl.sh](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/deploy/venus/venus_evchargerctl.sh)",
+            "- Local developer runbook: [DEV_API_WORKFLOW.md](DEV_API_WORKFLOW.md)",
             "",
             "CLI quick start:",
             "",
@@ -142,6 +143,8 @@ def render_readme_local_http_control_api_getting_started_markdown() -> str:
             "",
             "For direct HTTP usage, `curl` snippets, optimistic concurrency with `If-Match`,",
             "and a small Python example, see [CONTROL_API.md](CONTROL_API.md).",
+            "For a short local developer runbook on a normal PC, see",
+            "[DEV_API_WORKFLOW.md](DEV_API_WORKFLOW.md).",
         ]
     )
 
