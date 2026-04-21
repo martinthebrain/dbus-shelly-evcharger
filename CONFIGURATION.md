@@ -204,15 +204,27 @@ Main config values:
 - `ControlApiAuthToken`
 - `ControlApiReadToken`
 - `ControlApiControlToken`
+- `ControlApiAdminToken`
+- `ControlApiUpdateToken`
 - `ControlApiLocalhostOnly`
 - `ControlApiUnixSocketPath`
+- `ControlApiAuditPath`
+- `ControlApiIdempotencyPath`
+- `ControlApiRateLimitMaxRequests`
+- `ControlApiRateLimitWindowSeconds`
+- `ControlApiCriticalCooldownSeconds`
 
 Recommended shape:
 
 - keep `ControlApiLocalhostOnly=1`
 - keep `ControlApiHost=127.0.0.1`
+- prefer `ControlApiUnixSocketPath` for process-local automation when feasible
 - prefer split `ControlApiReadToken` and `ControlApiControlToken` for local clients with different scopes
+- add `ControlApiAdminToken` and `ControlApiUpdateToken` only when you want stricter local separation for advanced local control
 - use `ControlApiAuthToken` only when one shared token is enough
+- keep `ControlApiAuditPath` and `ControlApiIdempotencyPath` on `/run/...` or `/tmp/...`
+- keep the API rate-limit window small and local; this is meant as abuse protection, not remote multi-tenant throttling
+- do not point API audit or idempotency files at flash-backed storage
 - treat this as a command surface, not a general telemetry interface
 
 The formal JSON contract, the OpenAPI `3.1` document, HTTP status mapping, and
@@ -222,6 +234,10 @@ The same listener also exposes `GET /v1/capabilities` for stable topology and
 command discovery, `GET /v1/events` for NDJSON event streaming, and the
 state endpoints:
 
+- `GET /v1/state/healthz`
+- `GET /v1/state/version`
+- `GET /v1/state/build`
+- `GET /v1/state/contracts`
 - `GET /v1/state/summary`
 - `GET /v1/state/runtime`
 - `GET /v1/state/operational`

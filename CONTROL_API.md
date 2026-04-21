@@ -25,8 +25,15 @@ ControlApiPort=8765
 ControlApiAuthToken=
 ControlApiReadToken=
 ControlApiControlToken=
+ControlApiAdminToken=
+ControlApiUpdateToken=
 ControlApiLocalhostOnly=1
 ControlApiUnixSocketPath=
+ControlApiAuditPath=/run/dbus-venus-evcharger-control-audit-60.jsonl
+ControlApiIdempotencyPath=/run/dbus-venus-evcharger-idempotency-60.json
+ControlApiRateLimitMaxRequests=30
+ControlApiRateLimitWindowSeconds=5
+ControlApiCriticalCooldownSeconds=2
 ```
 
 Recommended defaults:
@@ -34,8 +41,22 @@ Recommended defaults:
 - keep `ControlApiLocalhostOnly=1`
 - keep `ControlApiHost=127.0.0.1` unless you intentionally front it with another local proxy
 - use `ControlApiReadToken` for read-only clients and `ControlApiControlToken` for writers
+- use `ControlApiAdminToken` and `ControlApiUpdateToken` only when you want stricter local separation for advanced control and update operations
 - use `ControlApiAuthToken` only when one shared token for both scopes is enough
-- set `ControlApiUnixSocketPath` when a process-local unix socket is a better fit than TCP
+- prefer `ControlApiUnixSocketPath` when a process-local unix socket is a better fit than TCP
+- keep API audit and idempotency paths on `/run/...` or `/tmp/...`
+- use the rate-limit settings as a local abuse guard, not as a remote multi-tenant quota system
+- treat the unix socket as the preferred local automation transport when your client supports it
+
+## Runtime-Only Policy
+
+The API is intentionally designed not to wear flash storage.
+
+- command audit data is kept in memory and may optionally be mirrored only to `/run/...` or `/tmp/...`
+- idempotency replay state is kept in memory and may optionally be mirrored only to `/run/...` or `/tmp/...`
+- non-runtime paths for these API metadata files are ignored for persistence on purpose
+
+This keeps API control metadata runtime-only and avoids writing it to flash-backed storage.
 
 ## Machine-Readable Contract
 
@@ -47,6 +68,7 @@ Recommended defaults:
 ### Public endpoints
 
 - `GET /v1/control/health`
+- `GET /v1/state/healthz`
 - `GET /v1/openapi.json`
 
 ### Authenticated read endpoints
@@ -69,6 +91,8 @@ Scope rules:
 
 - `ControlApiReadToken` grants read access
 - `ControlApiControlToken` grants read and control access
+- `ControlApiAdminToken` grants read, basic control, and admin-only control access
+- `ControlApiUpdateToken` grants read, control, admin, and update-trigger access
 - `ControlApiAuthToken` acts as one shared fallback token for both scopes when the scoped tokens are unset
 
 Locality rules:
@@ -145,8 +169,27 @@ For runtime-setting commands, an explicit path is required:
 
 - `X-Command-Id: <client command id>`
 - `Idempotency-Key: <stable retry key>`
+- `If-Match: "<state-token>"`
+- `X-State-Token: <state-token>`
 
 The HTTP adapter will generate a `command_id` when none is supplied.
+
+## Optimistic concurrency
+
+Clients can protect control writes against stale assumptions about current local
+state.
+
+Recommended flow:
+
+- read one state or capabilities endpoint
+- capture `ETag` or `X-State-Token`
+- send that token back in `If-Match` or `X-State-Token`
+
+Behavior:
+
+- matching token allows the write to proceed
+- stale token returns `409` with `code=conflict`
+- `If-Match: *` explicitly skips the concurrency check
 
 ## Response contract
 
@@ -196,12 +239,19 @@ Stable `status` values:
 Stable error codes include:
 
 - `invalid_json`
-- `invalid_payload`
+- `validation_error`
 - `unauthorized`
 - `insufficient_scope`
 - `forbidden_remote_client`
+- `unsupported_command`
+- `unsupported_for_topology`
+- `blocked_by_health`
+- `blocked_by_mode`
+- `update_in_progress`
 - `command_rejected`
 - `idempotency_conflict`
+- `rate_limited`
+- `cooldown_active`
 - `not_found`
 
 HTTP status mapping:
@@ -209,9 +259,16 @@ HTTP status mapping:
 - `200 OK` for `applied`
 - `202 Accepted` for `accepted_in_flight`
 - `409 Conflict` for rejected commands or idempotency conflicts
+- `429 Too Many Requests` for local rate limits or command cooldowns
 - `400 Bad Request` for malformed JSON or invalid command payloads
 - `401 Unauthorized` for missing/invalid tokens
 - `403 Forbidden` for wrong scope or rejected remote clients
+
+Successful capability, state, and command responses also expose the current
+local state token in:
+
+- `ETag`
+- `X-State-Token`
 
 ## Idempotency and command tracking
 
@@ -225,6 +282,59 @@ Behavior:
 - same `Idempotency-Key` + same payload returns the cached response with `replayed=true`
 - same `Idempotency-Key` + different payload returns `409` with `code=idempotency_conflict`
 
+The replay cache is runtime-only:
+
+- it stays in memory and can optionally be mirrored under `/run/...` or `/tmp/...`
+- it is not intended to survive a device reboot
+- it should not be pointed at flash-backed storage
+
+## Request schema strictness
+
+`POST /v1/control/command` is now described in OpenAPI as an explicit per-command
+`oneOf` contract instead of one generic loose payload.
+
+That means the machine-readable contract now publishes, per command:
+
+- allowed fields
+- required fields
+- expected types
+- value ranges or enums where applicable
+
+Examples:
+
+- `set_mode` accepts only `0`, `1`, or `2`
+- `set_phase_selection` accepts only known phase-selection values
+- `set_current_setting` requires a non-negative numeric value
+- runtime-setting payloads are split into float, integer, string, and binary forms
+
+Runtime validation in the service follows the same stricter rules, so unclear
+payloads are rejected early with `validation_error`.
+
+## Local throttling
+
+The HTTP adapter includes small local abuse guards for control traffic:
+
+- `ControlApiRateLimitMaxRequests`
+- `ControlApiRateLimitWindowSeconds`
+- `ControlApiCriticalCooldownSeconds`
+
+These are intentionally:
+
+- local-only
+- lightweight
+- runtime-only
+
+They exist to prevent command storms or overly aggressive retry loops from a
+local client. They are not intended as a remote quota or multi-tenant traffic
+policy.
+
+When throttling is active, the API returns:
+
+- `429 Too Many Requests`
+- `code=rate_limited` for general request bursts
+- `code=cooldown_active` for short cool-down protection on critical commands
+- `Retry-After` when a sensible retry delay is known
+
 ## Event stream
 
 `GET /v1/events` returns `application/x-ndjson`.
@@ -235,14 +345,32 @@ Each line is one event object with:
 - `api_version`
 - `kind`
 - `timestamp`
+- `resume_token`
 - `payload`
 
 Useful query parameters:
 
 - `limit`
 - `after`
+- `resume`
+- `heartbeat`
 - `timeout`
 - `once`
+- `kind`
+
+`kind` may be repeated or comma-separated to filter the stream to specific
+event types, for example:
+
+- `kind=command`
+- `kind=state`
+- `kind=command&kind=state`
+- `kind=command,state`
+
+Reconnect hints:
+
+- the stream response includes `X-Control-Api-Retry-Ms`
+- heartbeat payloads include `retry_hint_ms`
+- heartbeat payloads include `resume_hint`
 
 Typical examples:
 

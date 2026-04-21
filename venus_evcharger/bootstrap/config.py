@@ -140,6 +140,25 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
         svc.control_api_auth_token = defaults.get("ControlApiAuthToken", "").strip()
         svc.control_api_read_token = defaults.get("ControlApiReadToken", "").strip()
         svc.control_api_control_token = defaults.get("ControlApiControlToken", "").strip()
+        svc.control_api_admin_token = defaults.get("ControlApiAdminToken", "").strip()
+        svc.control_api_update_token = defaults.get("ControlApiUpdateToken", "").strip()
+        svc.control_api_audit_path = defaults.get(
+            "ControlApiAuditPath",
+            f"/run/dbus-venus-evcharger-control-audit-{svc.deviceinstance}.jsonl",
+        ).strip()
+        svc.control_api_audit_max_entries = int(_config_value(defaults, "ControlApiAuditMaxEntries", 200))
+        svc.control_api_idempotency_path = defaults.get(
+            "ControlApiIdempotencyPath",
+            f"/run/dbus-venus-evcharger-idempotency-{svc.deviceinstance}.json",
+        ).strip()
+        svc.control_api_idempotency_max_entries = int(_config_value(defaults, "ControlApiIdempotencyMaxEntries", 200))
+        svc.control_api_rate_limit_max_requests = int(_config_value(defaults, "ControlApiRateLimitMaxRequests", 30))
+        svc.control_api_rate_limit_window_seconds = float(
+            _config_value(defaults, "ControlApiRateLimitWindowSeconds", 5.0)
+        )
+        svc.control_api_critical_cooldown_seconds = float(
+            _config_value(defaults, "ControlApiCriticalCooldownSeconds", 2.0)
+        )
         svc.control_api_localhost_only = defaults.get("ControlApiLocalhostOnly", "1").strip().lower() in (
             "1",
             "true",

@@ -8,7 +8,9 @@ The following are considered stable contracts within `v1`:
 
 - endpoint paths listed in `versioning.stable_endpoints`
 - canonical command names
+- per-command OpenAPI request schemas for stable commands
 - command result statuses
+- stable semantic error-code enum
 - normalized error-object outer shape
 - normalized command-response outer shape
 - normalized state-envelope outer shape
@@ -22,6 +24,7 @@ Examples of breaking changes:
 - changing a stable endpoint path
 - removing a stable required field
 - changing the meaning of a stable command name
+- widening or narrowing a stable command schema incompatibly
 - changing status/error semantics in an incompatible way
 
 ## Experimental within `v1`

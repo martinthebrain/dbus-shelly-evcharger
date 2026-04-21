@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+import json
+import sys
+import unittest
+from unittest.mock import MagicMock
+
+sys.modules["vedbus"] = MagicMock()
+
+from venus_evcharger.core.contracts import CONTROL_API_ERROR_CODES
+from venus_evcharger.service.control import ControlApiMixin
+
+
+class _GoldenControlService(ControlApiMixin):
+    def _ensure_write_controller(self):
+        return None
+
+    def _ensure_dbus_publisher(self):
+        return None
+
+    def _state_summary(self):
+        return "mode=1 enable=1"
+
+    def _current_runtime_state(self):
+        return {"mode": 1}
+
+
+class TestVenusEvchargerControlGolden(unittest.TestCase):
+    def test_capabilities_projection_matches_golden_snapshot(self) -> None:
+        service = _GoldenControlService()
+        service.backend_mode = "split"
+        service.meter_backend_type = "template_meter"
+        service.switch_backend_type = "switch_group"
+        service.charger_backend_type = "goe_charger"
+        service.control_api_read_token = "read"
+        service.control_api_control_token = "control"
+        service.control_api_localhost_only = True
+        service.control_api_bound_unix_socket_path = "/run/venus-evcharger-control.sock"
+        service.supported_phase_selections = ("P1", "P1_P2", "P1_P2_P3")
+
+        projection = {
+            "auth_scopes": service._control_api_capabilities_payload()["auth_scopes"],
+            "command_scope_requirements": service._control_api_capabilities_payload()["command_scope_requirements"],
+            "features": {
+                key: service._control_api_capabilities_payload()["features"][key]
+                for key in (
+                    "command_audit_trail",
+                    "event_kind_filters",
+                    "event_retry_hints",
+                    "event_stream",
+                    "optimistic_concurrency",
+                    "per_command_request_schemas",
+                    "rate_limiting",
+                )
+            },
+            "topology": service._control_api_capabilities_payload()["topology"],
+            "supported_phase_selections": service._control_api_capabilities_payload()["supported_phase_selections"],
+        }
+        golden = {
+            "auth_scopes": ["control_admin", "control_basic", "read", "update_admin"],
+            "command_scope_requirements": {
+                "legacy_unknown_write": "control_admin",
+                "reset_contactor_lockout": "control_admin",
+                "reset_phase_lockout": "control_admin",
+                "set_auto_runtime_setting": "control_admin",
+                "set_auto_start": "control_basic",
+                "set_current_setting": "control_basic",
+                "set_enable": "control_basic",
+                "set_mode": "control_basic",
+                "set_phase_selection": "control_basic",
+                "set_start_stop": "control_basic",
+                "trigger_software_update": "update_admin",
+            },
+            "features": {
+                "command_audit_trail": True,
+                "event_kind_filters": True,
+                "event_retry_hints": True,
+                "event_stream": True,
+                "optimistic_concurrency": True,
+                "per_command_request_schemas": True,
+                "rate_limiting": True,
+            },
+            "topology": {
+                "backend_mode": "split",
+                "meter_backend": "template_meter",
+                "switch_backend": "switch_group",
+                "charger_backend": "goe_charger",
+            },
+            "supported_phase_selections": ["P1", "P1_P2", "P1_P2_P3"],
+        }
+
+        self.assertEqual(json.dumps(projection, sort_keys=True), json.dumps(golden, sort_keys=True))
+
+    def test_error_code_set_matches_golden_snapshot(self) -> None:
+        golden = [
+            "bad_request",
+            "blocked_by_health",
+            "blocked_by_mode",
+            "command_rejected",
+            "conflict",
+            "cooldown_active",
+            "forbidden_remote_client",
+            "idempotency_conflict",
+            "insufficient_scope",
+            "invalid_content_length",
+            "invalid_json",
+            "invalid_payload",
+            "not_found",
+            "rate_limited",
+            "unauthorized",
+            "unsupported_command",
+            "unsupported_for_topology",
+            "update_in_progress",
+            "validation_error",
+        ]
+        self.assertEqual(sorted(CONTROL_API_ERROR_CODES), golden)

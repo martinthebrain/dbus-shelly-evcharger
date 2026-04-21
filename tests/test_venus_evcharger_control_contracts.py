@@ -37,13 +37,17 @@ class TestVenusEvchargerControlContracts(unittest.TestCase):
         self.assertIn("/v1/capabilities", CONTROL_API_ENDPOINTS)
         self.assertIn("/v1/events", CONTROL_API_ENDPOINTS)
         self.assertIn("/v1/openapi.json", CONTROL_API_ENDPOINTS)
+        self.assertIn("/v1/state/healthz", CONTROL_API_STATE_ENDPOINTS)
+        self.assertIn("/v1/state/version", CONTROL_API_STATE_ENDPOINTS)
         self.assertIn("/v1/state/summary", CONTROL_API_STATE_ENDPOINTS)
         self.assertIn("/v1/state/topology", CONTROL_API_STATE_ENDPOINTS)
         self.assertEqual(CONTROL_API_EXPERIMENTAL_ENDPOINTS, frozenset({"/v1/events"}))
         self.assertIn("/v1/capabilities", CONTROL_API_STABLE_ENDPOINTS)
         self.assertIn("unauthorized", CONTROL_API_ERROR_CODES)
         self.assertIn("insufficient_scope", CONTROL_API_ERROR_CODES)
-        self.assertEqual(CONTROL_API_EVENT_KINDS, frozenset({"snapshot", "command", "state"}))
+        self.assertIn("validation_error", CONTROL_API_ERROR_CODES)
+        self.assertIn("rate_limited", CONTROL_API_ERROR_CODES)
+        self.assertEqual(CONTROL_API_EVENT_KINDS, frozenset({"snapshot", "command", "state", "heartbeat"}))
         self.assertIn("set_mode", CONTROL_COMMAND_NAMES)
         self.assertEqual(CONTROL_COMMAND_SOURCES, frozenset({"dbus", "http", "internal", "mqtt"}))
         self.assertEqual(CONTROL_COMMAND_STATUSES, frozenset({"accepted_in_flight", "applied", "rejected"}))
@@ -215,7 +219,9 @@ class TestVenusEvchargerControlContracts(unittest.TestCase):
                 "localhost_only": 1,
                 "unix_socket_path": " /tmp/control.sock ",
                 "auth_header": " Authorization: Bearer <token> ",
+                "auth_scopes": ["control_admin", "read", "bogus"],
                 "command_names": ["set_mode", "bogus"],
+                "command_scope_requirements": {"set_mode": "control_basic", "trigger_software_update": "update_admin", "bogus": "nope"},
                 "command_sources": ["HTTP", "mqtt", "bogus"],
                 "state_endpoints": ["/v1/state/runtime", "/bad"],
                 "endpoints": ["/v1/control/health", "/v1/capabilities", "/v1/events", "/bad"],
@@ -240,7 +246,16 @@ class TestVenusEvchargerControlContracts(unittest.TestCase):
         self.assertTrue(payload["localhost_only"])
         self.assertEqual(payload["unix_socket_path"], "/tmp/control.sock")
         self.assertEqual(payload["auth_header"], "Authorization: Bearer <token>")
+        self.assertEqual(payload["auth_scopes"], ["control_admin", "read"])
         self.assertEqual(payload["command_names"], ["legacy_unknown_write", "set_mode"])
+        self.assertEqual(
+            payload["command_scope_requirements"],
+            {
+                "legacy_unknown_write": "control_basic",
+                "set_mode": "control_basic",
+                "trigger_software_update": "update_admin",
+            },
+        )
         self.assertEqual(payload["command_sources"], ["http", "mqtt"])
         self.assertEqual(payload["state_endpoints"], ["/v1/state/runtime"])
         self.assertEqual(payload["endpoints"], ["/v1/capabilities", "/v1/control/health", "/v1/events"])
@@ -283,17 +298,20 @@ class TestVenusEvchargerControlContracts(unittest.TestCase):
             {
                 "seq": "5",
                 "api_version": " v1 ",
-                "kind": " command ",
+                "kind": " heartbeat ",
                 "timestamp": "12.5",
+                "resume_token": "5",
                 "payload": {123: "ok"},
             }
         )
 
         self.assertEqual(normalized_control_api_event_kind(" snapshot "), "snapshot")
+        self.assertEqual(normalized_control_api_event_kind(" heartbeat "), "heartbeat")
         self.assertEqual(normalized_control_api_event_kind("other"), "state")
         self.assertEqual(payload["seq"], 5)
         self.assertEqual(payload["api_version"], "v1")
-        self.assertEqual(payload["kind"], "command")
+        self.assertEqual(payload["kind"], "heartbeat")
         self.assertEqual(payload["timestamp"], 12.5)
+        self.assertEqual(payload["resume_token"], "5")
         self.assertEqual(payload["payload"], {"123": "ok"})
         self.assertEqual(normalized_control_api_event_fields({"payload": "bad"})["payload"], {})

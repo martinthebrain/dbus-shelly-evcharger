@@ -10,12 +10,15 @@ from venus_evcharger.core.contracts_basic import non_negative_float_or_none
 
 CONTROL_API_VERSIONS = frozenset({"v1"})
 CONTROL_API_TRANSPORTS = frozenset({"http"})
-CONTROL_API_AUTH_SCOPES = frozenset({"read", "control"})
+CONTROL_API_AUTH_SCOPES = frozenset({"read", "control_basic", "control_admin", "update_admin"})
 CONTROL_API_ERROR_CODES = frozenset(
     {
         "bad_request",
+        "blocked_by_health",
+        "blocked_by_mode",
         "command_rejected",
         "conflict",
+        "cooldown_active",
         "forbidden_remote_client",
         "idempotency_conflict",
         "invalid_content_length",
@@ -23,19 +26,28 @@ CONTROL_API_ERROR_CODES = frozenset(
         "invalid_payload",
         "insufficient_scope",
         "not_found",
+        "rate_limited",
         "unauthorized",
+        "unsupported_command",
+        "unsupported_for_topology",
+        "update_in_progress",
+        "validation_error",
     }
 )
 CONTROL_API_STATE_ENDPOINTS = frozenset(
     {
+        "/v1/state/build",
         "/v1/state/config-effective",
+        "/v1/state/contracts",
         "/v1/state/dbus-diagnostics",
         "/v1/state/health",
+        "/v1/state/healthz",
         "/v1/state/operational",
         "/v1/state/runtime",
         "/v1/state/summary",
         "/v1/state/topology",
         "/v1/state/update",
+        "/v1/state/version",
     }
 )
 CONTROL_API_ENDPOINTS = frozenset(
@@ -67,7 +79,7 @@ CONTROL_COMMAND_NAMES = frozenset(
 )
 CONTROL_COMMAND_SOURCES = frozenset({"dbus", "http", "internal", "mqtt"})
 CONTROL_COMMAND_STATUSES = frozenset({"accepted_in_flight", "applied", "rejected"})
-CONTROL_API_EVENT_KINDS = frozenset({"snapshot", "command", "state"})
+CONTROL_API_EVENT_KINDS = frozenset({"snapshot", "command", "state", "heartbeat"})
 
 
 def _normalized_text(value: Any, default: str = "") -> str:
@@ -94,6 +106,12 @@ def normalized_control_api_transport(value: Any) -> str:
 def normalized_control_api_error_code(value: Any) -> str:
     code = _normalized_text(value).lower().replace(" ", "_").replace("-", "_")
     return code if code in CONTROL_API_ERROR_CODES else "bad_request"
+
+
+def normalized_control_api_auth_scope(value: Any, *, default: str = "read") -> str:
+    scope = _normalized_text(value).lower()
+    normalized_default = default if default in CONTROL_API_AUTH_SCOPES else "read"
+    return scope if scope in CONTROL_API_AUTH_SCOPES else normalized_default
 
 
 def normalized_control_command_name(value: Any) -> str:
@@ -281,6 +299,21 @@ def _normalized_control_versioning(raw: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalized_auth_scopes(value: Any) -> list[str]:
+    return sorted({normalized_control_api_auth_scope(item) for item in _normalized_items(value, CONTROL_API_AUTH_SCOPES)})
+
+
+def _normalized_command_scope_requirements(value: Any) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    if isinstance(value, Mapping):
+        for command_name, scope in value.items():
+            normalized[normalized_control_command_name(command_name)] = normalized_control_api_auth_scope(
+                scope,
+                default="control_basic",
+            )
+    return normalized
+
+
 def _normalized_available_modes(value: Any) -> list[int]:
     return sorted(non_negative_int(item) for item in _normalized_items(value, (0, 1, 2)))
 
@@ -298,7 +331,9 @@ def normalized_control_api_capabilities_fields(payload: Mapping[str, Any] | None
         "localhost_only": _normalized_control_flag(raw, "localhost_only", 1),
         "unix_socket_path": _normalized_text(raw.get("unix_socket_path")),
         "auth_header": _normalized_text(raw.get("auth_header"), "Authorization: Bearer <token>"),
+        "auth_scopes": _normalized_auth_scopes(raw.get("auth_scopes")),
         "command_names": _normalized_command_names(raw.get("command_names")),
+        "command_scope_requirements": _normalized_command_scope_requirements(raw.get("command_scope_requirements")),
         "command_sources": _normalized_command_sources(raw.get("command_sources")),
         "state_endpoints": _normalized_allowed_endpoints(raw.get("state_endpoints"), CONTROL_API_STATE_ENDPOINTS),
         "endpoints": _normalized_allowed_endpoints(raw.get("endpoints"), CONTROL_API_ENDPOINTS),
@@ -337,10 +372,12 @@ def normalized_control_api_event_fields(payload: Mapping[str, Any] | None) -> di
     if isinstance(event_payload, Mapping):
         for key, value in event_payload.items():
             normalized_payload[str(key)] = value
+    seq = non_negative_int(raw.get("seq"))
     return {
-        "seq": non_negative_int(raw.get("seq")),
+        "seq": seq,
         "api_version": normalized_control_api_version(raw.get("api_version")),
         "kind": normalized_control_api_event_kind(raw.get("kind")),
         "timestamp": non_negative_float_or_none(raw.get("timestamp")) or 0.0,
+        "resume_token": _normalized_text(raw.get("resume_token"), str(seq)),
         "payload": normalized_payload,
     }

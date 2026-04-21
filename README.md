@@ -207,16 +207,25 @@ Config keys:
 - `ControlApiAuthToken`
 - `ControlApiReadToken`
 - `ControlApiControlToken`
+- `ControlApiAdminToken`
+- `ControlApiUpdateToken`
 - `ControlApiLocalhostOnly`
 - `ControlApiUnixSocketPath`
+- `ControlApiRateLimitMaxRequests`
+- `ControlApiRateLimitWindowSeconds`
+- `ControlApiCriticalCooldownSeconds`
 
 Endpoints:
 
 - `GET /v1/openapi.json`
 - `GET /v1/capabilities`
 - `GET /v1/control/health`
+- `GET /v1/state/healthz`
 - `POST /v1/control/command`
 - `GET /v1/events`
+- `GET /v1/state/version`
+- `GET /v1/state/build`
+- `GET /v1/state/contracts`
 - `GET /v1/state/config-effective`
 - `GET /v1/state/summary`
 - `GET /v1/state/runtime`
@@ -229,6 +238,10 @@ Endpoints:
 The full request/response contract, auth rules, idempotency behavior, event
 stream, and `curl` examples live in [CONTROL_API.md](CONTROL_API.md).
 
+API audit and idempotency metadata are intentionally runtime-only. Keep their
+paths on `/run/...` or `/tmp/...`; they are not meant for flash-backed storage.
+For process-local automation, prefer a unix socket over TCP when practical.
+
 For read-only local inspection, the same listener also exposes:
 
 - `GET /v1/state/summary`
@@ -237,6 +250,9 @@ For read-only local inspection, the same listener also exposes:
 - `GET /v1/state/dbus-diagnostics`
 - `GET /v1/state/topology`
 - `GET /v1/state/update`
+- `GET /v1/state/version`
+- `GET /v1/state/build`
+- `GET /v1/state/contracts`
 - `GET /v1/state/config-effective`
 - `GET /v1/state/health`
 

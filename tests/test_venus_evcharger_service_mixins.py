@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import unittest
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 sys.modules["vedbus"] = MagicMock()
@@ -225,7 +226,20 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service._software_update_no_update_active = 0
         service._runtime_overrides_active = True
         service.runtime_overrides_path = "/run/runtime.ini"
+        service.control_api_audit_path = "/run/control-audit.jsonl"
+        service.control_api_audit_max_entries = 3
+        service.control_api_idempotency_path = "/run/control-idempotency.json"
+        service.control_api_idempotency_max_entries = 4
+        service.control_api_rate_limit_max_requests = 15
+        service.control_api_rate_limit_window_seconds = 7.5
+        service.control_api_critical_cooldown_seconds = 3.0
         service.control_api_auth_token = "secret"
+        service.product_name = "Venus EV Charger Service"
+        service.service_name = "com.victronenergy.evcharger"
+        service.connection_name = "HTTP"
+        service.hardware_version = "HW-1"
+        service.firmware_version = "FW-1"
+        service.runtime_state_path = "/run/runtime.json"
         service.supported_phase_selections = ("P1", "P1_P2", "P1_P2_P3")
         service._dbus_publisher = MagicMock()
         service._dbus_publisher._diagnostic_counter_values.return_value = {"/Auto/State": "charging"}
@@ -240,13 +254,27 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         update = service._state_api_update_payload()
         config_effective = service._state_api_config_effective_payload()
         health = service._state_api_health_payload()
+        healthz = service._state_api_healthz_payload()
+        version = service._state_api_version_payload()
+        build = service._state_api_build_payload()
+        contracts = service._state_api_contracts_payload()
         snapshot = service._state_api_event_snapshot_payload()
 
         self.assertTrue(capabilities["auth_required"])
         self.assertIn("set_mode", capabilities["command_names"])
         self.assertIn("/v1/capabilities", capabilities["endpoints"])
+        self.assertIn("/v1/state/healthz", capabilities["endpoints"])
         self.assertIn("/v1/events", capabilities["versioning"]["experimental_endpoints"])
+        self.assertTrue(capabilities["features"]["command_audit_trail"])
+        self.assertTrue(capabilities["features"]["event_kind_filters"])
+        self.assertTrue(capabilities["features"]["event_retry_hints"])
         self.assertTrue(capabilities["features"]["multi_phase_selection"])
+        self.assertTrue(capabilities["features"]["optimistic_concurrency"])
+        self.assertTrue(capabilities["features"]["per_command_request_schemas"])
+        self.assertTrue(capabilities["features"]["rate_limiting"])
+        self.assertEqual(capabilities["auth_scopes"], ["control_admin", "control_basic", "read", "update_admin"])
+        self.assertEqual(capabilities["command_scope_requirements"]["set_mode"], "control_basic")
+        self.assertEqual(capabilities["command_scope_requirements"]["trigger_software_update"], "update_admin")
         self.assertEqual(capabilities["topology"]["charger_backend"], "goe_charger")
         self.assertEqual(capabilities["supported_phase_selections"], ["P1", "P1_P2", "P1_P2_P3"])
         self.assertEqual(capabilities["available_modes"], [0, 1, 2])
@@ -267,22 +295,106 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         self.assertEqual(update["kind"], "update")
         self.assertEqual(config_effective["kind"], "config-effective")
         self.assertEqual(config_effective["state"]["runtime_overrides_path"], "/run/runtime.ini")
+        self.assertEqual(config_effective["state"]["control_api_audit_path"], "/run/control-audit.jsonl")
+        self.assertEqual(config_effective["state"]["control_api_idempotency_path"], "/run/control-idempotency.json")
+        self.assertEqual(config_effective["state"]["control_api_rate_limit_max_requests"], 15)
+        self.assertEqual(config_effective["state"]["control_api_rate_limit_window_seconds"], 7.5)
+        self.assertEqual(config_effective["state"]["control_api_critical_cooldown_seconds"], 3.0)
         self.assertEqual(health["kind"], "health")
+        self.assertEqual(health["state"]["command_audit_entries"], 0)
+        self.assertEqual(health["state"]["command_audit_path"], "/run/control-audit.jsonl")
+        self.assertEqual(health["state"]["idempotency_entries"], 0)
+        self.assertEqual(health["state"]["idempotency_path"], "/run/control-idempotency.json")
         self.assertFalse(health["state"]["update_stale"])
+        self.assertEqual(healthz["kind"], "healthz")
+        self.assertTrue(healthz["state"]["alive"])
+        self.assertEqual(version["kind"], "version")
+        self.assertEqual(version["state"]["service_version"], "FW-1")
+        self.assertEqual(build["kind"], "build")
+        self.assertEqual(build["state"]["hardware_version"], "HW-1")
+        self.assertEqual(contracts["kind"], "contracts")
+        self.assertEqual(contracts["state"]["openapi_endpoint"], "/v1/openapi.json")
         self.assertIn("summary", snapshot)
         self.assertIn("health", snapshot)
+        self.assertTrue(service._control_api_state_token())
 
     def test_control_api_mixin_health_payload_uses_stale_callback_and_event_bus_is_reused(self):
         service = _ControlService()
         service._last_health_reason = "init"
         service._is_update_stale = lambda now: now >= 0.0
+        service.control_api_audit_path = "/run/control-audit.jsonl"
+        service.control_api_audit_max_entries = 2
+        service.control_api_idempotency_path = "/run/control-idempotency.json"
+        service.control_api_idempotency_max_entries = 2
 
         health = service._state_api_health_payload()
         event_bus_a = service._control_api_event_bus()
         event_bus_b = service._control_api_event_bus()
+        audit_a = service._control_api_audit_trail()
+        audit_b = service._control_api_audit_trail()
+        idem_a = service._control_api_idempotency_store()
+        idem_b = service._control_api_idempotency_store()
+        rate_a = service._control_api_rate_limiter()
+        rate_b = service._control_api_rate_limiter()
 
         self.assertTrue(health["state"]["update_stale"])
         self.assertIs(event_bus_a, event_bus_b)
+        self.assertIs(audit_a, audit_b)
+        self.assertIs(idem_a, idem_b)
+        self.assertIs(rate_a, rate_b)
+
+    def test_control_api_state_token_changes_when_snapshot_changes(self):
+        service = _ControlService()
+        first_token = service._control_api_state_token()
+
+        service.virtual_mode = 2
+
+        second_token = service._control_api_state_token()
+
+        self.assertNotEqual(first_token, second_token)
+
+    def test_control_api_mixin_records_runtime_only_command_audit_entries(self):
+        service = _ControlService()
+        service.control_api_audit_path = "/run/control-audit.jsonl"
+        service.control_api_audit_max_entries = 2
+        service.control_api_idempotency_path = "/run/control-idempotency.json"
+        service.control_api_idempotency_max_entries = 2
+        command = ControlCommand(name="set_mode", path="/Mode", value=1, source="http", command_id="cmd-1")
+
+        entry = service._record_control_api_command_audit(
+            command=command,
+            result={"status": "applied", "accepted": True},
+            error=None,
+            replayed=False,
+            scope="control",
+            client_host="127.0.0.1",
+            status_code=200,
+        )
+
+        self.assertEqual(entry["seq"], 1)
+        self.assertEqual(entry["command"]["name"], "set_mode")
+        self.assertEqual(service._control_api_audit_trail().count(), 1)
+        service._control_api_idempotency_store().put("idem-1", "fp", 200, {"ok": True})
+        self.assertEqual(service._control_api_idempotency_store().count(), 1)
+
+    def test_control_api_mixin_audit_payload_helpers_cover_dict_and_none_inputs(self):
+        self.assertEqual(_ControlService._audit_command_payload({"name": "set_mode"}, "http"), {"name": "set_mode"})
+        self.assertEqual(_ControlService._audit_command_payload(None, "http"), {})
+        self.assertEqual(_ControlService._audit_result_payload({"status": "applied"}), {"status": "applied"})
+        self.assertEqual(_ControlService._audit_result_payload(None), {})
+        object_payload = _ControlService._audit_result_payload(
+            SimpleNamespace(
+                status="applied",
+                accepted=True,
+                applied=True,
+                persisted=False,
+                reversible_failure=False,
+                external_side_effect_started=True,
+                detail="ok",
+            )
+        )
+        self.assertEqual(object_payload["status"], "applied")
+        self.assertTrue(object_payload["external_side_effect_started"])
 
     def test_control_api_mixin_skips_disabled_server_and_can_create_one(self):
         service = _ControlService()
@@ -306,6 +418,8 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
             auth_token="token",
             read_token="",
             control_token="",
+            admin_token="",
+            update_token="",
             localhost_only=True,
             unix_socket_path="",
         )

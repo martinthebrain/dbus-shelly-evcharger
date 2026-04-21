@@ -16,6 +16,9 @@ from venus_evcharger.core.contracts_outward import normalized_software_update_st
 STATE_API_VERSIONS = frozenset({"v1"})
 STATE_API_KINDS = frozenset(
     {
+        "build",
+        "contracts",
+        "healthz",
         "summary",
         "runtime",
         "operational",
@@ -24,6 +27,7 @@ STATE_API_KINDS = frozenset(
         "update",
         "config-effective",
         "health",
+        "version",
     }
 )
 

@@ -24,6 +24,9 @@ class TestVenusEvchargerStateContracts(unittest.TestCase):
             STATE_API_KINDS,
             frozenset(
                 {
+                    "build",
+                    "contracts",
+                    "healthz",
                     "summary",
                     "runtime",
                     "operational",
@@ -32,6 +35,7 @@ class TestVenusEvchargerStateContracts(unittest.TestCase):
                     "update",
                     "config-effective",
                     "health",
+                    "version",
                 }
             ),
         )

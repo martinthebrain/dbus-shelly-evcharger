@@ -3,10 +3,18 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from typing import Any, cast
 
-from venus_evcharger.control import ControlCommand, LocalControlApiHttpServer
+from venus_evcharger.control import (
+    ControlApiAuditTrail,
+    ControlApiIdempotencyStore,
+    ControlApiRateLimiter,
+    ControlCommand,
+    LocalControlApiHttpServer,
+)
 from venus_evcharger.control.events import ControlApiEventBus
 from venus_evcharger.core.common import evse_fault_reason
 from venus_evcharger.core.contracts import (
@@ -22,6 +30,7 @@ from venus_evcharger.core.contracts import (
     normalized_state_api_config_effective_fields,
     normalized_state_api_dbus_diagnostics_fields,
     normalized_state_api_health_fields,
+    normalized_state_api_kind,
     normalized_state_api_operational_fields,
     normalized_state_api_runtime_fields,
     normalized_state_api_summary_fields,
@@ -187,10 +196,21 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
                     "control_api_port": int(getattr(self, "control_api_port", 0)),
                     "control_api_localhost_only": bool(getattr(self, "control_api_localhost_only", True)),
                     "control_api_unix_socket_path": getattr(self, "control_api_unix_socket_path", ""),
+                    "control_api_audit_path": getattr(self, "control_api_audit_path", ""),
+                    "control_api_idempotency_path": getattr(self, "control_api_idempotency_path", ""),
+                    "control_api_rate_limit_max_requests": int(getattr(self, "control_api_rate_limit_max_requests", 0)),
+                    "control_api_rate_limit_window_seconds": float(
+                        getattr(self, "control_api_rate_limit_window_seconds", 0.0)
+                    ),
+                    "control_api_critical_cooldown_seconds": float(
+                        getattr(self, "control_api_critical_cooldown_seconds", 0.0)
+                    ),
                     "control_api_read_token_configured": bool(str(getattr(self, "control_api_read_token", "")).strip()),
                     "control_api_control_token_configured": bool(
                         str(getattr(self, "control_api_control_token", "")).strip()
                     ),
+                    "control_api_admin_token_configured": bool(str(getattr(self, "control_api_admin_token", "")).strip()),
+                    "control_api_update_token_configured": bool(str(getattr(self, "control_api_update_token", "")).strip()),
                     "backend_mode": getattr(self, "backend_mode", "combined"),
                     "meter_backend": getattr(self, "meter_backend_type", "na"),
                     "switch_backend": getattr(self, "switch_backend_type", "na"),
@@ -204,6 +224,63 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
                 },
             }
         )
+
+    def _state_api_healthz_payload(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "api_version": "v1",
+            "kind": normalized_state_api_kind("healthz", default="healthz"),
+            "state": {
+                "alive": True,
+                "control_api_enabled": bool(getattr(self, "control_api_enabled", False)),
+                "control_api_running": bool(getattr(self, "_control_api_server", None)),
+            },
+        }
+
+    def _state_api_version_payload(self) -> dict[str, Any]:
+        current_version = str(getattr(self, "_software_update_current_version", "")).strip()
+        return {
+            "ok": True,
+            "api_version": "v1",
+            "kind": normalized_state_api_kind("version", default="version"),
+            "state": {
+                "service_version": current_version or str(getattr(self, "firmware_version", "")).strip(),
+                "api_version": "v1",
+                "product_name": str(getattr(self, "product_name", "")).strip(),
+                "service_name": str(getattr(self, "service_name", "")).strip(),
+            },
+        }
+
+    def _state_api_build_payload(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "api_version": "v1",
+            "kind": normalized_state_api_kind("build", default="build"),
+            "state": {
+                "product_name": str(getattr(self, "product_name", "")).strip(),
+                "hardware_version": str(getattr(self, "hardware_version", "")).strip(),
+                "firmware_version": str(getattr(self, "firmware_version", "")).strip(),
+                "connection_name": str(getattr(self, "connection_name", "")).strip(),
+                "runtime_state_path": str(getattr(self, "runtime_state_path", "")).strip(),
+            },
+        }
+
+    def _state_api_contracts_payload(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "api_version": "v1",
+            "kind": normalized_state_api_kind("contracts", default="contracts"),
+            "state": {
+                "active_api_version": "v1",
+                "openapi_endpoint": "/v1/openapi.json",
+                "capabilities_endpoint": "/v1/capabilities",
+                "versioning_document": "API_VERSIONING.md",
+                "control_document": "CONTROL_API.md",
+                "state_document": "STATE_API.md",
+                "stable_endpoints": sorted(CONTROL_API_STABLE_ENDPOINTS),
+                "experimental_endpoints": sorted(CONTROL_API_EXPERIMENTAL_ENDPOINTS),
+            },
+        }
 
     def _state_api_health_payload(self) -> dict[str, Any]:
         now = time.time()
@@ -230,6 +307,10 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
                     "listen_port": getattr(self, "control_api_listen_port", 0),
                     "unix_socket_path": getattr(self, "control_api_bound_unix_socket_path", ""),
                     "control_api_localhost_only": getattr(self, "control_api_localhost_only", True),
+                    "command_audit_entries": self._control_api_audit_trail().count(),
+                    "command_audit_path": getattr(self, "control_api_audit_path", ""),
+                    "idempotency_entries": self._control_api_idempotency_store().count(),
+                    "idempotency_path": getattr(self, "control_api_idempotency_path", ""),
                     "update_stale": stale,
                     "last_successful_update_at": getattr(self, "_last_successful_update_at", None),
                     "last_recovery_attempt_at": getattr(self, "_last_recovery_attempt_at", None),
@@ -255,10 +336,17 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
             "charger_backend": getattr(self, "charger_backend_type", "na"),
         }
         features = {
+            "command_audit_trail": True,
             "dbus_diagnostics_state": True,
             "event_stream": True,
+            "event_kind_filters": True,
+            "event_retry_hints": True,
             "http_control_command": True,
             "idempotency_tracking": True,
+            "optimistic_concurrency": True,
+            "per_command_request_schemas": True,
+            "rate_limiting": True,
+            "runtime_only_idempotency_persistence": True,
             "multi_phase_selection": len(supported_phase_selections) > 1,
             "phase_selection_write": bool(supported_phase_selections),
             "read_api": True,
@@ -282,7 +370,21 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
                 "localhost_only": bool(getattr(self, "control_api_localhost_only", True)),
                 "unix_socket_path": getattr(self, "control_api_bound_unix_socket_path", ""),
                 "auth_header": "Authorization: Bearer <token>",
+                "auth_scopes": ["read", "control_basic", "control_admin", "update_admin"],
                 "command_names": sorted(CONTROL_COMMAND_NAMES),
+                "command_scope_requirements": {
+                    "legacy_unknown_write": "control_admin",
+                    "reset_contactor_lockout": "control_admin",
+                    "reset_phase_lockout": "control_admin",
+                    "set_auto_runtime_setting": "control_admin",
+                    "set_auto_start": "control_basic",
+                    "set_current_setting": "control_basic",
+                    "set_enable": "control_basic",
+                    "set_mode": "control_basic",
+                    "set_phase_selection": "control_basic",
+                    "set_start_stop": "control_basic",
+                    "trigger_software_update": "update_admin",
+                },
                 "command_sources": sorted(CONTROL_COMMAND_SOURCES),
                 "state_endpoints": sorted(CONTROL_API_STATE_ENDPOINTS),
                 "endpoints": sorted(CONTROL_API_ENDPOINTS),
@@ -300,6 +402,107 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
                 },
             }
         )
+
+    def _control_api_state_token_payload(self) -> dict[str, Any]:
+        return self._state_api_event_snapshot_payload()
+
+    def _control_api_state_token(self) -> str:
+        encoded = json.dumps(
+            self._control_api_state_token_payload(),
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _control_api_audit_trail(self) -> ControlApiAuditTrail:
+        audit_trail = getattr(self, "_control_api_audit_trail_instance", None)
+        if audit_trail is None:
+            audit_trail = ControlApiAuditTrail(
+                history_limit=int(getattr(self, "control_api_audit_max_entries", 200)),
+                path=str(getattr(self, "control_api_audit_path", "")).strip(),
+            )
+            self._control_api_audit_trail_instance = audit_trail
+        return cast(ControlApiAuditTrail, audit_trail)
+
+    def _record_control_api_command_audit(
+        self,
+        *,
+        command: Any,
+        result: Any,
+        error: dict[str, Any] | None,
+        replayed: bool,
+        scope: str,
+        client_host: str,
+        status_code: int,
+        transport: str = "http",
+    ) -> dict[str, Any]:
+        return self._control_api_audit_trail().append(
+            {
+                "timestamp": time.time(),
+                "transport": transport,
+                "scope": scope,
+                "client_host": client_host,
+                "status_code": status_code,
+                "replayed": replayed,
+                "command": self._audit_command_payload(command, transport),
+                "result": self._audit_result_payload(result),
+                "error": dict(error or {}),
+            }
+        )
+
+    @staticmethod
+    def _audit_command_payload(command: Any, transport: str) -> dict[str, Any]:
+        if isinstance(command, dict):
+            return dict(command)
+        if command is None:
+            return {}
+        return {
+            "name": getattr(command, "name", ""),
+            "path": getattr(command, "path", ""),
+            "value": getattr(command, "value", None),
+            "source": getattr(command, "source", transport),
+            "detail": getattr(command, "detail", ""),
+            "command_id": getattr(command, "command_id", ""),
+            "idempotency_key": getattr(command, "idempotency_key", ""),
+        }
+
+    @staticmethod
+    def _audit_result_payload(result: Any) -> dict[str, Any]:
+        if isinstance(result, dict):
+            return dict(result)
+        if result is None:
+            return {}
+        return {
+            "status": getattr(result, "status", ""),
+            "accepted": getattr(result, "accepted", False),
+            "applied": getattr(result, "applied", False),
+            "persisted": getattr(result, "persisted", False),
+            "reversible_failure": getattr(result, "reversible_failure", False),
+            "external_side_effect_started": getattr(result, "external_side_effect_started", False),
+            "detail": getattr(result, "detail", ""),
+        }
+
+    def _control_api_idempotency_store(self) -> ControlApiIdempotencyStore:
+        idempotency_store = getattr(self, "_control_api_idempotency_store_instance", None)
+        if idempotency_store is None:
+            idempotency_store = ControlApiIdempotencyStore(
+                history_limit=int(getattr(self, "control_api_idempotency_max_entries", 200)),
+                path=str(getattr(self, "control_api_idempotency_path", "")).strip(),
+            )
+            self._control_api_idempotency_store_instance = idempotency_store
+        return cast(ControlApiIdempotencyStore, idempotency_store)
+
+    def _control_api_rate_limiter(self) -> ControlApiRateLimiter:
+        rate_limiter = getattr(self, "_control_api_rate_limiter_instance", None)
+        if rate_limiter is None:
+            rate_limiter = ControlApiRateLimiter(
+                max_requests=int(getattr(self, "control_api_rate_limit_max_requests", 30)),
+                window_seconds=float(getattr(self, "control_api_rate_limit_window_seconds", 5.0)),
+                critical_cooldown_seconds=float(getattr(self, "control_api_critical_cooldown_seconds", 2.0)),
+            )
+            self._control_api_rate_limiter_instance = rate_limiter
+        return cast(ControlApiRateLimiter, rate_limiter)
 
     def _control_api_event_bus(self) -> ControlApiEventBus:
         event_bus = getattr(self, "_control_api_event_bus_instance", None)
@@ -349,6 +552,8 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
                 auth_token=str(getattr(self, "control_api_auth_token", "")),
                 read_token=str(getattr(self, "control_api_read_token", "")),
                 control_token=str(getattr(self, "control_api_control_token", "")),
+                admin_token=str(getattr(self, "control_api_admin_token", "")),
+                update_token=str(getattr(self, "control_api_update_token", "")),
                 localhost_only=bool(getattr(self, "control_api_localhost_only", True)),
                 unix_socket_path=str(getattr(self, "control_api_unix_socket_path", "")),
             )
