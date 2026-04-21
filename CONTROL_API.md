@@ -474,6 +474,7 @@ Official example files:
 
 - Python example: [examples/control_api_client.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/examples/control_api_client.py)
 - Small CLI: [venus_evchargerctl.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/venus_evchargerctl.py)
+- Target-system wrapper: [venus_evchargerctl.sh](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/deploy/venus/venus_evchargerctl.sh)
 
 CLI quick start:
 
@@ -550,6 +551,27 @@ result = client.command(
 ).json()
 ```
 <!-- END:CONTROL_API_GETTING_STARTED -->
+
+## CLI contract
+
+`venus_evchargerctl` is the small first-class operator client for this local
+API.
+
+Supported entrypoints:
+
+- repository-local:
+  `python3 ./venus_evchargerctl.py`
+- installed target wrapper:
+  `./deploy/venus/venus_evchargerctl.sh`
+
+Exit codes:
+
+- `0` when the API returned a `2xx` response
+- `1` when the request reached the API but was rejected or failed
+- `2` when the CLI invocation itself was invalid
+
+That means shell automation can treat `1` as an application/API failure and `2`
+as a local usage bug.
 
 ## Versioning
 

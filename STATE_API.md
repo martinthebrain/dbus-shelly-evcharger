@@ -6,6 +6,9 @@ endpoint.
 For the short architectural overview of Control vs State vs Events, see
 [API_OVERVIEW.md](API_OVERVIEW.md).
 
+For operator quick checks and target-system CLI examples, see
+[API_OPERATOR_GUIDE.md](API_OPERATOR_GUIDE.md).
+
 This API is intentionally:
 
 - local-first

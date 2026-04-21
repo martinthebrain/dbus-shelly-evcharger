@@ -71,6 +71,21 @@ This guide covers the usual installation paths for Venus OS and Cerbo GX.
    dbus -y com.victronenergy.evcharger.http_60 /Connected GetValue
    ```
 
+8. Optional: use the deploy-local API helper for quick diagnostics or manual
+   control on the target system:
+
+   ```bash
+   ./deploy/venus/venus_evchargerctl.sh health
+   ./deploy/venus/venus_evchargerctl.sh --token READ-TOKEN state summary
+   ./deploy/venus/venus_evchargerctl.sh --unix-socket /run/venus-evcharger-control.sock --token CONTROL-TOKEN command set-mode 1
+   ```
+
+   CLI exit codes:
+
+   - `0` successful `2xx` API response
+   - `1` API request failed or was rejected
+   - `2` local CLI usage error
+
 ## One-File Bootstrap Install
 
 `install.sh` supports a small bootstrap flow for GX deployments.

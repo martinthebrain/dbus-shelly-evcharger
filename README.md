@@ -202,6 +202,7 @@ DBus writes.
 Reference docs:
 
 - [API_OVERVIEW.md](API_OVERVIEW.md)
+- [API_OPERATOR_GUIDE.md](API_OPERATOR_GUIDE.md)
 - [CONTROL_API.md](CONTROL_API.md)
 - [STATE_API.md](STATE_API.md)
 - [API_VERSIONING.md](API_VERSIONING.md)
@@ -260,9 +261,21 @@ For direct HTTP usage, `curl` snippets, optimistic concurrency with `If-Match`,
 and a small Python example, see [CONTROL_API.md](CONTROL_API.md).
 <!-- END:README_LOCAL_HTTP_CONTROL_API_GETTING_STARTED -->
 
+On the installed Venus/GX target, use the deploy wrapper:
+
+- `./deploy/venus/venus_evchargerctl.sh health`
+- `./deploy/venus/venus_evchargerctl.sh --token READ-TOKEN state summary`
+- `./deploy/venus/venus_evchargerctl.sh --unix-socket /run/venus-evcharger-control.sock --token CONTROL-TOKEN command set-mode 1`
+
 API audit and idempotency metadata are intentionally runtime-only. Keep their
 paths on `/run/...` or `/tmp/...`; they are not meant for flash-backed storage.
 For process-local automation, prefer a unix socket over TCP when practical.
+
+`venus_evchargerctl` exit codes:
+
+- `0` success with `2xx` API response
+- `1` request reached the API but failed or was rejected
+- `2` CLI usage error
 
 For read-only local inspection, the same listener also exposes:
 

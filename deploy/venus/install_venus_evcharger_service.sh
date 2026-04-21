@@ -23,6 +23,7 @@ AUTO_INPUT_HELPER="$REPO_DIR/venus_evcharger_auto_input_helper.py"
 CONFIGURE_HELPER="$SCRIPT_DIR/configure_venus_evcharger_service.sh"
 RESTART_HELPER="$SCRIPT_DIR/restart_venus_evcharger_service.sh"
 UNINSTALL_HELPER="$SCRIPT_DIR/uninstall_venus_evcharger_service.sh"
+CONTROL_API_CLI_HELPER="$SCRIPT_DIR/venus_evchargerctl.sh"
 SOAK_HELPER="$REPO_DIR/scripts/ops/cerbo_soak_check.sh"
 RC_LOCAL_FILE=/data/rc.local
 
@@ -67,6 +68,11 @@ fi
 if [ -f "$UNINSTALL_HELPER" ]; then
     chmod a+x "$UNINSTALL_HELPER"
     chmod 744 "$UNINSTALL_HELPER"
+fi
+
+if [ -f "$CONTROL_API_CLI_HELPER" ]; then
+    chmod a+x "$CONTROL_API_CLI_HELPER"
+    chmod 755 "$CONTROL_API_CLI_HELPER"
 fi
 
 if [ -f "$SOAK_HELPER" ]; then

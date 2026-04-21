@@ -29,6 +29,14 @@ class _FakeClientForCliMainGuard:
 
 
 class TestVenusEvchargerControlCli(unittest.TestCase):
+    def test_exit_code_contract_is_explicit(self) -> None:
+        self.assertEqual(cli.EXIT_OK, 0)
+        self.assertEqual(cli.EXIT_REQUEST_FAILED, 1)
+        self.assertEqual(cli.EXIT_USAGE, 2)
+        self.assertEqual(cli._exit_code_for_status(200), 0)
+        self.assertEqual(cli._exit_code_for_status(202), 0)
+        self.assertEqual(cli._exit_code_for_status(409), 1)
+
     def test_parse_cli_value_covers_common_scalar_shapes(self) -> None:
         self.assertTrue(cli._parse_cli_value("true"))
         self.assertFalse(cli._parse_cli_value("off"))
@@ -79,8 +87,9 @@ class TestVenusEvchargerControlCli(unittest.TestCase):
 
         fake_parser = SimpleNamespace(parse_args=lambda _argv=None: SimpleNamespace(subcommand="unknown"))
         with patch.object(cli, "build_parser", return_value=fake_parser):
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(SystemExit) as exit_info:
                 cli.main([])
+        self.assertEqual(exit_info.exception.code, cli.EXIT_USAGE)
 
     def test_run_health_and_openapi_paths_are_covered(self) -> None:
         with patch.object(cli, "_client") as client_factory:

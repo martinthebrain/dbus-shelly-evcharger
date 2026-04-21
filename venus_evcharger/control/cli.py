@@ -10,6 +10,10 @@ from typing import Any, Sequence
 
 from venus_evcharger.control.client import LocalControlApiClient
 
+EXIT_OK = 0
+EXIT_REQUEST_FAILED = 1
+EXIT_USAGE = 2
+
 
 def _parse_cli_value(raw_value: str) -> Any:
     normalized = raw_value.strip()
@@ -103,25 +107,25 @@ def _write_json(value: Any, *, compact: bool) -> None:
 def _run_state(namespace: argparse.Namespace) -> int:
     response = _client(namespace).state(namespace.state_name)
     _write_json(response.json(), compact=namespace.compact)
-    return 0 if 200 <= response.status < 300 else 1
+    return _exit_code_for_status(response.status)
 
 
 def _run_capabilities(namespace: argparse.Namespace) -> int:
     response = _client(namespace).capabilities()
     _write_json(response.json(), compact=namespace.compact)
-    return 0 if 200 <= response.status < 300 else 1
+    return _exit_code_for_status(response.status)
 
 
 def _run_health(namespace: argparse.Namespace) -> int:
     response = _client(namespace).health()
     _write_json(response.json(), compact=namespace.compact)
-    return 0 if 200 <= response.status < 300 else 1
+    return _exit_code_for_status(response.status)
 
 
 def _run_openapi(namespace: argparse.Namespace) -> int:
     response = _client(namespace).openapi()
     _write_json(response.json(), compact=namespace.compact)
-    return 0 if 200 <= response.status < 300 else 1
+    return _exit_code_for_status(response.status)
 
 
 def _command_payload(namespace: argparse.Namespace) -> dict[str, Any]:
@@ -144,7 +148,7 @@ def _run_command(namespace: argparse.Namespace) -> int:
         if_match=namespace.if_match,
     )
     _write_json(response.json(), compact=namespace.compact)
-    return 0 if 200 <= response.status < 300 else 1
+    return _exit_code_for_status(response.status)
 
 
 def _event_request_kwargs(namespace: argparse.Namespace) -> dict[str, Any]:
@@ -169,7 +173,11 @@ def _write_event_response(response: Any, *, compact: bool) -> int:
         _write_stream_body(response.body)
     else:
         _write_json(response.ndjson(), compact=False)
-    return 0 if 200 <= response.status < 300 else 1
+    return _exit_code_for_status(response.status)
+
+
+def _exit_code_for_status(status: int) -> int:
+    return EXIT_OK if 200 <= status < 300 else EXIT_REQUEST_FAILED
 
 
 def _write_stream_body(body: str) -> None:
@@ -191,7 +199,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     handler = handlers.get(namespace.subcommand)
     if handler is None:
-        raise SystemExit(2)
+        raise SystemExit(EXIT_USAGE)
     return handler(namespace)
 
 

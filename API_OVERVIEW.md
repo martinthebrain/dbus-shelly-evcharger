@@ -38,6 +38,7 @@ mental model for new clients.
 See:
 
 - [CONTROL_API.md](CONTROL_API.md)
+- [API_OPERATOR_GUIDE.md](API_OPERATOR_GUIDE.md)
 
 ### State = snapshots
 
@@ -113,6 +114,7 @@ Practical local client entrypoints in this repository:
 
 - Python example: [examples/control_api_client.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/examples/control_api_client.py)
 - Small CLI: [venus_evchargerctl.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/venus_evchargerctl.py)
+- Target-system wrapper: [venus_evchargerctl.sh](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/deploy/venus/venus_evchargerctl.sh)
 
 Typical first commands:
 
@@ -123,3 +125,5 @@ Typical first commands:
 These sit on top of the same canonical command and state contract described in
 [CONTROL_API.md](CONTROL_API.md) and [STATE_API.md](STATE_API.md).
 <!-- END:API_OVERVIEW_CLIENT_STARTING_POINTS -->
+
+For day-to-day operator checks, use [API_OPERATOR_GUIDE.md](API_OPERATOR_GUIDE.md).
