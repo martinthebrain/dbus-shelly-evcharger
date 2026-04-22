@@ -131,6 +131,20 @@ def normalized_state_api_operational_state_fields(payload: Mapping[str, Any] | N
         "combined_battery_discharge_power_w": non_negative_float_or_none(raw.get("combined_battery_discharge_power_w")),
         "combined_battery_net_power_w": _optional_float(raw.get("combined_battery_net_power_w")),
         "combined_battery_ac_power_w": _optional_float(raw.get("combined_battery_ac_power_w")),
+        "combined_battery_pv_input_power_w": non_negative_float_or_none(raw.get("combined_battery_pv_input_power_w")),
+        "combined_battery_grid_interaction_w": _optional_float(raw.get("combined_battery_grid_interaction_w")),
+        "combined_battery_headroom_charge_w": non_negative_float_or_none(raw.get("combined_battery_headroom_charge_w")),
+        "combined_battery_headroom_discharge_w": non_negative_float_or_none(
+            raw.get("combined_battery_headroom_discharge_w")
+        ),
+        "expected_near_term_export_w": non_negative_float_or_none(raw.get("expected_near_term_export_w")),
+        "expected_near_term_import_w": non_negative_float_or_none(raw.get("expected_near_term_import_w")),
+        "combined_battery_average_confidence": non_negative_float_or_none(raw.get("combined_battery_average_confidence")),
+        "combined_battery_battery_source_count": non_negative_int(raw.get("combined_battery_battery_source_count")),
+        "combined_battery_hybrid_inverter_source_count": non_negative_int(
+            raw.get("combined_battery_hybrid_inverter_source_count")
+        ),
+        "combined_battery_inverter_source_count": non_negative_int(raw.get("combined_battery_inverter_source_count")),
         "combined_battery_learning_profile_count": non_negative_int(raw.get("combined_battery_learning_profile_count")),
         "combined_battery_observed_max_charge_power_w": non_negative_float_or_none(
             raw.get("combined_battery_observed_max_charge_power_w")
@@ -138,6 +152,51 @@ def normalized_state_api_operational_state_fields(payload: Mapping[str, Any] | N
         "combined_battery_observed_max_discharge_power_w": non_negative_float_or_none(
             raw.get("combined_battery_observed_max_discharge_power_w")
         ),
+        "combined_battery_observed_max_ac_power_w": non_negative_float_or_none(
+            raw.get("combined_battery_observed_max_ac_power_w")
+        ),
+        "combined_battery_observed_max_pv_input_power_w": non_negative_float_or_none(
+            raw.get("combined_battery_observed_max_pv_input_power_w")
+        ),
+        "combined_battery_observed_max_grid_import_w": non_negative_float_or_none(
+            raw.get("combined_battery_observed_max_grid_import_w")
+        ),
+        "combined_battery_observed_max_grid_export_w": non_negative_float_or_none(
+            raw.get("combined_battery_observed_max_grid_export_w")
+        ),
+        "combined_battery_average_active_charge_power_w": non_negative_float_or_none(
+            raw.get("combined_battery_average_active_charge_power_w")
+        ),
+        "combined_battery_average_active_discharge_power_w": non_negative_float_or_none(
+            raw.get("combined_battery_average_active_discharge_power_w")
+        ),
+        "combined_battery_average_active_power_delta_w": non_negative_float_or_none(
+            raw.get("combined_battery_average_active_power_delta_w")
+        ),
+        "combined_battery_power_smoothing_ratio": non_negative_float_or_none(
+            raw.get("combined_battery_power_smoothing_ratio")
+        ),
+        "combined_battery_typical_response_delay_seconds": non_negative_float_or_none(
+            raw.get("combined_battery_typical_response_delay_seconds")
+        ),
+        "combined_battery_support_bias": _optional_float(raw.get("combined_battery_support_bias")),
+        "combined_battery_day_support_bias": _optional_float(raw.get("combined_battery_day_support_bias")),
+        "combined_battery_night_support_bias": _optional_float(raw.get("combined_battery_night_support_bias")),
+        "combined_battery_import_support_bias": _optional_float(raw.get("combined_battery_import_support_bias")),
+        "combined_battery_export_bias": _optional_float(raw.get("combined_battery_export_bias")),
+        "combined_battery_battery_first_export_bias": _optional_float(
+            raw.get("combined_battery_battery_first_export_bias")
+        ),
+        "combined_battery_reserve_band_floor_soc": non_negative_float_or_none(
+            raw.get("combined_battery_reserve_band_floor_soc")
+        ),
+        "combined_battery_reserve_band_ceiling_soc": non_negative_float_or_none(
+            raw.get("combined_battery_reserve_band_ceiling_soc")
+        ),
+        "combined_battery_reserve_band_width_soc": non_negative_float_or_none(
+            raw.get("combined_battery_reserve_band_width_soc")
+        ),
+        "combined_battery_direction_change_count": non_negative_int(raw.get("combined_battery_direction_change_count")),
     }
 
 

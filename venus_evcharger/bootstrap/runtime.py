@@ -175,6 +175,9 @@ class _ServiceBootstrapRuntimeMixin(_ComposableControllerMixin):
         svc = self.service
         svc._start_io_worker()
         svc._start_control_api_server()
+        start_companion_bridge = getattr(svc, "_start_companion_dbus_bridge", None)
+        if callable(start_companion_bridge):
+            start_companion_bridge()
         logging.info(
             "Initialized Venus EV charger service pid=%s runtime_state=%s %s",
             os.getpid(),

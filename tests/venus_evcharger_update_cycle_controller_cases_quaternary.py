@@ -25,6 +25,7 @@ class TestUpdateCycleControllerQuaternary(UpdateCycleControllerTestBase):
             _last_switch_feedback_closed=True,
             _contactor_fault_counts={},
             _contactor_lockout_source="",
+            _publish_companion_dbus_bridge=MagicMock(),
         )
         controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
 
@@ -39,6 +40,8 @@ class TestUpdateCycleControllerQuaternary(UpdateCycleControllerTestBase):
 
         controller.complete_update_cycle(service, True, 201.0, False, 0.0, 0.0, 0, None, None, None)
         service._bump_update_index.assert_called_once_with(201.0)
+        self.assertEqual(service._publish_companion_dbus_bridge.call_count, 2)
+        service._publish_companion_dbus_bridge.assert_called_with(123.0)
 
         with patch.object(controller, "orchestrate_pending_phase_switch", return_value=(True, 2300.0, 10.0, True, None)), patch.object(
             controller,

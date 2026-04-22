@@ -87,9 +87,38 @@ Stable fields in `state` include:
 - `combined_battery_discharge_power_w`
 - `combined_battery_net_power_w`
 - `combined_battery_ac_power_w`
+- `combined_battery_pv_input_power_w`
+- `combined_battery_grid_interaction_w`
+- `combined_battery_headroom_charge_w`
+- `combined_battery_headroom_discharge_w`
+- `expected_near_term_export_w`
+- `expected_near_term_import_w`
+- `combined_battery_average_confidence`
+- `combined_battery_battery_source_count`
+- `combined_battery_hybrid_inverter_source_count`
+- `combined_battery_inverter_source_count`
 - `combined_battery_learning_profile_count`
 - `combined_battery_observed_max_charge_power_w`
 - `combined_battery_observed_max_discharge_power_w`
+- `combined_battery_observed_max_ac_power_w`
+- `combined_battery_observed_max_pv_input_power_w`
+- `combined_battery_observed_max_grid_import_w`
+- `combined_battery_observed_max_grid_export_w`
+- `combined_battery_average_active_charge_power_w`
+- `combined_battery_average_active_discharge_power_w`
+- `combined_battery_average_active_power_delta_w`
+- `combined_battery_power_smoothing_ratio`
+- `combined_battery_typical_response_delay_seconds`
+- `combined_battery_support_bias`
+- `combined_battery_day_support_bias`
+- `combined_battery_night_support_bias`
+- `combined_battery_import_support_bias`
+- `combined_battery_export_bias`
+- `combined_battery_battery_first_export_bias`
+- `combined_battery_reserve_band_floor_soc`
+- `combined_battery_reserve_band_ceiling_soc`
+- `combined_battery_reserve_band_width_soc`
+- `combined_battery_direction_change_count`
 
 These combined battery fields are populated from the normalized multi-source
 energy snapshot used by Auto mode. With `AutoEnergySources=...`, the service
@@ -108,19 +137,86 @@ combined result here for local tooling and troubleshooting.
 - `combined_battery_discharge_power_w` sums currently observed discharge power
 - `combined_battery_net_power_w` is the signed combined battery power
 - `combined_battery_ac_power_w` sums configured AC-side power visibility
+- `combined_battery_pv_input_power_w` sums configured PV-side visibility from
+  hybrid or inverter-like sources
+- `combined_battery_grid_interaction_w` sums known grid import/export influence
+  from external energy sources
+- `combined_battery_headroom_charge_w` is the conservative remaining charging
+  headroom derived from current charge activity plus learned observed maxima
+- `combined_battery_headroom_discharge_w` is the conservative remaining
+  discharge headroom derived from current discharge activity plus learned
+  observed maxima
+- `expected_near_term_export_w` is a small near-term export estimate derived
+  from current grid interaction, charge activity, bias, and learned response
+  delay
+- `expected_near_term_import_w` is a small near-term import estimate derived
+  from current grid interaction, discharge activity, bias, and learned
+  response delay
+- `combined_battery_average_confidence` is the mean confidence reported by the
+  current normalized sources
+- `combined_battery_battery_source_count`,
+  `combined_battery_hybrid_inverter_source_count`, and
+  `combined_battery_inverter_source_count` split the current source set by
+  role
 - `combined_battery_learning_profile_count` counts runtime learning profiles
   that currently contribute observed maxima
 - `combined_battery_observed_max_charge_power_w` and
   `combined_battery_observed_max_discharge_power_w` summarize the runtime-only
   learned maxima across sources
+- `combined_battery_observed_max_ac_power_w`,
+  `combined_battery_observed_max_pv_input_power_w`,
+  `combined_battery_observed_max_grid_import_w`, and
+  `combined_battery_observed_max_grid_export_w` summarize richer observed
+  extrema across the current learning profiles
+- `combined_battery_average_active_charge_power_w` and
+  `combined_battery_average_active_discharge_power_w` expose the learned mean
+  active charge/discharge levels
+- `combined_battery_average_active_power_delta_w` exposes the learned mean
+  active power change between comparable charge/discharge samples
+- `combined_battery_power_smoothing_ratio` turns that variance into a
+  normalized `0..1` smoothing score where higher values indicate steadier
+  battery behavior
+- `combined_battery_typical_response_delay_seconds` is the runtime-learned
+  delay from inactive to active battery response or between strong direction
+  changes
+- `combined_battery_support_bias`, `combined_battery_day_support_bias`,
+  `combined_battery_night_support_bias`,
+  `combined_battery_import_support_bias`, and
+  `combined_battery_export_bias` expose learned directional tendencies on a
+  `-1..1` scale, including the current day/night split
+- `combined_battery_battery_first_export_bias` distinguishes “battery absorbs
+  export first” from “export leaves immediately” on the same `-1..1` scale
+- `combined_battery_reserve_band_floor_soc`,
+  `combined_battery_reserve_band_ceiling_soc`, and
+  `combined_battery_reserve_band_width_soc` expose the currently learned
+  conservative SOC reserve band across the contributing sources
+- `combined_battery_direction_change_count` counts observed charge/discharge
+  reversals in the runtime learning window
 
 `GET /v1/state/runtime` also exposes the lower-level aggregation payload,
 including:
 
 - `combined_battery_usable_capacity_wh`
 - `combined_battery_valid_soc_source_count`
+- `combined_battery_headroom_charge_w`
+- `combined_battery_headroom_discharge_w`
+- `expected_near_term_export_w`
+- `expected_near_term_import_w`
 - `combined_battery_sources`
 - `combined_battery_learning_profiles`
+
+Each entry in `combined_battery_sources` may now also include:
+
+- `pv_input_power_w`
+- `grid_interaction_w`
+- `operating_mode`
+- `ac_output_power_w`
+
+These per-source entries are also the basis for the optional companion DBus
+bridge. When the companion bridge is enabled, normalized battery-like sources
+can be published as `com.victronenergy.battery.external.*` services and
+normalized inverter-like sources as `com.victronenergy.pvinverter.external.*`
+services without changing the main EV charger DBus identity.
 
 ### `GET /v1/state/dbus-diagnostics`
 
@@ -155,6 +251,7 @@ Typical fields include:
 - device identity
 - runtime paths
 - control API binding settings
+- companion bridge settings
 - backend selection
 - selected scheduled/Auto policy basics
 

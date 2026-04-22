@@ -167,6 +167,52 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
             "on",
         )
         svc.control_api_unix_socket_path = defaults.get("ControlApiUnixSocketPath", "").strip()
+        svc.companion_dbus_bridge_enabled = defaults.get("CompanionDbusBridgeEnabled", "0").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        svc.companion_battery_service_enabled = defaults.get("CompanionBatteryServiceEnabled", "1").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        svc.companion_pvinverter_service_enabled = defaults.get(
+            "CompanionPvInverterServiceEnabled",
+            "1",
+        ).strip().lower() in ("1", "true", "yes", "on")
+        svc.companion_source_services_enabled = defaults.get(
+            "CompanionSourceServicesEnabled",
+            "1",
+        ).strip().lower() in ("1", "true", "yes", "on")
+        svc.companion_battery_deviceinstance = int(_config_value(defaults, "CompanionBatteryDeviceInstance", svc.deviceinstance + 40))
+        svc.companion_pvinverter_deviceinstance = int(
+            _config_value(defaults, "CompanionPvInverterDeviceInstance", svc.deviceinstance + 41)
+        )
+        svc.companion_source_battery_deviceinstance_base = int(
+            _config_value(defaults, "CompanionSourceBatteryDeviceInstanceBase", svc.deviceinstance + 140)
+        )
+        svc.companion_source_pvinverter_deviceinstance_base = int(
+            _config_value(defaults, "CompanionSourcePvInverterDeviceInstanceBase", svc.deviceinstance + 240)
+        )
+        svc.companion_battery_service_name = defaults.get(
+            "CompanionBatteryServiceName",
+            f"com.victronenergy.battery.external_{svc.companion_battery_deviceinstance}",
+        ).strip()
+        svc.companion_pvinverter_service_name = defaults.get(
+            "CompanionPvInverterServiceName",
+            f"com.victronenergy.pvinverter.external_{svc.companion_pvinverter_deviceinstance}",
+        ).strip()
+        svc.companion_source_battery_service_prefix = defaults.get(
+            "CompanionSourceBatteryServicePrefix",
+            "com.victronenergy.battery.external",
+        ).strip()
+        svc.companion_source_pvinverter_service_prefix = defaults.get(
+            "CompanionSourcePvInverterServicePrefix",
+            "com.victronenergy.pvinverter.external",
+        ).strip()
         svc.control_api_listen_host = ""
         svc.control_api_listen_port = 0
         svc.control_api_bound_unix_socket_path = ""
@@ -198,6 +244,9 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
         svc.auto_battery_capacity_wh = float(_config_value(defaults, "AutoBatteryCapacityWh", 0))
         svc.auto_battery_power_path = defaults.get("AutoBatteryPowerPath", "").strip()
         svc.auto_battery_ac_power_path = defaults.get("AutoBatteryAcPowerPath", "").strip()
+        svc.auto_battery_pv_power_path = defaults.get("AutoBatteryPvPowerPath", "").strip()
+        svc.auto_battery_grid_interaction_path = defaults.get("AutoBatteryGridInteractionPath", "").strip()
+        svc.auto_battery_operating_mode_path = defaults.get("AutoBatteryOperatingModePath", "").strip()
         svc.auto_allow_without_battery_soc = defaults.get(
             "AutoAllowWithoutBatterySoc",
             "1",

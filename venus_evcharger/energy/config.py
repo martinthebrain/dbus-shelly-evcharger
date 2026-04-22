@@ -48,6 +48,9 @@ def _legacy_primary_source(defaults: Mapping[str, Any]) -> EnergySourceDefinitio
         usable_capacity_wh=_float_or_none(defaults.get("AutoBatteryCapacityWh")),
         battery_power_path=_text(defaults.get("AutoBatteryPowerPath")),
         ac_power_path=_text(defaults.get("AutoBatteryAcPowerPath")),
+        pv_power_path=_text(defaults.get("AutoBatteryPvPowerPath")),
+        grid_interaction_path=_text(defaults.get("AutoBatteryGridInteractionPath")),
+        operating_mode_path=_text(defaults.get("AutoBatteryOperatingModePath")),
     )
 
 
@@ -72,6 +75,9 @@ def _configured_source(defaults: Mapping[str, Any], source_id: str) -> EnergySou
         usable_capacity_wh=_float_or_none(defaults.get(f"{prefix}UsableCapacityWh")),
         battery_power_path=_text(defaults.get(f"{prefix}BatteryPowerPath")),
         ac_power_path=_text(defaults.get(f"{prefix}AcPowerPath")),
+        pv_power_path=_text(defaults.get(f"{prefix}PvPowerPath")),
+        grid_interaction_path=_text(defaults.get(f"{prefix}GridInteractionPath")),
+        operating_mode_path=_text(defaults.get(f"{prefix}OperatingModePath")),
     )
 
 

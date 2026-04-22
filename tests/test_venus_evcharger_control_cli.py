@@ -138,6 +138,23 @@ class TestVenusEvchargerControlCli(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["error"], "missing_state_token")
 
+    def test_response_payload_and_state_token_helpers_cover_non_dict_payloads(self) -> None:
+        list_response = SimpleNamespace(json=lambda: ["event"], headers={}, status=200)
+        self.assertEqual(cli._response_payload(list_response), {"value": ["event"]})
+
+        missing_token_response = ControlApiClientResponse(
+            status=200,
+            headers={},
+            body='{"state":{"state_token":1}}',
+        )
+        self.assertEqual(cli._state_token_from_response(missing_token_response), "")
+        self.assertEqual(
+            cli._state_token_from_response(
+                ControlApiClientResponse(status=200, headers={}, body='{"state":1}')
+            ),
+            "",
+        )
+
     def test_doctor_without_tokens_still_reports_health_and_skips_authenticated_checks(self) -> None:
         with started_control_api_server() as (_service, server):
             stdout = io.StringIO()
@@ -149,6 +166,36 @@ class TestVenusEvchargerControlCli(unittest.TestCase):
             self.assertEqual(payload["kind"], "doctor")
             self.assertEqual(payload["checks"][0]["name"], "health")
             self.assertGreaterEqual(payload["summary"]["skipped"], 1)
+
+    def test_doctor_safe_write_without_control_token_is_reported_as_skipped(self) -> None:
+        namespace = SimpleNamespace(
+            url="http://127.0.0.1:8765",
+            unix_socket="",
+            timeout=5.0,
+            token="",
+            read_token="read-token",
+            control_token="",
+            safe_write=True,
+            compact=False,
+        )
+        read_client = SimpleNamespace(
+            capabilities=lambda: ControlApiClientResponse(status=200, headers={}, body='{"ok":true,"kind":"capabilities"}'),
+            state=lambda name: ControlApiClientResponse(status=200, headers={}, body=json.dumps({"ok": True, "kind": name})),
+            events=lambda **_kwargs: ControlApiClientResponse(status=200, headers={}, body='{"kind":"command"}'),
+        )
+        health_client = SimpleNamespace(
+            health=lambda: ControlApiClientResponse(status=200, headers={}, body='{"ok":true,"kind":"health"}')
+        )
+
+        def _client_for_token(_namespace: object, token: str) -> object:
+            return health_client if not token else read_client
+
+        stdout = io.StringIO()
+        with patch.object(cli, "_client_for_token", side_effect=_client_for_token), redirect_stdout(stdout):
+            rc = cli._run_doctor(namespace)
+        self.assertEqual(rc, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertIn("safe write skipped: no control token provided", payload["skipped"])
 
     def test_cli_module_main_guard_runs(self) -> None:
         stdout = io.StringIO()

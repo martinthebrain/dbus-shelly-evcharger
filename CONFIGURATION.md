@@ -170,6 +170,9 @@ Main keys:
 - `AutoEnergySource.<id>.UsableCapacityWh`
 - `AutoEnergySource.<id>.BatteryPowerPath`
 - `AutoEnergySource.<id>.AcPowerPath`
+- `AutoEnergySource.<id>.PvPowerPath`
+- `AutoEnergySource.<id>.GridInteractionPath`
+- `AutoEnergySource.<id>.OperatingModePath`
 
 Roles:
 
@@ -191,6 +194,8 @@ Aggregation rules:
 - `effective_soc` falls back to one readable source SOC when no weighted
   aggregate can be formed
 - charge, discharge, net battery power, and AC power are summed across sources
+- optional PV input power and grid interaction values are also summed across
+  sources when configured
 - sources without usable capacity still contribute power visibility, but not a
   weighted `combined_soc`
 
@@ -218,9 +223,82 @@ Legacy single-source keys still work and remain the fallback when
 - `AutoBatteryService`
 - `AutoBatteryServicePrefix`
 - `AutoBatterySocPath`
+- `AutoBatteryPowerPath`
+- `AutoBatteryAcPowerPath`
+- `AutoBatteryPvPowerPath`
+- `AutoBatteryGridInteractionPath`
+- `AutoBatteryOperatingModePath`
+
+Additional per-source field meanings:
+
+- `BatteryPowerPath` is the signed battery-side power used to derive charge and
+  discharge activity
+- `AcPowerPath` is the visible AC-side output or throughput of the external
+  source
+- `PvPowerPath` is optional PV-side contribution for hybrid or inverter sources
+- `GridInteractionPath` is optional signed import/export influence of the
+  source against the grid
+- `OperatingModePath` is optional textual mode visibility such as
+  `self-consumption`, `support`, or vendor-specific operating states
+
+The richer energy model uses these fields both for operator-facing state and
+for runtime learning. In particular, the service now learns:
+
+- observed active charge/discharge levels
+- observed PV/grid extrema
+- response delay when an external source wakes up or flips direction
+- directional bias for import support vs charging and export charging vs
+  discharge
+- conservative charge/discharge headroom from learned maxima
+- small near-term import/export estimates from current grid interaction plus
+  learned response and bias metrics
 - `AutoBatteryCapacityWh`
 - `AutoBatteryPowerPath`
 - `AutoBatteryAcPowerPath`
+
+### Companion DBus Bridge
+
+When you want aggregated external energy visibility to start showing up as
+separate Venus-style services, you can enable the optional companion bridge.
+
+Main keys:
+
+- `CompanionDbusBridgeEnabled`
+- `CompanionBatteryServiceEnabled`
+- `CompanionPvInverterServiceEnabled`
+- `CompanionSourceServicesEnabled`
+- `CompanionBatteryDeviceInstance`
+- `CompanionPvInverterDeviceInstance`
+- `CompanionSourceBatteryDeviceInstanceBase`
+- `CompanionSourcePvInverterDeviceInstanceBase`
+- `CompanionBatteryServiceName`
+- `CompanionPvInverterServiceName`
+- `CompanionSourceBatteryServicePrefix`
+- `CompanionSourcePvInverterServicePrefix`
+
+Current scope:
+
+- one aggregated battery-like companion service
+- one aggregated PV-inverter-like companion service
+- optional per-source battery companion services for `battery` and
+  `hybrid-inverter` roles
+- optional per-source PV-inverter companion services for `hybrid-inverter` and
+  `inverter` roles
+- both stay separate from the EV charger service identity
+
+The aggregated services keep one stable Venus-style summary view. The per-source
+services mirror normalized entries from `battery_sources` and give the Venus
+GUI individual external devices to render without folding foreign-energy
+modeling into the main EV charger DBus service.
+
+Per-source naming/device-instance rules:
+
+- battery-like source services use `CompanionSourceBatteryServicePrefix`
+  plus a sanitized `source_id`
+- PV-like source services use `CompanionSourcePvInverterServicePrefix`
+  plus a sanitized `source_id`
+- source services allocate `DeviceInstance` values starting at the configured
+  `...Base` value in snapshot order
 
 Example: one Victron battery plus one external hybrid inverter:
 
@@ -240,6 +318,17 @@ AutoEnergySource.hybrid.SocPath=/Soc
 AutoEnergySource.hybrid.UsableCapacityWh=14000
 AutoEnergySource.hybrid.BatteryPowerPath=/Dc/0/Power
 AutoEnergySource.hybrid.AcPowerPath=/Ac/Power
+
+CompanionDbusBridgeEnabled=1
+CompanionBatteryServiceEnabled=1
+CompanionPvInverterServiceEnabled=1
+CompanionSourceServicesEnabled=1
+CompanionBatteryServiceName=com.victronenergy.battery.external_100
+CompanionPvInverterServiceName=com.victronenergy.pvinverter.external_101
+CompanionSourceBatteryServicePrefix=com.victronenergy.battery.external
+CompanionSourcePvInverterServicePrefix=com.victronenergy.pvinverter.external
+CompanionSourceBatteryDeviceInstanceBase=200
+CompanionSourcePvInverterDeviceInstanceBase=300
 ```
 
 Example: prefix-based discovery for a second source:

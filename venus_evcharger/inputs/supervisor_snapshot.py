@@ -20,6 +20,10 @@ class _AutoInputSupervisorSnapshotMixin:
         "battery_combined_discharge_power_w",
         "battery_combined_net_power_w",
         "battery_combined_ac_power_w",
+        "battery_headroom_charge_w",
+        "battery_headroom_discharge_w",
+        "expected_near_term_export_w",
+        "expected_near_term_import_w",
     )
     OPTIONAL_COUNT_FIELDS = (
         "battery_source_count",

@@ -154,6 +154,13 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
         self.assertIn("fault_reason=contactor-lockout-open", lockout_summary)
         self.assertIn("recovery=1", lockout_summary)
 
+    def test_energy_runtime_state_ignores_non_mapping_worker_snapshot(self) -> None:
+        service = SimpleNamespace(_get_worker_snapshot=lambda: ["not-a-mapping"])
+        state = ServiceStateController._energy_runtime_state(service)
+
+        self.assertEqual(state["combined_battery_soc"], None)
+        self.assertEqual(state["combined_battery_source_count"], 0)
+
     def test_runtime_override_load_and_validation_helpers_cover_error_paths(self) -> None:
         service = SimpleNamespace(
             _contactor_fault_counts={},

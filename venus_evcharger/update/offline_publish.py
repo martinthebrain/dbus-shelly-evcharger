@@ -89,6 +89,9 @@ class _UpdateCycleOfflineMixin:
         if changed:
             svc._bump_update_index(now)
         svc.last_update = svc._time_now()
+        publish_companion = getattr(svc, "_publish_companion_dbus_bridge", None)
+        if callable(publish_companion):
+            publish_companion(now)
         return True
 
     @staticmethod

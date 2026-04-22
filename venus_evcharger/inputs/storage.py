@@ -17,7 +17,9 @@ from venus_evcharger.energy import (
     EnergySourceDefinition,
     EnergySourceSnapshot,
     aggregate_energy_sources,
+    derive_energy_forecast,
     read_energy_source_snapshot,
+    summarize_energy_learning_profiles,
     update_energy_learning_profiles,
 )
 from venus_evcharger.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
@@ -37,6 +39,9 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
             usable_capacity_wh=getattr(self.service, "auto_battery_capacity_wh", None),
             battery_power_path=str(getattr(self.service, "auto_battery_power_path", "") or ""),
             ac_power_path=str(getattr(self.service, "auto_battery_ac_power_path", "") or ""),
+            pv_power_path=str(getattr(self.service, "auto_battery_pv_power_path", "") or ""),
+            grid_interaction_path=str(getattr(self.service, "auto_battery_grid_interaction_path", "") or ""),
+            operating_mode_path=str(getattr(self.service, "auto_battery_operating_mode_path", "") or ""),
         )
 
     def _battery_service_has_soc(self, service_name: str) -> bool:
@@ -61,6 +66,9 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
                 self._energy_service_has_readable_field(service_name, source.soc_path),
                 self._energy_service_has_readable_field(service_name, source.battery_power_path),
                 self._energy_service_has_readable_field(service_name, source.ac_power_path),
+                self._energy_service_has_readable_field(service_name, source.pv_power_path),
+                self._energy_service_has_readable_field(service_name, source.grid_interaction_path),
+                self._energy_service_has_readable_field(service_name, source.operating_mode_path),
             )
         )
 
@@ -173,12 +181,21 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
         value = self.service._get_dbus_value(service_name, path)
         return self._battery_soc_numeric(value)
 
+    def _read_optional_energy_text(self, service_name: str, path: str) -> str:
+        if not path:
+            return ""
+        value = self.service._get_dbus_value(service_name, path)
+        return "" if value is None else str(value).strip()
+
     def _dbus_energy_source_snapshot(self, source: EnergySourceDefinition, now: float) -> EnergySourceSnapshot:
         service_name = self._resolve_energy_source_service(source)
         try:
             soc_value = self._read_optional_energy_value(service_name, source.soc_path)
             net_battery_power = self._read_optional_energy_value(service_name, source.battery_power_path)
             ac_power = self._read_optional_energy_value(service_name, source.ac_power_path)
+            pv_input_power = self._read_optional_energy_value(service_name, source.pv_power_path)
+            grid_interaction = self._read_optional_energy_value(service_name, source.grid_interaction_path)
+            operating_mode = self._read_optional_energy_text(service_name, source.operating_mode_path)
         except Exception:
             if source.source_id != self._primary_energy_source().source_id:
                 raise
@@ -187,6 +204,9 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
             soc_value = self._read_optional_energy_value(service_name, source.soc_path)
             net_battery_power = self._read_optional_energy_value(service_name, source.battery_power_path)
             ac_power = self._read_optional_energy_value(service_name, source.ac_power_path)
+            pv_input_power = self._read_optional_energy_value(service_name, source.pv_power_path)
+            grid_interaction = self._read_optional_energy_value(service_name, source.grid_interaction_path)
+            operating_mode = self._read_optional_energy_text(service_name, source.operating_mode_path)
         if soc_value is not None and not 0.0 <= soc_value <= 100.0:
             soc_value = None
         return EnergySourceSnapshot(
@@ -197,6 +217,9 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
             usable_capacity_wh=source.usable_capacity_wh,
             net_battery_power_w=net_battery_power,
             ac_power_w=ac_power,
+            pv_input_power_w=pv_input_power,
+            grid_interaction_w=grid_interaction,
+            operating_mode=operating_mode,
             online=True,
             confidence=1.0,
             captured_at=now,
@@ -223,6 +246,17 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
                 cluster.sources,
                 now,
             )
+            learning_summary = summarize_energy_learning_profiles(
+                getattr(cache_owner, "_last_energy_learning_profiles", {})
+            )
+            forecast = derive_energy_forecast(
+                {
+                    "battery_combined_charge_power_w": cluster.combined_charge_power_w,
+                    "battery_combined_discharge_power_w": cluster.combined_discharge_power_w,
+                    "battery_combined_grid_interaction_w": cluster.combined_grid_interaction_w,
+                },
+                learning_summary,
+            )
             self._mark_source_recovery("battery", "Battery SOC readings recovered")
             battery_payload: dict[str, object] = {
                 "battery_soc": effective_soc,
@@ -232,9 +266,19 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
                 "battery_combined_discharge_power_w": cluster.combined_discharge_power_w,
                 "battery_combined_net_power_w": cluster.combined_net_battery_power_w,
                 "battery_combined_ac_power_w": cluster.combined_ac_power_w,
+                "battery_combined_pv_input_power_w": cluster.combined_pv_input_power_w,
+                "battery_combined_grid_interaction_w": cluster.combined_grid_interaction_w,
+                "battery_headroom_charge_w": forecast["battery_headroom_charge_w"],
+                "battery_headroom_discharge_w": forecast["battery_headroom_discharge_w"],
+                "expected_near_term_export_w": forecast["expected_near_term_export_w"],
+                "expected_near_term_import_w": forecast["expected_near_term_import_w"],
+                "battery_average_confidence": cluster.average_confidence,
                 "battery_source_count": cluster.source_count,
                 "battery_online_source_count": cluster.online_source_count,
                 "battery_valid_soc_source_count": cluster.valid_soc_source_count,
+                "battery_battery_source_count": cluster.battery_source_count,
+                "battery_hybrid_inverter_source_count": cluster.hybrid_inverter_source_count,
+                "battery_inverter_source_count": cluster.inverter_source_count,
                 "battery_sources": [source.as_dict() for source in cluster.sources],
                 "battery_learning_profiles": {
                     source_id: profile.as_dict()
@@ -264,9 +308,19 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
                 "battery_combined_discharge_power_w": None,
                 "battery_combined_net_power_w": None,
                 "battery_combined_ac_power_w": None,
+                "battery_combined_pv_input_power_w": None,
+                "battery_combined_grid_interaction_w": None,
+                "battery_headroom_charge_w": None,
+                "battery_headroom_discharge_w": None,
+                "expected_near_term_export_w": None,
+                "expected_near_term_import_w": None,
+                "battery_average_confidence": None,
                 "battery_source_count": 0,
                 "battery_online_source_count": 0,
                 "battery_valid_soc_source_count": 0,
+                "battery_battery_source_count": 0,
+                "battery_hybrid_inverter_source_count": 0,
+                "battery_inverter_source_count": 0,
                 "battery_sources": [],
                 "battery_learning_profiles": {},
             }

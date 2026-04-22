@@ -117,6 +117,9 @@ class AutoInputHelper(
         self.auto_battery_capacity_wh = float(self.config.get("AutoBatteryCapacityWh", 0) or 0)
         self.auto_battery_power_path = self.config.get("AutoBatteryPowerPath", "").strip()
         self.auto_battery_ac_power_path = self.config.get("AutoBatteryAcPowerPath", "").strip()
+        self.auto_battery_pv_power_path = self.config.get("AutoBatteryPvPowerPath", "").strip()
+        self.auto_battery_grid_interaction_path = self.config.get("AutoBatteryGridInteractionPath", "").strip()
+        self.auto_battery_operating_mode_path = self.config.get("AutoBatteryOperatingModePath", "").strip()
         self.auto_battery_service_prefix = self.config.get(
             "AutoBatteryServicePrefix",
             "com.victronenergy.battery",

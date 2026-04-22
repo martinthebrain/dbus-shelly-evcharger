@@ -155,6 +155,68 @@ class TestAutoInputSupervisorValidation(unittest.TestCase):
         self.assertIsNone(normalized["pv_power"])
         service._warning_throttled.assert_not_called()
 
+    def test_validate_snapshot_dict_normalizes_structured_energy_fields_and_rejects_invalid_payloads(self):
+        service = SimpleNamespace(auto_input_helper_restart_seconds=5.0, _warning_throttled=MagicMock())
+        controller = AutoInputSupervisor(service)
+        base_snapshot = {
+            "snapshot_version": AutoInputSupervisor.SNAPSHOT_SCHEMA_VERSION,
+            "captured_at": 100.0,
+            "heartbeat_at": 100.0,
+            "pv_captured_at": 100.0,
+            "pv_power": 2300.0,
+            "battery_captured_at": 100.0,
+            "battery_soc": 57.0,
+            "grid_captured_at": 100.0,
+            "grid_power": -2100.0,
+            "battery_source_count": 2,
+            "battery_online_source_count": 2,
+            "battery_valid_soc_source_count": 1,
+            "battery_sources": [{"source_id": "victron"}],
+            "battery_learning_profiles": {"victron": {"sample_count": 1}},
+            "battery_combined_soc": 58.0,
+            "battery_headroom_charge_w": 300.0,
+            "expected_near_term_export_w": 120.0,
+        }
+
+        normalized = controller._validate_snapshot_dict("/tmp/auto.json", base_snapshot)
+        self.assertEqual(normalized["battery_sources"], [{"source_id": "victron"}])
+        self.assertEqual(normalized["battery_learning_profiles"], {"victron": {"sample_count": 1}})
+
+        service._warning_throttled.reset_mock()
+        self.assertIsNone(controller._validate_snapshot_dict("/tmp/auto.json", dict(base_snapshot, battery_source_count=True)))
+        service._warning_throttled.reset_mock()
+        self.assertIsNone(controller._validate_snapshot_dict("/tmp/auto.json", dict(base_snapshot, battery_sources="bad")))
+        service._warning_throttled.reset_mock()
+        self.assertIsNone(
+            controller._validate_snapshot_dict("/tmp/auto.json", dict(base_snapshot, battery_learning_profiles="bad"))
+        )
+
+    def test_validate_snapshot_dict_rejects_invalid_combined_soc_optional_numeric_and_count_types(self):
+        service = SimpleNamespace(auto_input_helper_restart_seconds=5.0, _warning_throttled=MagicMock())
+        controller = AutoInputSupervisor(service)
+        base_snapshot = {
+            "snapshot_version": AutoInputSupervisor.SNAPSHOT_SCHEMA_VERSION,
+            "captured_at": 100.0,
+            "heartbeat_at": 100.0,
+            "pv_captured_at": 100.0,
+            "pv_power": 2300.0,
+            "battery_captured_at": 100.0,
+            "battery_soc": 57.0,
+            "grid_captured_at": 100.0,
+            "grid_power": -2100.0,
+            "battery_combined_soc": 58.0,
+            "battery_headroom_charge_w": 300.0,
+            "battery_source_count": 2,
+        }
+
+        self.assertIsNone(controller._validate_snapshot_dict("/tmp/auto.json", dict(base_snapshot, battery_combined_soc=150.0)))
+        service._warning_throttled.reset_mock()
+        self.assertIsNone(
+            controller._validate_snapshot_dict("/tmp/auto.json", dict(base_snapshot, battery_headroom_charge_w="bad"))
+        )
+        service._warning_throttled.reset_mock()
+        self.assertIsNone(controller._validate_snapshot_dict("/tmp/auto.json", dict(base_snapshot, battery_source_count="bad")))
+
     def test_refresh_snapshot_rejects_future_snapshot_and_source_timestamps(self):
         service = SimpleNamespace(
             _ensure_worker_state=MagicMock(),

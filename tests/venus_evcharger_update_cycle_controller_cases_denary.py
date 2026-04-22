@@ -62,6 +62,7 @@ class TestUpdateCycleControllerDenary(UpdateCycleControllerTestBase):
             _publish_dbus_path=MagicMock(return_value=False),
             _save_runtime_state=MagicMock(),
             _ensure_observability_state=MagicMock(),
+            _publish_companion_dbus_bridge=MagicMock(),
             _mode_uses_auto_logic=lambda mode: int(mode) in (1, 2),
             _last_health_reason="init",
             _last_health_code=0,
@@ -89,6 +90,7 @@ class TestUpdateCycleControllerDenary(UpdateCycleControllerTestBase):
                 "L3": {"power": 0.0, "voltage": 230.0, "current": 0.0},
             },
         )
+        service._publish_companion_dbus_bridge.assert_called_once_with(200.0)
 
     def test_cached_input_from_service_rejects_future_cached_timestamp(self):
         service = SimpleNamespace(_last_pv_value=2400.0, _last_pv_at=102.5)

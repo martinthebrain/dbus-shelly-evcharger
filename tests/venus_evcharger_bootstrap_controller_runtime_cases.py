@@ -149,6 +149,43 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
         service = SimpleNamespace(
             _start_io_worker=MagicMock(),
             _start_control_api_server=MagicMock(),
+            _start_companion_dbus_bridge=MagicMock(),
+            runtime_state_path="/run/state.json",
+            _state_summary=MagicMock(return_value="mode=1"),
+            poll_interval_ms=1000,
+            sign_of_life_minutes=10,
+            _update=MagicMock(),
+            _sign_of_life=MagicMock(),
+        )
+        controller = ServiceBootstrapController(
+            service,
+            normalize_phase_func=lambda value: value,
+            normalize_mode_func=lambda value: int(value),
+            mode_uses_auto_logic_func=lambda mode: int(mode) in (1, 2),
+            month_window_func=lambda *_args, **_kwargs: ((8, 0), (18, 0)),
+            age_seconds_func=lambda *_args, **_kwargs: 0,
+            health_code_func=lambda reason: {"init": 0}.get(reason, 99),
+            phase_values_func=lambda *_args, **_kwargs: {},
+            read_version_func=lambda _name: "1.0",
+            gobject_module=gobject_module,
+            script_path="/tmp/venus_evcharger_service.py",
+            formatters={"kwh": None, "a": None, "w": None, "v": None, "status": None},
+        )
+
+        controller.start_runtime_loops()
+
+        service._start_io_worker.assert_called_once_with()
+        service._start_control_api_server.assert_called_once_with()
+        service._start_companion_dbus_bridge.assert_called_once_with()
+        gobject_module.timeout_add.assert_any_call(1000, service._update)
+        gobject_module.timeout_add.assert_any_call(600000, service._sign_of_life)
+
+    def test_start_runtime_loops_skips_companion_bridge_when_hook_is_not_callable(self):
+        gobject_module = MagicMock()
+        service = SimpleNamespace(
+            _start_io_worker=MagicMock(),
+            _start_control_api_server=MagicMock(),
+            _start_companion_dbus_bridge=None,
             runtime_state_path="/run/state.json",
             _state_summary=MagicMock(return_value="mode=1"),
             poll_interval_ms=1000,
@@ -176,7 +213,6 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
         service._start_io_worker.assert_called_once_with()
         service._start_control_api_server.assert_called_once_with()
         gobject_module.timeout_add.assert_any_call(1000, service._update)
-        gobject_module.timeout_add.assert_any_call(600000, service._sign_of_life)
 
     def test_initialize_dbus_service_uses_device_instance_in_name(self):
         service = SimpleNamespace(service_name="com.victronenergy.evcharger", deviceinstance=60)

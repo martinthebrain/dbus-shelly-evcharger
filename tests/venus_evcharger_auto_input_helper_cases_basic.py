@@ -211,6 +211,13 @@ class TestShellyWallboxAutoInputHelperBasic(AutoInputHelperTestCase):
         self.assertIsNone(helper._resolved_auto_battery_service)
         self.assertEqual(helper._auto_battery_last_scan, 0.0)
 
+    def test_configured_auto_battery_service_returns_none_when_read_raises(self):
+        helper = self._make_helper()
+        helper.auto_battery_service = "configured-battery"
+        helper._get_dbus_value = MagicMock(side_effect=RuntimeError("offline"))
+
+        self.assertIsNone(helper._configured_auto_battery_service(100.0))
+
     def test_parent_alive_uses_parent_pid_and_handles_errors(self):
         helper = self._make_helper()
         helper.parent_pid = 1234
@@ -250,6 +257,41 @@ class TestShellyWallboxAutoInputHelperBasic(AutoInputHelperTestCase):
         helper._set_source_value("unknown", 1.0, 101.0)
         self.assertEqual(helper._last_snapshot_state, previous_state)
         helper._write_snapshot.assert_not_called()
+
+    def test_set_source_value_applies_structured_battery_snapshot_payload(self):
+        helper = self._make_helper()
+        helper._write_snapshot = MagicMock()
+
+        helper._set_source_value(
+            "battery",
+            {
+                "battery_soc": 56.0,
+                "battery_combined_soc": 58.0,
+                "battery_combined_usable_capacity_wh": 9000.0,
+                "battery_combined_charge_power_w": 700.0,
+                "battery_combined_discharge_power_w": 0.0,
+                "battery_combined_net_power_w": -700.0,
+                "battery_combined_ac_power_w": 1500.0,
+                "battery_headroom_charge_w": 300.0,
+                "battery_headroom_discharge_w": 1100.0,
+                "expected_near_term_export_w": 120.0,
+                "expected_near_term_import_w": 0.0,
+                "battery_source_count": 2,
+                "battery_online_source_count": 2,
+                "battery_valid_soc_source_count": 2,
+                "battery_sources": [{"source_id": "victron"}],
+                "battery_learning_profiles": {"victron": {"sample_count": 1}},
+            },
+            99.5,
+        )
+
+        self.assertEqual(helper._last_snapshot_state["battery_soc"], 56.0)
+        self.assertEqual(helper._last_snapshot_state["battery_combined_soc"], 58.0)
+        self.assertEqual(helper._last_snapshot_state["battery_headroom_charge_w"], 300.0)
+        self.assertEqual(helper._last_snapshot_state["expected_near_term_export_w"], 120.0)
+        self.assertEqual(helper._last_snapshot_state["battery_sources"], [{"source_id": "victron"}])
+        self.assertEqual(helper._last_snapshot_state["battery_learning_profiles"], {"victron": {"sample_count": 1}})
+        self.assertEqual(helper._last_snapshot_state["battery_captured_at"], 99.5)
 
     def test_heartbeat_updates_only_helper_liveness_not_source_timestamps(self):
         helper = self._make_helper()

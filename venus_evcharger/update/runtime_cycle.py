@@ -30,6 +30,9 @@ class _UpdateCycleRuntimeMixin:
         svc._last_successful_update_at = completed_at
         svc._last_recovery_attempt_at = None
         svc.last_update = completed_at
+        publish_companion = getattr(svc, "_publish_companion_dbus_bridge", None)
+        if callable(publish_companion):
+            publish_companion(completed_at)
         logging.debug(
             "Wallbox relay=%s power=%sW current=%sA status=%s pv=%sW soc=%s%% grid=%sW mode=%s",
             relay_on,

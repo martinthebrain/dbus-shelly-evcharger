@@ -124,3 +124,15 @@ class StatePublishMixin(ServiceControllerFactoryMixin):
     def _publish_diagnostic_paths(self, now: float) -> bool:
         self._ensure_dbus_publisher()
         return cast(bool, self._dbus_publisher.publish_diagnostic_paths(now))
+
+    def _start_companion_dbus_bridge(self) -> None:
+        self._ensure_companion_dbus_bridge()
+        self._companion_dbus_bridge.start()
+
+    def _stop_companion_dbus_bridge(self) -> None:
+        self._ensure_companion_dbus_bridge()
+        self._companion_dbus_bridge.stop()
+
+    def _publish_companion_dbus_bridge(self, now: float | None = None) -> bool:
+        self._ensure_companion_dbus_bridge()
+        return cast(bool, self._companion_dbus_bridge.publish(now))

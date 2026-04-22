@@ -229,9 +229,15 @@ class _UpdateCycleInputCacheMixin:
             "battery_combined_discharge_power_w": combined_discharge_power,
             "battery_combined_net_power_w": combined_net_power,
             "battery_combined_ac_power_w": combined_ac_power,
+            "battery_combined_pv_input_power_w": worker_snapshot.get("battery_combined_pv_input_power_w"),
+            "battery_combined_grid_interaction_w": worker_snapshot.get("battery_combined_grid_interaction_w"),
+            "battery_average_confidence": worker_snapshot.get("battery_average_confidence"),
             "battery_source_count": worker_snapshot.get("battery_source_count", 0),
             "battery_online_source_count": worker_snapshot.get("battery_online_source_count", 0),
             "battery_valid_soc_source_count": worker_snapshot.get("battery_valid_soc_source_count", 0),
+            "battery_battery_source_count": worker_snapshot.get("battery_battery_source_count", 0),
+            "battery_hybrid_inverter_source_count": worker_snapshot.get("battery_hybrid_inverter_source_count", 0),
+            "battery_inverter_source_count": worker_snapshot.get("battery_inverter_source_count", 0),
             "battery_sources": list(worker_snapshot.get("battery_sources", []) or []),
         }
         raw_learning_profiles = worker_snapshot.get("battery_learning_profiles", {})

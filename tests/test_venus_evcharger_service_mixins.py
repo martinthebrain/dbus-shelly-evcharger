@@ -75,10 +75,59 @@ class _ControlService(ControlApiMixin):
             "battery_combined_discharge_power_w": 1200.0,
             "battery_combined_net_power_w": 400.0,
             "battery_combined_ac_power_w": 1800.0,
+            "battery_combined_pv_input_power_w": 2600.0,
+            "battery_combined_grid_interaction_w": -350.0,
+            "battery_headroom_charge_w": 900.0,
+            "battery_headroom_discharge_w": 1100.0,
+            "expected_near_term_export_w": 425.0,
+            "expected_near_term_import_w": 50.0,
+            "battery_average_confidence": 0.75,
+            "battery_battery_source_count": 1,
+            "battery_hybrid_inverter_source_count": 1,
+            "battery_inverter_source_count": 0,
             "battery_sources": [{"source_id": "victron"}, {"source_id": "hybrid"}],
             "battery_learning_profiles": {
-                "victron": {"sample_count": 2, "observed_max_charge_power_w": 700.0},
-                "hybrid": {"sample_count": 3, "observed_max_discharge_power_w": 1400.0},
+                "victron": {
+                    "sample_count": 2,
+                    "charge_sample_count": 1,
+                    "discharge_sample_count": 1,
+                    "observed_max_charge_power_w": 700.0,
+                    "observed_max_grid_import_w": 400.0,
+                    "average_active_charge_power_w": 700.0,
+                    "average_active_discharge_power_w": 900.0,
+                    "average_active_power_delta_w": 100.0,
+                    "typical_response_delay_seconds": 4.0,
+                    "import_support_sample_count": 1,
+                    "export_discharge_sample_count": 1,
+                    "day_charge_sample_count": 1,
+                    "night_discharge_sample_count": 1,
+                    "smoothing_sample_count": 1,
+                    "observed_min_discharge_soc": 35.0,
+                    "observed_max_charge_soc": 85.0,
+                    "direction_change_count": 1,
+                },
+                "hybrid": {
+                    "sample_count": 3,
+                    "charge_sample_count": 2,
+                    "discharge_sample_count": 1,
+                    "observed_max_discharge_power_w": 1400.0,
+                    "observed_max_ac_power_w": 2000.0,
+                    "observed_max_pv_input_power_w": 2600.0,
+                    "observed_max_grid_export_w": 600.0,
+                    "average_active_charge_power_w": 500.0,
+                    "average_active_discharge_power_w": 1400.0,
+                    "average_active_power_delta_w": 200.0,
+                    "typical_response_delay_seconds": 8.0,
+                    "export_charge_sample_count": 2,
+                    "export_idle_sample_count": 1,
+                    "day_charge_sample_count": 1,
+                    "day_discharge_sample_count": 1,
+                    "night_charge_sample_count": 1,
+                    "smoothing_sample_count": 2,
+                    "observed_min_discharge_soc": 45.0,
+                    "observed_max_charge_soc": 90.0,
+                    "direction_change_count": 2,
+                },
             },
         }
 
@@ -249,6 +298,18 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service.control_api_rate_limit_max_requests = 15
         service.control_api_rate_limit_window_seconds = 7.5
         service.control_api_critical_cooldown_seconds = 3.0
+        service.companion_dbus_bridge_enabled = True
+        service.companion_battery_service_enabled = True
+        service.companion_pvinverter_service_enabled = True
+        service.companion_source_services_enabled = True
+        service.companion_battery_deviceinstance = 100
+        service.companion_pvinverter_deviceinstance = 101
+        service.companion_source_battery_deviceinstance_base = 200
+        service.companion_source_pvinverter_deviceinstance_base = 300
+        service.companion_battery_service_name = "com.victronenergy.battery.external_100"
+        service.companion_pvinverter_service_name = "com.victronenergy.pvinverter.external_101"
+        service.companion_source_battery_service_prefix = "com.victronenergy.battery.external"
+        service.companion_source_pvinverter_service_prefix = "com.victronenergy.pvinverter.external"
         service.control_api_auth_token = "secret"
         service.product_name = "Venus EV Charger Service"
         service.service_name = "com.victronenergy.evcharger"
@@ -310,9 +371,38 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         self.assertEqual(operational["state"]["combined_battery_discharge_power_w"], 1200.0)
         self.assertEqual(operational["state"]["combined_battery_net_power_w"], 400.0)
         self.assertEqual(operational["state"]["combined_battery_ac_power_w"], 1800.0)
+        self.assertEqual(operational["state"]["combined_battery_pv_input_power_w"], 2600.0)
+        self.assertEqual(operational["state"]["combined_battery_grid_interaction_w"], -350.0)
+        self.assertEqual(operational["state"]["combined_battery_headroom_charge_w"], 900.0)
+        self.assertEqual(operational["state"]["combined_battery_headroom_discharge_w"], 1100.0)
+        self.assertEqual(operational["state"]["expected_near_term_export_w"], 425.0)
+        self.assertEqual(operational["state"]["expected_near_term_import_w"], 50.0)
+        self.assertEqual(operational["state"]["combined_battery_average_confidence"], 0.75)
+        self.assertEqual(operational["state"]["combined_battery_battery_source_count"], 1)
+        self.assertEqual(operational["state"]["combined_battery_hybrid_inverter_source_count"], 1)
+        self.assertEqual(operational["state"]["combined_battery_inverter_source_count"], 0)
         self.assertEqual(operational["state"]["combined_battery_learning_profile_count"], 2)
         self.assertEqual(operational["state"]["combined_battery_observed_max_charge_power_w"], 700.0)
         self.assertEqual(operational["state"]["combined_battery_observed_max_discharge_power_w"], 1400.0)
+        self.assertEqual(operational["state"]["combined_battery_observed_max_ac_power_w"], 2000.0)
+        self.assertEqual(operational["state"]["combined_battery_observed_max_pv_input_power_w"], 2600.0)
+        self.assertEqual(operational["state"]["combined_battery_observed_max_grid_import_w"], 400.0)
+        self.assertEqual(operational["state"]["combined_battery_observed_max_grid_export_w"], 600.0)
+        self.assertEqual(operational["state"]["combined_battery_average_active_charge_power_w"], 566.6666666666666)
+        self.assertEqual(operational["state"]["combined_battery_average_active_discharge_power_w"], 1150.0)
+        self.assertAlmostEqual(operational["state"]["combined_battery_average_active_power_delta_w"], 166.66666666666666)
+        self.assertAlmostEqual(operational["state"]["combined_battery_power_smoothing_ratio"], 0.8179824561403508)
+        self.assertEqual(operational["state"]["combined_battery_typical_response_delay_seconds"], 6.0)
+        self.assertAlmostEqual(operational["state"]["combined_battery_support_bias"], -0.2)
+        self.assertAlmostEqual(operational["state"]["combined_battery_day_support_bias"], -1.0 / 3.0)
+        self.assertEqual(operational["state"]["combined_battery_night_support_bias"], 0.0)
+        self.assertEqual(operational["state"]["combined_battery_import_support_bias"], 1.0)
+        self.assertAlmostEqual(operational["state"]["combined_battery_export_bias"], 1.0 / 3.0)
+        self.assertEqual(operational["state"]["combined_battery_battery_first_export_bias"], 0.0)
+        self.assertEqual(operational["state"]["combined_battery_reserve_band_floor_soc"], 45.0)
+        self.assertEqual(operational["state"]["combined_battery_reserve_band_ceiling_soc"], 85.0)
+        self.assertEqual(operational["state"]["combined_battery_reserve_band_width_soc"], 40.0)
+        self.assertEqual(operational["state"]["combined_battery_direction_change_count"], 3)
         self.assertEqual(diagnostics["kind"], "dbus-diagnostics")
         self.assertEqual(diagnostics["state"]["/Auto/State"], "charging")
         self.assertEqual(diagnostics["state"]["/Auto/LastShellyReadAge"], 0.2)
@@ -326,6 +416,18 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         self.assertEqual(config_effective["state"]["control_api_rate_limit_max_requests"], 15)
         self.assertEqual(config_effective["state"]["control_api_rate_limit_window_seconds"], 7.5)
         self.assertEqual(config_effective["state"]["control_api_critical_cooldown_seconds"], 3.0)
+        self.assertTrue(config_effective["state"]["companion_dbus_bridge_enabled"])
+        self.assertTrue(config_effective["state"]["companion_source_services_enabled"])
+        self.assertEqual(config_effective["state"]["companion_battery_deviceinstance"], 100)
+        self.assertEqual(config_effective["state"]["companion_source_battery_deviceinstance_base"], 200)
+        self.assertEqual(
+            config_effective["state"]["companion_pvinverter_service_name"],
+            "com.victronenergy.pvinverter.external_101",
+        )
+        self.assertEqual(
+            config_effective["state"]["companion_source_pvinverter_service_prefix"],
+            "com.victronenergy.pvinverter.external",
+        )
         self.assertEqual(health["kind"], "health")
         self.assertEqual(health["state"]["command_audit_entries"], 0)
         self.assertEqual(health["state"]["command_audit_path"], "/run/control-audit.jsonl")
@@ -522,6 +624,7 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service = _StateService()
         service._state_controller = MagicMock()
         service._dbus_publisher = MagicMock()
+        service._companion_dbus_bridge = MagicMock()
 
         service._state_summary()
         service._current_runtime_state()
@@ -538,6 +641,9 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service._publish_energy_time_measurements(1.2, {"L1": 1.2}, 10, 0.3, 100.0)
         service._publish_config_paths(1, 100.0)
         service._publish_diagnostic_paths(100.0)
+        service._start_companion_dbus_bridge()
+        service._publish_companion_dbus_bridge(100.0)
+        service._stop_companion_dbus_bridge()
 
         state = service._state_controller
         state.state_summary.assert_called_once_with()
@@ -556,6 +662,9 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         publisher.publish_energy_time_measurements.assert_called_once_with(1.2, {"L1": 1.2}, 10, 0.3, 100.0)
         publisher.publish_config_paths.assert_called_once_with(1, 100.0)
         publisher.publish_diagnostic_paths.assert_called_once_with(100.0)
+        service._companion_dbus_bridge.start.assert_called_once_with()
+        service._companion_dbus_bridge.publish.assert_called_once_with(100.0)
+        service._companion_dbus_bridge.stop.assert_called_once_with()
         self.assertTrue(service._config_path().endswith("/config.venus_evcharger.ini"))
         self.assertEqual(service._coerce_runtime_int("7"), 7)
         self.assertEqual(service._coerce_runtime_float("1.5"), 1.5)
@@ -578,6 +687,7 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service._dbus_input_controller = existing
         service._bootstrap_controller = existing
         service._update_controller = existing
+        service._companion_dbus_bridge = existing
 
         service._ensure_dbus_publisher()
         service._ensure_auto_controller()
@@ -589,6 +699,7 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service._ensure_dbus_input_controller()
         service._ensure_bootstrap_controller()
         service._ensure_update_controller()
+        service._ensure_companion_dbus_bridge()
 
         self.assertIs(service._dbus_publisher, existing)
         self.assertIs(service._auto_controller, existing)
@@ -600,6 +711,17 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         self.assertIs(service._dbus_input_controller, existing)
         self.assertIs(service._bootstrap_controller, existing)
         self.assertIs(service._update_controller, existing)
+        self.assertIs(service._companion_dbus_bridge, existing)
+
+    def test_service_controller_factory_creates_companion_bridge_once(self):
+        service = _FactoryService()
+
+        with patch("venus_evcharger.service.factory.EnergyCompanionDbusBridge", return_value="bridge") as factory:
+            service._ensure_companion_dbus_bridge()
+            service._ensure_companion_dbus_bridge()
+
+        factory.assert_called_once_with(service, "")
+        self.assertEqual(service._companion_dbus_bridge, "bridge")
 
     def test_auto_logic_mixin_delegates_and_exposes_static_helpers(self):
         service = _AutoService()

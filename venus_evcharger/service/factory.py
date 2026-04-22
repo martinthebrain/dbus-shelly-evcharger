@@ -10,6 +10,7 @@ from venus_evcharger.bootstrap.controller import ServiceBootstrapController
 from venus_evcharger.backend.shelly_io import ShellyIoController
 from venus_evcharger.update.controller import UpdateCycleController
 from venus_evcharger.controllers.auto import AutoDecisionController
+from venus_evcharger.companion import EnergyCompanionDbusBridge
 from venus_evcharger.controllers.state import ServiceStateController
 from venus_evcharger.inputs.dbus import DbusInputController
 from venus_evcharger.inputs.supervisor import AutoInputSupervisor
@@ -46,6 +47,7 @@ class ServiceControllerFactoryMixin:
     _dbus_input_controller: Any = None
     _bootstrap_controller: Any = None
     _update_controller: Any = None
+    _companion_dbus_bridge: Any = None
 
     def _ensure_dbus_publisher(self) -> None:
         if not hasattr(self, "_dbus_publisher") or self._dbus_publisher is None:
@@ -107,3 +109,7 @@ class ServiceControllerFactoryMixin:
                 self._phase_values_func,
                 self._health_code_func,
             )
+
+    def _ensure_companion_dbus_bridge(self) -> None:
+        if not hasattr(self, "_companion_dbus_bridge") or self._companion_dbus_bridge is None:
+            self._companion_dbus_bridge = EnergyCompanionDbusBridge(self, self._script_path_value)

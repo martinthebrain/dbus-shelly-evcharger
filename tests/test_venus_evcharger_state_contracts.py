@@ -93,6 +93,18 @@ class TestVenusEvchargerStateContracts(unittest.TestCase):
                 "software_update_no_update_active": 1,
                 "runtime_overrides_active": 1,
                 "runtime_overrides_path": " /run/x.ini ",
+                "combined_battery_headroom_charge_w": "1200",
+                "combined_battery_headroom_discharge_w": "1800",
+                "expected_near_term_export_w": "425",
+                "expected_near_term_import_w": "50",
+                "combined_battery_average_active_power_delta_w": "120",
+                "combined_battery_power_smoothing_ratio": "0.8",
+                "combined_battery_day_support_bias": -0.4,
+                "combined_battery_night_support_bias": 0.6,
+                "combined_battery_battery_first_export_bias": 0.2,
+                "combined_battery_reserve_band_floor_soc": "35",
+                "combined_battery_reserve_band_ceiling_soc": "85",
+                "combined_battery_reserve_band_width_soc": "50",
             }
         )
         self.assertEqual(state["mode"], 2)
@@ -107,6 +119,18 @@ class TestVenusEvchargerStateContracts(unittest.TestCase):
         self.assertEqual(state["software_update_state"], "available-blocked")
         self.assertEqual(state["software_update_state_code"], 4)
         self.assertEqual(state["runtime_overrides_path"], "/run/x.ini")
+        self.assertEqual(state["combined_battery_headroom_charge_w"], 1200.0)
+        self.assertEqual(state["combined_battery_headroom_discharge_w"], 1800.0)
+        self.assertEqual(state["expected_near_term_export_w"], 425.0)
+        self.assertEqual(state["expected_near_term_import_w"], 50.0)
+        self.assertEqual(state["combined_battery_average_active_power_delta_w"], 120.0)
+        self.assertEqual(state["combined_battery_power_smoothing_ratio"], 0.8)
+        self.assertEqual(state["combined_battery_day_support_bias"], -0.4)
+        self.assertEqual(state["combined_battery_night_support_bias"], 0.6)
+        self.assertEqual(state["combined_battery_battery_first_export_bias"], 0.2)
+        self.assertEqual(state["combined_battery_reserve_band_floor_soc"], 35.0)
+        self.assertEqual(state["combined_battery_reserve_band_ceiling_soc"], 85.0)
+        self.assertEqual(state["combined_battery_reserve_band_width_soc"], 50.0)
 
     def test_operational_envelope_wraps_normalized_state(self) -> None:
         payload = normalized_state_api_operational_fields(

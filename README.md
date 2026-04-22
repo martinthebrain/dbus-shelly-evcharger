@@ -84,6 +84,19 @@ snapshot.
 For concrete `AutoEnergySources` examples, see
 [CONFIGURATION.md](CONFIGURATION.md).
 
+If you also want these external sources to become visible as separate
+Venus-style companion services, the optional companion DBus bridge can now
+publish both:
+
+- one aggregated external battery / PV summary
+- per-source `com.victronenergy.battery.external.*` services for battery-like
+  sources
+- per-source `com.victronenergy.pvinverter.external.*` services for inverter-
+  like sources
+
+That keeps the EV charger DBus identity clean while still making foreign energy
+devices visible in the GUI.
+
 The service publishes rich Auto diagnostics on DBus, including status source,
 fault state, recovery state, retry state, scheduled state, phase state,
 contactor state, and backend state.

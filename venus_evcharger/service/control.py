@@ -123,6 +123,19 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
                     "combined_battery_discharge_power_w": worker_snapshot.get("battery_combined_discharge_power_w"),
                     "combined_battery_net_power_w": worker_snapshot.get("battery_combined_net_power_w"),
                     "combined_battery_ac_power_w": worker_snapshot.get("battery_combined_ac_power_w"),
+                    "combined_battery_pv_input_power_w": worker_snapshot.get("battery_combined_pv_input_power_w"),
+                    "combined_battery_grid_interaction_w": worker_snapshot.get("battery_combined_grid_interaction_w"),
+                    "combined_battery_headroom_charge_w": worker_snapshot.get("battery_headroom_charge_w"),
+                    "combined_battery_headroom_discharge_w": worker_snapshot.get("battery_headroom_discharge_w"),
+                    "expected_near_term_export_w": worker_snapshot.get("expected_near_term_export_w"),
+                    "expected_near_term_import_w": worker_snapshot.get("expected_near_term_import_w"),
+                    "combined_battery_average_confidence": worker_snapshot.get("battery_average_confidence"),
+                    "combined_battery_battery_source_count": worker_snapshot.get("battery_battery_source_count", 0),
+                    "combined_battery_hybrid_inverter_source_count": worker_snapshot.get(
+                        "battery_hybrid_inverter_source_count",
+                        0,
+                    ),
+                    "combined_battery_inverter_source_count": worker_snapshot.get("battery_inverter_source_count", 0),
                     "combined_battery_learning_profile_count": learning_summary.get("profile_count", 0),
                     "combined_battery_observed_max_charge_power_w": learning_summary.get(
                         "observed_max_charge_power_w"
@@ -130,6 +143,41 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
                     "combined_battery_observed_max_discharge_power_w": learning_summary.get(
                         "observed_max_discharge_power_w"
                     ),
+                    "combined_battery_observed_max_ac_power_w": learning_summary.get("observed_max_ac_power_w"),
+                    "combined_battery_observed_max_pv_input_power_w": learning_summary.get(
+                        "observed_max_pv_input_power_w"
+                    ),
+                    "combined_battery_observed_max_grid_import_w": learning_summary.get(
+                        "observed_max_grid_import_w"
+                    ),
+                    "combined_battery_observed_max_grid_export_w": learning_summary.get(
+                        "observed_max_grid_export_w"
+                    ),
+                    "combined_battery_average_active_charge_power_w": learning_summary.get(
+                        "average_active_charge_power_w"
+                    ),
+                    "combined_battery_average_active_discharge_power_w": learning_summary.get(
+                        "average_active_discharge_power_w"
+                    ),
+                    "combined_battery_average_active_power_delta_w": learning_summary.get(
+                        "average_active_power_delta_w"
+                    ),
+                    "combined_battery_power_smoothing_ratio": learning_summary.get("power_smoothing_ratio"),
+                    "combined_battery_typical_response_delay_seconds": learning_summary.get(
+                        "typical_response_delay_seconds"
+                    ),
+                    "combined_battery_support_bias": learning_summary.get("support_bias"),
+                    "combined_battery_day_support_bias": learning_summary.get("day_support_bias"),
+                    "combined_battery_night_support_bias": learning_summary.get("night_support_bias"),
+                    "combined_battery_import_support_bias": learning_summary.get("import_support_bias"),
+                    "combined_battery_export_bias": learning_summary.get("export_bias"),
+                    "combined_battery_battery_first_export_bias": learning_summary.get(
+                        "battery_first_export_bias"
+                    ),
+                    "combined_battery_reserve_band_floor_soc": learning_summary.get("reserve_band_floor_soc"),
+                    "combined_battery_reserve_band_ceiling_soc": learning_summary.get("reserve_band_ceiling_soc"),
+                    "combined_battery_reserve_band_width_soc": learning_summary.get("reserve_band_width_soc"),
+                    "combined_battery_direction_change_count": learning_summary.get("direction_change_count", 0),
                 },
             }
         )
@@ -232,6 +280,38 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
                     ),
                     "control_api_admin_token_configured": bool(str(getattr(self, "control_api_admin_token", "")).strip()),
                     "control_api_update_token_configured": bool(str(getattr(self, "control_api_update_token", "")).strip()),
+                    "companion_dbus_bridge_enabled": bool(getattr(self, "companion_dbus_bridge_enabled", False)),
+                    "companion_battery_service_enabled": bool(
+                        getattr(self, "companion_battery_service_enabled", False)
+                    ),
+                    "companion_pvinverter_service_enabled": bool(
+                        getattr(self, "companion_pvinverter_service_enabled", False)
+                    ),
+                    "companion_source_services_enabled": bool(
+                        getattr(self, "companion_source_services_enabled", False)
+                    ),
+                    "companion_battery_deviceinstance": int(getattr(self, "companion_battery_deviceinstance", 0)),
+                    "companion_pvinverter_deviceinstance": int(
+                        getattr(self, "companion_pvinverter_deviceinstance", 0)
+                    ),
+                    "companion_source_battery_deviceinstance_base": int(
+                        getattr(self, "companion_source_battery_deviceinstance_base", 0)
+                    ),
+                    "companion_source_pvinverter_deviceinstance_base": int(
+                        getattr(self, "companion_source_pvinverter_deviceinstance_base", 0)
+                    ),
+                    "companion_battery_service_name": getattr(self, "companion_battery_service_name", ""),
+                    "companion_pvinverter_service_name": getattr(self, "companion_pvinverter_service_name", ""),
+                    "companion_source_battery_service_prefix": getattr(
+                        self,
+                        "companion_source_battery_service_prefix",
+                        "",
+                    ),
+                    "companion_source_pvinverter_service_prefix": getattr(
+                        self,
+                        "companion_source_pvinverter_service_prefix",
+                        "",
+                    ),
                     "backend_mode": getattr(self, "backend_mode", "combined"),
                     "meter_backend": getattr(self, "meter_backend_type", "na"),
                     "switch_backend": getattr(self, "switch_backend_type", "na"),
