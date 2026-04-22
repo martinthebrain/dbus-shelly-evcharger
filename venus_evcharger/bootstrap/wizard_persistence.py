@@ -55,8 +55,42 @@ def _summary_optional_lines(payload: dict[str, object]) -> list[str]:
     return [
         *_optional_scalar_lines(payload),
         *_optional_live_check_lines(payload),
+        *_suggested_energy_source_lines(payload),
+        *_suggested_energy_merge_lines(payload),
+        *_suggested_block_lines(payload),
         *_warning_lines(payload),
     ]
+
+
+def _suggested_block_lines(payload: dict[str, object]) -> list[str]:
+    blocks = payload.get("suggested_blocks")
+    if not isinstance(blocks, dict) or not blocks:
+        return []
+    return [f"suggested_blocks: {', '.join(sorted(str(key) for key in blocks))}"]
+
+
+def _suggested_energy_source_lines(payload: dict[str, object]) -> list[str]:
+    sources = payload.get("suggested_energy_sources")
+    if not isinstance(sources, list) or not sources:
+        return []
+    source_ids = []
+    for item in sources:
+        if isinstance(item, dict):
+            source_ids.append(str(item.get("source_id", "unknown")))
+    return [f"suggested_energy_sources: {', '.join(source_ids)}"] if source_ids else []
+
+
+def _suggested_energy_merge_lines(payload: dict[str, object]) -> list[str]:
+    merge = payload.get("suggested_energy_merge")
+    if not isinstance(merge, dict):
+        return []
+    merged_source_ids = merge.get("merged_source_ids")
+    if not isinstance(merged_source_ids, list) or not merged_source_ids:
+        return []
+    lines = [f"suggested_energy_merge: {','.join(str(item) for item in merged_source_ids)}"]
+    if "applied_to_config" in merge:
+        lines.append(f"suggested_energy_merge_applied: {bool(merge.get('applied_to_config'))}")
+    return lines
 
 
 def _topology_summary_text(payload: dict[str, object]) -> str:

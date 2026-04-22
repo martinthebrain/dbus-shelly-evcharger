@@ -250,6 +250,29 @@ class TestShellyWallboxWizardBranchRuntime(unittest.TestCase):
         self.assertEqual(wizard_cli._resolved_choice_input("", ("a", "b"), "a"), "a")
 
         parser = wizard_cli.build_parser("/tmp/config.ini", "/tmp/template.ini")
+        namespace = parser.parse_args(
+            [
+                "--energy-recommendation-prefix",
+                "/tmp/energy-rec",
+                "--huawei-recommendation-prefix",
+                "/tmp/huawei-rec",
+                "--huawei-recommendation-prefix",
+                "/tmp/huawei-rec-2",
+                "--apply-energy-merge",
+                "--energy-default-usable-capacity-wh",
+                "12288",
+                "--huawei-usable-capacity-wh",
+                "15360",
+                "--energy-usable-capacity-wh",
+                "hybrid_a=10240",
+            ]
+        )
+        self.assertEqual(namespace.energy_recommendation_prefix, ["/tmp/energy-rec"])
+        self.assertEqual(namespace.huawei_recommendation_prefix, ["/tmp/huawei-rec", "/tmp/huawei-rec-2"])
+        self.assertTrue(namespace.apply_energy_merge)
+        self.assertEqual(namespace.energy_default_usable_capacity_wh, 12288.0)
+        self.assertEqual(namespace.huawei_usable_capacity_wh, 15360.0)
+        self.assertEqual(namespace.energy_usable_capacity_wh, ["hybrid_a=10240"])
         namespace = parser.parse_args(["--resume-last", "--config-path", "/tmp/missing.ini"])
         with self.assertRaisesRegex(ValueError, "no prior wizard result exists"):
             wizard_cli.resolve_imported_defaults(namespace)
@@ -391,6 +414,106 @@ class TestShellyWallboxWizardBranchRuntime(unittest.TestCase):
             )
         )
         self.assertNotIn("  - meter:", result_text)
+
+        hinted_result_text = wizard_cli.result_text(
+            WizardResult(
+                created_at="2026-04-20T02:53:57",
+                config_path="/tmp/config.ini",
+                imported_from=None,
+                profile="simple-relay",
+                policy_mode="manual",
+                split_preset=None,
+                charger_backend=None,
+                charger_preset=None,
+                transport_kind=None,
+                role_hosts={},
+                validation={"resolved_roles": {"meter": False}},
+                live_check=None,
+                generated_files=("config.ini", "wizard-huawei-energy.ini"),
+                backup_files=tuple(),
+                result_path=None,
+                audit_path=None,
+                topology_summary_path=None,
+                manual_review=("Auth", "External energy source integration"),
+                dry_run=False,
+                warnings=tuple(),
+                answer_defaults={},
+                suggested_blocks={
+                    "External energy source": "AutoEnergySource.huawei.Profile=huawei_mb_sdongle\n"
+                },
+                suggested_energy_sources=(
+                    {
+                        "source_id": "huawei",
+                        "profile": "huawei_mb_sdongle",
+                        "configPath": "/data/etc/huawei-mb-modbus.ini",
+                        "host": "192.168.8.1",
+                        "port": 502,
+                        "unitId": 1,
+                        "usableCapacityWh": 15360.0,
+                        "capacityConfigKey": "AutoEnergySource.huawei.UsableCapacityWh",
+                    },
+                ),
+                suggested_energy_merge={
+                    "merged_source_ids": ["victron", "huawei"],
+                    "helper_file": "wizard-auto-energy-merge.ini",
+                    "applied_to_config": True,
+                    "capacity_follow_up": [
+                        {
+                            "source_id": "huawei",
+                            "config_key": "AutoEnergySource.huawei.UsableCapacityWh",
+                            "placeholder": "15360",
+                            "configured": True,
+                        }
+                    ],
+                    "merge_block": (
+                        "AutoEnergySources=victron,huawei\n"
+                        "AutoEnergySource.huawei.Profile=huawei_mb_sdongle\n"
+                        "AutoEnergySource.huawei.UsableCapacityWh=15360\n"
+                    ),
+                },
+            )
+        )
+        self.assertIn("Suggested energy sources:", hinted_result_text)
+        self.assertIn("profile=huawei_mb_sdongle", hinted_result_text)
+        self.assertIn("capacity follow-up: AutoEnergySource.huawei.UsableCapacityWh=<set-me>", hinted_result_text)
+        self.assertIn("Suggested AutoEnergy merge:", hinted_result_text)
+        self.assertIn("merged source ids: victron,huawei", hinted_result_text)
+        self.assertIn("wizard-auto-energy-merge.ini", hinted_result_text)
+        self.assertIn("applied to main config: yes", hinted_result_text)
+        self.assertIn("AutoEnergySource.huawei.UsableCapacityWh=15360", hinted_result_text)
+        self.assertIn("Suggested config blocks:", hinted_result_text)
+        self.assertIn("AutoEnergySource.huawei.Profile=huawei_mb_sdongle", hinted_result_text)
+
+    def test_resolved_energy_capacity_wh_prompts_only_for_single_energy_recommendation(self) -> None:
+        self.assertIsNone(wizard._resolved_energy_capacity_wh(_namespace(non_interactive=True), tuple()))
+        self.assertEqual(
+            wizard._resolved_energy_capacity_wh(
+                _namespace(non_interactive=True, energy_default_usable_capacity_wh=12000.0),
+                ("/tmp/huawei-rec",),
+            ),
+            12000.0,
+        )
+        with (
+            patch("venus_evcharger.bootstrap.wizard.prompt_yes_no", return_value=True),
+            patch("builtins.input", return_value="15360"),
+        ):
+            self.assertEqual(
+                wizard._resolved_energy_capacity_wh(
+                    _namespace(energy_recommendation_prefix=["/tmp/huawei-rec"]),
+                    ("/tmp/huawei-rec",),
+                ),
+                15360.0,
+            )
+        self.assertEqual(
+            wizard._resolved_energy_capacity_overrides(
+                _namespace(energy_usable_capacity_wh=["hybrid_a=15360", "hybrid_b=7680"])
+            ),
+            {"hybrid_a": 15360.0, "hybrid_b": 7680.0},
+        )
+        with self.assertRaisesRegex(ValueError, "source_id=Wh"):
+            wizard._resolved_energy_capacity_overrides(_namespace(energy_usable_capacity_wh=["broken"]))
+        with self.assertRaisesRegex(ValueError, "source_id=Wh"):
+            wizard._resolved_energy_capacity_overrides(_namespace(energy_usable_capacity_wh=["hybrid_a=0"]))
 
         self.assertIsNone(_as_bool(None))
         self.assertIsNone(_as_int(" "))

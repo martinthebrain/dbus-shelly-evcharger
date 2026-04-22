@@ -7,6 +7,7 @@ import argparse
 import configparser
 from dataclasses import replace
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping, cast
 
@@ -135,6 +136,7 @@ def validate_huawei_energy_source(
     host: str = "",
     port: int | None = None,
     unit_id: int | None = None,
+    source_id: str = "huawei",
 ) -> dict[str, object]:
     """Validate one Huawei-backed energy config against a reachable endpoint."""
     normalized_profile = str(profile_name).strip().lower()
@@ -153,6 +155,13 @@ def validate_huawei_energy_source(
             "field_results": [],
             "required_fields_ok": False,
             "meter_block_detected": False,
+            "recommendation": _huawei_recommendation(
+                normalized_profile,
+                detection=detection,
+                required_fields_ok=False,
+                meter_block_detected=False,
+                source_id=source_id,
+            ),
         }
     parser = load_template_config(config_path)
     transport = _config_transport_section(parser)
@@ -182,7 +191,192 @@ def validate_huawei_energy_source(
         "required_fields_ok": required_fields_ok,
         "meter_block_detected": meter_block_detected,
         "field_results": field_results,
+        "recommendation": _huawei_recommendation(
+            normalized_profile,
+            detection=detection,
+            required_fields_ok=required_fields_ok,
+            meter_block_detected=meter_block_detected,
+            source_id=source_id,
+        ),
     }
+
+
+def _huawei_recommendation(
+    profile_name: str,
+    *,
+    detection: Mapping[str, object],
+    required_fields_ok: bool,
+    meter_block_detected: bool,
+    source_id: str,
+) -> dict[str, object]:
+    normalized_source_id = _normalized_source_id(source_id)
+    detected = detection.get("detected")
+    details = detection.get("profile_details")
+    profile_details = details if isinstance(details, Mapping) else {}
+    detected_mapping = detected if isinstance(detected, Mapping) else {}
+    template_name = _recommended_huawei_template(profile_name)
+    config_path = _recommended_huawei_config_path(template_name)
+    status = "ready" if required_fields_ok else "incomplete"
+    notes: list[str] = []
+    if meter_block_detected:
+        notes.append("Huawei meter block detected")
+    else:
+        notes.append("Huawei meter block not detected")
+    if required_fields_ok:
+        notes.append("Configured Huawei energy fields responded successfully")
+    else:
+        notes.append("One or more required Huawei energy fields did not respond")
+    return {
+        "status": status,
+        "suggested_profile": profile_name,
+        "suggested_template": template_name,
+        "suggested_config_path": config_path,
+        "host": detected_mapping.get("host", ""),
+        "port": detected_mapping.get("port"),
+        "unit_id": detected_mapping.get("unit_id"),
+        "platform": profile_details.get("platform", ""),
+        "access_mode": profile_details.get("access_mode", ""),
+        "meter_block_detected": meter_block_detected,
+        "required_fields_ok": required_fields_ok,
+        "capacity_required_for_weighted_soc": True,
+        "capacity_config_key": f"AutoEnergySource.{normalized_source_id}.UsableCapacityWh",
+        "capacity_hint": "Set usable battery capacity in Wh when you want weighted combined SOC.",
+        "summary": _recommendation_summary(profile_name, detected_mapping, meter_block_detected, template_name),
+        "config_snippet": _recommendation_config_snippet(
+            profile_name,
+            detected_mapping,
+            template_name=template_name,
+            config_path=config_path,
+            source_id=normalized_source_id,
+        ),
+        "wizard_hint_block": _recommendation_wizard_hint_block(
+            profile_name,
+            detected_mapping,
+            meter_block_detected=meter_block_detected,
+            template_name=template_name,
+            config_path=config_path,
+            source_id=normalized_source_id,
+        ),
+        "notes": notes,
+    }
+
+
+def _normalized_source_id(source_id: str) -> str:
+    cleaned = str(source_id).strip()
+    return cleaned or "huawei"
+
+
+def _recommended_huawei_template(profile_name: str) -> str:
+    normalized = str(profile_name).strip().lower()
+    if normalized.startswith("huawei_ma_"):
+        return "deploy/venus/template-energy-source-huawei-ma-modbus.ini"
+    if normalized.startswith("huawei_mb_"):
+        return "deploy/venus/template-energy-source-huawei-mb-modbus.ini"
+    if normalized == "huawei_smartlogger_modbus_tcp":
+        return "deploy/venus/template-energy-source-huawei-mb-modbus.ini"
+    return "deploy/venus/template-energy-source-huawei-mb-modbus.ini"
+
+
+def _recommended_huawei_config_path(template_name: str) -> str:
+    filename = str(template_name).strip().rsplit("/", 1)[-1]
+    if filename.startswith("template-energy-source-"):
+        filename = filename[len("template-energy-source-") :]
+    return f"/data/etc/{filename}"
+
+
+def _recommendation_summary(
+    profile_name: str,
+    detected: Mapping[str, object],
+    meter_block_detected: bool,
+    template_name: str,
+) -> str:
+    host = str(detected.get("host", "") or "")
+    port = detected.get("port")
+    unit_id = detected.get("unit_id")
+    meter_text = "present" if meter_block_detected else "missing"
+    location_text = f"host={host}" if host else "host=unknown"
+    if port is not None:
+        location_text += f", port={port}"
+    if unit_id is not None:
+        location_text += f", unit={unit_id}"
+    return (
+        f"Use profile {profile_name} with template {template_name}; "
+        f"{location_text}; meter block {meter_text}."
+    )
+
+
+def _recommendation_config_snippet(
+    profile_name: str,
+    detected: Mapping[str, object],
+    *,
+    template_name: str,
+    config_path: str,
+    source_id: str,
+) -> str:
+    host = str(detected.get("host", "") or "").strip()
+    port = _optional_int(detected.get("port"))
+    unit_id = _optional_int(detected.get("unit_id"))
+    lines = [
+        "# Add the source id to AutoEnergySources in your main config.",
+        f"# Example: AutoEnergySources=victron,{source_id}",
+        f"AutoEnergySource.{source_id}.Profile=" + profile_name,
+        f"AutoEnergySource.{source_id}.ConfigPath=" + config_path,
+    ]
+    if host:
+        lines.append(f"AutoEnergySource.{source_id}.Host=" + host)
+    if port is not None:
+        lines.append(f"AutoEnergySource.{source_id}.Port={port}")
+    if unit_id is not None:
+        lines.append(f"AutoEnergySource.{source_id}.UnitId={unit_id}")
+    lines.extend(
+        (
+            "# Copy the matching starter template to the ConfigPath above:",
+            "# " + template_name,
+            "# Optional but recommended when you want weighted combined SOC:",
+            f"# AutoEnergySource.{source_id}.UsableCapacityWh=<set-me>",
+        )
+    )
+    return "\n".join(lines)
+
+
+def _recommendation_wizard_hint_block(
+    profile_name: str,
+    detected: Mapping[str, object],
+    *,
+    meter_block_detected: bool,
+    template_name: str,
+    config_path: str,
+    source_id: str,
+) -> str:
+    host = str(detected.get("host", "") or "").strip() or "unknown"
+    port = _optional_int(detected.get("port"))
+    unit_id = _optional_int(detected.get("unit_id"))
+    port_text = str(port) if port is not None else "unknown"
+    unit_text = str(unit_id) if unit_id is not None else "unknown"
+    meter_text = "present" if meter_block_detected else "not detected"
+    lines = [
+        "Huawei recommendation",
+        f"- profile: {profile_name}",
+        f"- template: {template_name}",
+        f"- config path: {config_path}",
+        f"- host: {host}",
+        f"- port: {port_text}",
+        f"- unit id: {unit_text}",
+        f"- meter block: {meter_text}",
+        f"- source id: {source_id}",
+        f"- capacity follow-up: set AutoEnergySource.{source_id}.UsableCapacityWh for weighted combined SOC",
+        "- next step: copy the template, then paste the config snippet into the main config",
+    ]
+    return "\n".join(lines)
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def _probe_service() -> Any:
@@ -343,9 +537,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default="")
     parser.add_argument("--port", type=int)
     parser.add_argument("--unit-id", type=int)
+    parser.add_argument("--source-id", default="huawei")
+    parser.add_argument(
+        "--emit",
+        choices=("json", "ini", "wizard-hint", "summary"),
+        default="json",
+        help="Output format for validate-huawei-energy. detect-modbus-energy always emits JSON.",
+    )
+    parser.add_argument(
+        "--write-recommendation-prefix",
+        default="",
+        help="Write Huawei recommendation files using the given file prefix.",
+    )
     args = parser.parse_args(argv)
     payload = _command_payload(args)
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    payload = _payload_with_written_files(args, payload)
+    print(_render_payload(args, payload))
     return 0
 
 
@@ -367,6 +574,72 @@ def _command_payload(args: argparse.Namespace) -> dict[str, object]:
             unit_id=args.unit_id,
         )
     raise ValueError(f"Unsupported energy probe command '{args.command}'")
+
+
+def _render_payload(args: argparse.Namespace, payload: Mapping[str, object]) -> str:
+    if args.command != "validate-huawei-energy" or str(args.emit) == "json":
+        return json.dumps(payload, indent=2, sort_keys=True)
+    recommendation = payload.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        return json.dumps(payload, indent=2, sort_keys=True)
+    emit_mode = str(args.emit)
+    if emit_mode == "ini":
+        return _render_recommendation_field(recommendation, "config_snippet", payload)
+    if emit_mode == "wizard-hint":
+        return _render_recommendation_field(recommendation, "wizard_hint_block", payload)
+    if emit_mode == "summary":
+        return _render_recommendation_field(recommendation, "summary", payload)
+    return json.dumps(payload, indent=2, sort_keys=True)
+
+
+def _render_recommendation_field(
+    recommendation: Mapping[str, object],
+    field_name: str,
+    payload: Mapping[str, object],
+) -> str:
+    value = recommendation.get(field_name)
+    if isinstance(value, str) and value.strip():
+        return value
+    return json.dumps(payload, indent=2, sort_keys=True)
+
+
+def _payload_with_written_files(args: argparse.Namespace, payload: Mapping[str, object]) -> dict[str, object]:
+    prefix = str(getattr(args, "write_recommendation_prefix", "") or "").strip()
+    if args.command != "validate-huawei-energy" or not prefix:
+        return dict(payload)
+    recommendation = payload.get("recommendation")
+    if not isinstance(recommendation, Mapping):
+        return dict(payload)
+    written_files = _write_recommendation_bundle(prefix, recommendation)
+    enriched = dict(payload)
+    enriched["written_files"] = written_files
+    return enriched
+
+
+def _write_recommendation_bundle(prefix: str, recommendation: Mapping[str, object]) -> dict[str, str]:
+    base_prefix = str(Path(prefix))
+    targets = {
+        "config_snippet": Path(base_prefix + ".ini"),
+        "wizard_hint": Path(base_prefix + ".wizard.txt"),
+        "summary": Path(base_prefix + ".summary.txt"),
+    }
+    contents = {
+        "config_snippet": _recommendation_text(recommendation, "config_snippet"),
+        "wizard_hint": _recommendation_text(recommendation, "wizard_hint_block"),
+        "summary": _recommendation_text(recommendation, "summary"),
+    }
+    for path in targets.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+    for key, path in targets.items():
+        path.write_text(contents[key], encoding="utf-8")
+    return {key: str(path) for key, path in targets.items()}
+
+
+def _recommendation_text(recommendation: Mapping[str, object], field_name: str) -> str:
+    value = recommendation.get(field_name)
+    if isinstance(value, str):
+        return value
+    return ""
 
 
 if __name__ == "__main__":  # pragma: no cover

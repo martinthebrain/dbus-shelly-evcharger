@@ -214,6 +214,10 @@ The first vendor-specific presets are Huawei-oriented. They model:
 - access modes `native_ap`, `native_lan`, `sdongle`, and `smartlogger`
 - default probe candidates for host, port, and unit-id discovery
 
+The Huawei validation CLI also emits a ready-to-copy
+`recommendation.config_snippet` for the main config plus a compact
+`recommendation.wizard_hint_block` that can be pasted into operator notes.
+
 For Huawei aliases, these names map internally onto the MA/MB presets:
 
 - `huawei_l1_native_ap`, `huawei_lc0_native_ap`, `huawei_lb0_native_ap`, `huawei_m1_native_ap`
@@ -268,6 +272,8 @@ python3 -m venus_evcharger.energy.probe validate-huawei-energy /data/etc/huawei-
 
 That validation run checks the configured field set plus the Huawei meter block
 around `37100` and reports which reads succeeded on the current access path.
+For the compact operator workflow, see
+[HUAWEI_INTEGRATION.md](HUAWEI_INTEGRATION.md).
 
 The repository now also ships first read-only Huawei starter templates:
 

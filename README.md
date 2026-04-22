@@ -105,6 +105,24 @@ And for a full Huawei field check on a reachable endpoint:
 python3 -m venus_evcharger.energy.probe validate-huawei-energy /data/etc/huawei-mb-modbus.ini --profile huawei_mb_sdongle --host 192.168.8.1
 ```
 
+The Huawei validation output now also includes a copyable
+`recommendation.config_snippet` for the main config and a short
+`recommendation.wizard_hint_block` for operator notes or a future wizard flow.
+If you want persisted helper files from one run, use
+`--write-recommendation-prefix /some/path/huawei-rec`.
+The setup wizard can also ingest that bundle later via
+`--energy-recommendation-prefix /some/path/huawei-rec`. If you want the wizard
+to apply the suggested `AutoEnergySources=` merge directly to the generated
+main config, add `--apply-energy-merge`. If you already know the usable
+battery capacity for weighted combined SOC, add
+`--energy-default-usable-capacity-wh <Wh>` in the same run.
+For more than one suggested external energy source, repeat
+`--energy-recommendation-prefix` and use
+`--energy-usable-capacity-wh <source_id>=<Wh>` per source when needed.
+
+For a short Huawei operator runbook, see
+[HUAWEI_INTEGRATION.md](HUAWEI_INTEGRATION.md).
+
 The repo now also includes first Huawei read-template starters:
 
 - [template-energy-source-huawei-ma-modbus.ini](deploy/venus/template-energy-source-huawei-ma-modbus.ini)

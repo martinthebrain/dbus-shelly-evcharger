@@ -14,6 +14,9 @@ def result_text(result: WizardResult) -> str:
         *_result_artifact_lines(result),
         *_result_warning_lines(result),
         *_result_live_check_lines(result),
+        *_result_suggested_energy_source_lines(result),
+        *_result_suggested_energy_merge_lines(result),
+        *_result_suggested_block_lines(result),
         "Manual review:",
         *(f"  - {item}" for item in result.manual_review),
     ]
@@ -92,3 +95,70 @@ def _result_live_check_role_line(role: str, payload: object) -> str | None:
     status = payload.get("status", "unknown")
     detail = payload.get("error") or payload.get("reason") or "ok"
     return f"  - {role}: {status} ({detail})"
+
+
+def _result_suggested_block_lines(result: WizardResult) -> list[str]:
+    if not result.suggested_blocks:
+        return []
+    lines = ["Suggested config blocks:"]
+    for label, content in sorted(result.suggested_blocks.items()):
+        lines.append(f"  - {label}:")
+        lines.extend(f"    {line}" if line else "" for line in content.strip().splitlines())
+    return lines
+
+
+def _result_suggested_energy_source_lines(result: WizardResult) -> list[str]:
+    if not result.suggested_energy_sources:
+        return []
+    lines = ["Suggested energy sources:"]
+    for source in result.suggested_energy_sources:
+        source_id = str(source.get("source_id", "unknown"))
+        profile = str(source.get("profile", ""))
+        config_path = str(source.get("configPath", source.get("config_path", "")))
+        host = str(source.get("host", ""))
+        port = source.get("port")
+        unit_id = source.get("unitId", source.get("unit_id"))
+        summary = f"  - {source_id}: profile={profile}"
+        if config_path:
+            summary += f", config={config_path}"
+        if host:
+            summary += f", host={host}"
+        if port not in (None, ""):
+            summary += f", port={port}"
+        if unit_id not in (None, ""):
+            summary += f", unit_id={unit_id}"
+        lines.append(summary)
+        capacity_key = str(source.get("capacityConfigKey", ""))
+        if capacity_key:
+            lines.append(f"    capacity follow-up: {capacity_key}=<set-me>")
+    return lines
+
+
+def _result_suggested_energy_merge_lines(result: WizardResult) -> list[str]:
+    merge = result.suggested_energy_merge
+    if not isinstance(merge, dict):
+        return []
+    merged_source_ids = merge.get("merged_source_ids")
+    helper_file = merge.get("helper_file")
+    block = merge.get("merge_block")
+    applied_to_config = bool(merge.get("applied_to_config"))
+    lines = ["Suggested AutoEnergy merge:"]
+    if isinstance(merged_source_ids, list) and merged_source_ids:
+        lines.append("  - merged source ids: " + ",".join(str(item) for item in merged_source_ids))
+    if isinstance(helper_file, str) and helper_file:
+        lines.append(f"  - helper file: {helper_file}")
+    lines.append(f"  - applied to main config: {'yes' if applied_to_config else 'no'}")
+    capacity_follow_up = merge.get("capacity_follow_up")
+    if isinstance(capacity_follow_up, list) and capacity_follow_up:
+        lines.append("  - capacity follow-up:")
+        for item in capacity_follow_up:
+            if not isinstance(item, dict):
+                continue
+            config_key = str(item.get("config_key", "")).strip()
+            if not config_key:
+                continue
+            lines.append(f"    {config_key}=<set-me>")
+    if isinstance(block, str) and block.strip():
+        lines.append("  - merge block:")
+        lines.extend(f"    {line}" if line else "" for line in block.strip().splitlines())
+    return lines

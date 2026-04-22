@@ -79,6 +79,9 @@ class WizardResult:
     dry_run: bool
     warnings: tuple[str, ...] = field(default_factory=tuple)
     answer_defaults: dict[str, object] = field(default_factory=dict)
+    suggested_blocks: dict[str, str] = field(default_factory=dict)
+    suggested_energy_sources: tuple[dict[str, object], ...] = field(default_factory=tuple)
+    suggested_energy_merge: dict[str, object] | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -103,4 +106,7 @@ class WizardResult:
             "topology_summary_path": self.topology_summary_path,
             "manual_review": list(self.manual_review),
             "dry_run": self.dry_run,
+            "suggested_blocks": dict(self.suggested_blocks),
+            "suggested_energy_sources": [dict(item) for item in self.suggested_energy_sources],
+            "suggested_energy_merge": dict(self.suggested_energy_merge) if self.suggested_energy_merge is not None else None,
         }

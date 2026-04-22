@@ -577,5 +577,11 @@ def build_parser(default_config_path: str, default_template_path: str) -> argpar
     parser.add_argument("--scheduled-enabled-days")
     parser.add_argument("--scheduled-latest-end-time")
     parser.add_argument("--scheduled-night-current-amps", type=float)
+    parser.add_argument("--energy-recommendation-prefix", action="append")
+    parser.add_argument("--huawei-recommendation-prefix", action="append")
+    parser.add_argument("--energy-default-usable-capacity-wh", type=float)
+    parser.add_argument("--huawei-usable-capacity-wh", type=float)
+    parser.add_argument("--energy-usable-capacity-wh", action="append")
+    parser.add_argument("--apply-energy-merge", action="store_true")
     parser.add_argument("--non-interactive", action="store_true")
     return parser
