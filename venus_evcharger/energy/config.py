@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from .models import ENERGY_SOURCE_ROLES, EnergySourceDefinition
+from .models import ENERGY_SOURCE_CONNECTOR_TYPES, ENERGY_SOURCE_ROLES, EnergySourceDefinition
 
 
 def _text(value: Any, default: str = "") -> str:
@@ -41,6 +41,7 @@ def _legacy_primary_source(defaults: Mapping[str, Any]) -> EnergySourceDefinitio
     return EnergySourceDefinition(
         source_id="primary_battery",
         role="battery",
+        connector_type="dbus",
         service_name=_text(defaults.get("AutoBatteryService")),
         service_prefix=_text(defaults.get("AutoBatteryServicePrefix"), "com.victronenergy.battery"),
         soc_path=_text(defaults.get("AutoBatterySocPath"), "/Soc"),
@@ -55,9 +56,16 @@ def _configured_source(defaults: Mapping[str, Any], source_id: str) -> EnergySou
     role = _text(defaults.get(f"{prefix}Role"), "battery").lower()
     if role not in ENERGY_SOURCE_ROLES:
         role = "battery"
+    connector_type = _text(defaults.get(f"{prefix}Type"), "dbus").lower()
+    if connector_type not in ENERGY_SOURCE_CONNECTOR_TYPES:
+        connector_type = "dbus"
+    if connector_type == "template_http_energy":
+        connector_type = "template_http"
     return EnergySourceDefinition(
         source_id=source_id,
         role=role,
+        connector_type=connector_type,
+        config_path=_text(defaults.get(f"{prefix}ConfigPath")),
         service_name=_text(defaults.get(f"{prefix}Service")),
         service_prefix=_text(defaults.get(f"{prefix}ServicePrefix")),
         soc_path=_text(defaults.get(f"{prefix}SocPath"), "/Soc"),

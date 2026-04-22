@@ -54,6 +54,7 @@ Auto mode combines:
 - PV surplus
 - grid import/export
 - battery SOC
+- optional aggregated battery and hybrid-inverter SOC
 - daytime windows
 - start/stop delays
 - minimum runtime and minimum off-time
@@ -61,6 +62,27 @@ Auto mode combines:
 - optional high-SOC profile
 - learned charging power and adaptive smoothing
 - optional automatic phase switching
+
+The Auto input layer can combine more than one battery-like DBus source. This
+is useful when a Victron battery and an external hybrid inverter should both
+influence charging decisions. When capacities are configured, the service uses
+a capacity-weighted combined SOC and also publishes combined battery charge,
+discharge, net, and AC power visibility for diagnostics and local API clients.
+
+The first connector layer now supports:
+
+- direct `dbus` sources
+- `template_http` sources
+- `modbus` sources
+- `command_json` helper sources
+
+That last `command_json` connector is the intended bridge seam for custom
+vendor integrations and MQTT subscribers: keep protocol-specific logic in one
+small local helper and feed the wallbox service one normalized JSON energy
+snapshot.
+
+For concrete `AutoEnergySources` examples, see
+[CONFIGURATION.md](CONFIGURATION.md).
 
 The service publishes rich Auto diagnostics on DBus, including status source,
 fault state, recovery state, retry state, scheduled state, phase state,

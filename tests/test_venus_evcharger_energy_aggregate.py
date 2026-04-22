@@ -82,6 +82,7 @@ class TestVenusEvchargerEnergyAggregate(unittest.TestCase):
         self.assertTrue(use_combined)
         self.assertEqual(len(legacy_sources), 1)
         self.assertEqual(legacy_sources[0].source_id, "primary_battery")
+        self.assertEqual(legacy_sources[0].connector_type, "dbus")
         self.assertEqual(legacy_sources[0].usable_capacity_wh, 5120.0)
 
         configured_sources, use_combined = load_energy_source_settings(
@@ -93,6 +94,8 @@ class TestVenusEvchargerEnergyAggregate(unittest.TestCase):
                 "AutoEnergySource.victron.SocPath": "/Soc",
                 "AutoEnergySource.victron.UsableCapacityWh": "5000",
                 "AutoEnergySource.hybrid.Role": "hybrid-inverter",
+                "AutoEnergySource.hybrid.Type": "template_http_energy",
+                "AutoEnergySource.hybrid.ConfigPath": "/data/etc/external-hybrid.ini",
                 "AutoEnergySource.hybrid.Service": "com.victronenergy.hybrid.hybrid",
                 "AutoEnergySource.hybrid.SocPath": "/Soc",
                 "AutoEnergySource.hybrid.UsableCapacityWh": "10000",
@@ -103,7 +106,23 @@ class TestVenusEvchargerEnergyAggregate(unittest.TestCase):
         self.assertFalse(use_combined)
         self.assertEqual([source.source_id for source in configured_sources], ["victron", "hybrid"])
         self.assertEqual(configured_sources[1].role, "hybrid-inverter")
+        self.assertEqual(configured_sources[1].connector_type, "template_http")
+        self.assertEqual(configured_sources[1].config_path, "/data/etc/external-hybrid.ini")
         self.assertEqual(configured_sources[1].battery_power_path, "/Dc/0/Power")
+
+        connector_sources, _ = load_energy_source_settings(
+            {
+                "AutoEnergySources": "modbus,helper",
+                "AutoEnergySource.modbus.Role": "battery",
+                "AutoEnergySource.modbus.Type": "modbus",
+                "AutoEnergySource.modbus.ConfigPath": "/data/etc/external-modbus.ini",
+                "AutoEnergySource.helper.Role": "hybrid-inverter",
+                "AutoEnergySource.helper.Type": "command_json",
+                "AutoEnergySource.helper.ConfigPath": "/data/etc/external-helper.ini",
+            }
+        )
+        self.assertEqual(connector_sources[0].connector_type, "modbus")
+        self.assertEqual(connector_sources[1].connector_type, "command_json")
 
     def test_update_energy_learning_profiles_tracks_observed_maxima(self) -> None:
         profiles = update_energy_learning_profiles(

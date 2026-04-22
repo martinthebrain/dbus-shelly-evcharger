@@ -67,8 +67,6 @@ def _normalized_profile_iter(
         if isinstance(raw_profile, EnergyLearningProfile):
             normalized_profiles.append(raw_profile)
             continue
-        if not isinstance(raw_profile, Mapping):
-            continue
         normalized_profiles.append(
             EnergyLearningProfile(
                 source_id=str(raw_profile.get("source_id", source_id)),

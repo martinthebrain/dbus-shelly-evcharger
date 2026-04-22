@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, cast
+from typing import cast
 
 from venus_evcharger.core.shared import (
     configured_grid_paths,
@@ -17,6 +17,7 @@ from venus_evcharger.energy import (
     EnergySourceDefinition,
     EnergySourceSnapshot,
     aggregate_energy_sources,
+    read_energy_source_snapshot,
     update_energy_learning_profiles,
 )
 from venus_evcharger.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
@@ -65,7 +66,6 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
 
     def _resolve_battery_service_override(self) -> str | None:
         """Try the configured battery override service before scanning by prefix."""
-        svc = self.service
         source = self._primary_energy_source()
         if not source.service_name:
             return None
@@ -173,7 +173,7 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
         value = self.service._get_dbus_value(service_name, path)
         return self._battery_soc_numeric(value)
 
-    def _read_energy_source_snapshot(self, source: EnergySourceDefinition, now: float) -> EnergySourceSnapshot:
+    def _dbus_energy_source_snapshot(self, source: EnergySourceDefinition, now: float) -> EnergySourceSnapshot:
         service_name = self._resolve_energy_source_service(source)
         try:
             soc_value = self._read_optional_energy_value(service_name, source.soc_path)
@@ -211,7 +211,7 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
         try:
             source_snapshots: list[EnergySourceSnapshot] = []
             for source in tuple(getattr(svc, "auto_energy_sources", ()) or (self._primary_energy_source(),)):
-                source_snapshots.append(self._read_energy_source_snapshot(cast(EnergySourceDefinition, source), now))
+                source_snapshots.append(read_energy_source_snapshot(self, source, now))
             cluster = aggregate_energy_sources(source_snapshots)
             primary_soc = cluster.sources[0].soc if cluster.sources else None
             effective_soc = cluster.effective_soc if bool(getattr(svc, "auto_use_combined_battery_soc", True)) else primary_soc

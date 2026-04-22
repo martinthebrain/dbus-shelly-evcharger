@@ -153,6 +153,215 @@ Useful advanced controls:
 - phase upshift/downshift timing
 - phase mismatch and lockout tuning
 
+### Multiple Energy Sources
+
+Auto mode can aggregate more than one battery or hybrid-like DBus source.
+
+Main keys:
+
+- `AutoUseCombinedBatterySoc`
+- `AutoEnergySources`
+- `AutoEnergySource.<id>.Role`
+- `AutoEnergySource.<id>.Type`
+- `AutoEnergySource.<id>.ConfigPath`
+- `AutoEnergySource.<id>.Service`
+- `AutoEnergySource.<id>.ServicePrefix`
+- `AutoEnergySource.<id>.SocPath`
+- `AutoEnergySource.<id>.UsableCapacityWh`
+- `AutoEnergySource.<id>.BatteryPowerPath`
+- `AutoEnergySource.<id>.AcPowerPath`
+
+Roles:
+
+- `battery`
+- `hybrid-inverter`
+- `inverter`
+
+Connector types:
+
+- `dbus`
+- `template_http`
+- `modbus`
+- `command_json`
+
+Aggregation rules:
+
+- `combined_soc` is capacity-weighted when one or more sources provide both
+  valid `soc` and `usable_capacity_wh`
+- `effective_soc` falls back to one readable source SOC when no weighted
+  aggregate can be formed
+- charge, discharge, net battery power, and AC power are summed across sources
+- sources without usable capacity still contribute power visibility, but not a
+  weighted `combined_soc`
+
+`AutoUseCombinedBatterySoc=1` tells Auto mode to use the aggregated effective
+SOC instead of only the first configured source.
+
+`dbus` sources read directly from Venus DBus.
+
+`template_http` sources read from one small external HTTP/JSON adapter file
+referenced through `AutoEnergySource.<id>.ConfigPath`. That keeps external
+device specifics out of the main wallbox config and gives us one clear
+connector layer for non-DBus energy sources.
+
+`modbus` sources read one compact energy snapshot through a dedicated Modbus
+config file. This is a good fit for external hybrid systems that already expose
+SOC and battery power on TCP or RTU.
+
+`command_json` sources run one local helper command that returns a JSON object.
+This is the intended bridge point for custom scripts, vendor SDK wrappers, or
+MQTT consumers that should stay outside the wallbox core.
+
+Legacy single-source keys still work and remain the fallback when
+`AutoEnergySources` is empty:
+
+- `AutoBatteryService`
+- `AutoBatteryServicePrefix`
+- `AutoBatterySocPath`
+- `AutoBatteryCapacityWh`
+- `AutoBatteryPowerPath`
+- `AutoBatteryAcPowerPath`
+
+Example: one Victron battery plus one external hybrid inverter:
+
+```ini
+AutoUseCombinedBatterySoc=1
+AutoEnergySources=victron,hybrid
+
+AutoEnergySource.victron.Role=battery
+AutoEnergySource.victron.Service=com.victronenergy.battery.lynxparallel
+AutoEnergySource.victron.SocPath=/Soc
+AutoEnergySource.victron.UsableCapacityWh=10240
+AutoEnergySource.victron.BatteryPowerPath=/Dc/0/Power
+
+AutoEnergySource.hybrid.Role=hybrid-inverter
+AutoEnergySource.hybrid.Service=com.victronenergy.multi.rs.hybrid
+AutoEnergySource.hybrid.SocPath=/Soc
+AutoEnergySource.hybrid.UsableCapacityWh=14000
+AutoEnergySource.hybrid.BatteryPowerPath=/Dc/0/Power
+AutoEnergySource.hybrid.AcPowerPath=/Ac/Power
+```
+
+Example: prefix-based discovery for a second source:
+
+```ini
+AutoUseCombinedBatterySoc=1
+AutoEnergySources=victron,external
+
+AutoEnergySource.victron.Role=battery
+AutoEnergySource.victron.ServicePrefix=com.victronenergy.battery
+AutoEnergySource.victron.SocPath=/Soc
+AutoEnergySource.victron.UsableCapacityWh=5120
+
+AutoEnergySource.external.Role=hybrid-inverter
+AutoEnergySource.external.ServicePrefix=com.victronenergy.hybrid
+AutoEnergySource.external.SocPath=/Soc
+AutoEnergySource.external.UsableCapacityWh=10000
+AutoEnergySource.external.BatteryPowerPath=/Dc/0/Power
+AutoEnergySource.external.AcPowerPath=/Ac/Power
+```
+
+Example: external source through the first non-DBus connector:
+
+```ini
+AutoUseCombinedBatterySoc=1
+AutoEnergySources=victron,external
+
+AutoEnergySource.victron.Role=battery
+AutoEnergySource.victron.Type=dbus
+AutoEnergySource.victron.ServicePrefix=com.victronenergy.battery
+AutoEnergySource.victron.SocPath=/Soc
+AutoEnergySource.victron.UsableCapacityWh=5120
+
+AutoEnergySource.external.Role=hybrid-inverter
+AutoEnergySource.external.Type=template_http
+AutoEnergySource.external.ConfigPath=/data/etc/external-energy.ini
+AutoEnergySource.external.UsableCapacityWh=10000
+```
+
+Example `template_http` energy-source file:
+
+```ini
+[Adapter]
+BaseUrl=http://hybrid.local
+RequestTimeoutSeconds=2.0
+
+[EnergyRequest]
+Method=GET
+Url=/api/energy
+
+[EnergyResponse]
+SocPath=data.soc
+UsableCapacityWhPath=data.capacity_wh
+BatteryPowerPath=data.battery_power_w
+AcPowerPath=data.ac_power_w
+OnlinePath=data.online
+ConfidencePath=data.confidence
+```
+
+A ready-to-copy starter file also lives in
+[`deploy/venus/template-energy-source.ini`](deploy/venus/template-energy-source.ini).
+
+Example `modbus` energy-source file:
+
+```ini
+[Adapter]
+Transport=tcp
+
+[Transport]
+Host=192.168.1.90
+Port=502
+UnitId=7
+RequestTimeoutSeconds=2.0
+
+[SocRead]
+RegisterType=holding
+Address=10
+DataType=uint16
+Scale=0.1
+
+[UsableCapacityRead]
+RegisterType=holding
+Address=20
+DataType=uint16
+
+[BatteryPowerRead]
+RegisterType=holding
+Address=30
+DataType=int16
+
+[AcPowerRead]
+RegisterType=holding
+Address=40
+DataType=uint16
+```
+
+Example `command_json` energy-source file:
+
+```ini
+[Command]
+Args=python3 /data/bin/external-energy-helper.py --once
+TimeoutSeconds=2.0
+
+[Response]
+SocPath=data.soc
+UsableCapacityWhPath=data.capacity_wh
+BatteryPowerPath=data.battery_power_w
+AcPowerPath=data.ac_power_w
+OnlinePath=data.online
+ConfidencePath=data.confidence
+```
+
+This `command_json` pattern is also the recommended MQTT bridge seam: let one
+small local helper subscribe to MQTT, normalize the vendor payload, and return
+one compact JSON object to the wallbox service.
+
+Starter files:
+
+- [`deploy/venus/template-energy-source.ini`](deploy/venus/template-energy-source.ini)
+- [`deploy/venus/template-energy-source-modbus.ini`](deploy/venus/template-energy-source-modbus.ini)
+- [`deploy/venus/template-energy-source-command.ini`](deploy/venus/template-energy-source-command.ini)
+
 ## Scheduled / Plan Policy
 
 Scheduled mode uses the same base policy as Auto and adds target-day night

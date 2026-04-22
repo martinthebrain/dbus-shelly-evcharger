@@ -8,6 +8,9 @@ from typing import Any
 
 
 ENERGY_SOURCE_ROLES = frozenset({"battery", "hybrid-inverter", "inverter"})
+ENERGY_SOURCE_CONNECTOR_TYPES = frozenset(
+    {"dbus", "template_http", "template_http_energy", "modbus", "command_json"}
+)
 
 
 @dataclass(frozen=True)
@@ -16,6 +19,8 @@ class EnergySourceDefinition:
 
     source_id: str
     role: str = "battery"
+    connector_type: str = "dbus"
+    config_path: str = ""
     service_name: str = ""
     service_prefix: str = ""
     soc_path: str = "/Soc"

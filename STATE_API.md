@@ -80,6 +80,47 @@ Stable fields in `state` include:
 - `software_update_no_update_active`
 - `runtime_overrides_active`
 - `runtime_overrides_path`
+- `combined_battery_soc`
+- `combined_battery_source_count`
+- `combined_battery_online_source_count`
+- `combined_battery_charge_power_w`
+- `combined_battery_discharge_power_w`
+- `combined_battery_net_power_w`
+- `combined_battery_ac_power_w`
+- `combined_battery_learning_profile_count`
+- `combined_battery_observed_max_charge_power_w`
+- `combined_battery_observed_max_discharge_power_w`
+
+These combined battery fields are populated from the normalized multi-source
+energy snapshot used by Auto mode. With `AutoEnergySources=...`, the service
+can aggregate several battery or hybrid-inverter sources and expose the
+combined result here for local tooling and troubleshooting.
+
+### Combined battery state details
+
+- `combined_battery_soc` is the aggregated SOC view used for operator-facing
+  diagnostics
+- `combined_battery_source_count` counts configured/readable energy sources in
+  the current snapshot
+- `combined_battery_online_source_count` counts sources that were online in the
+  current snapshot
+- `combined_battery_charge_power_w` sums currently observed charging power
+- `combined_battery_discharge_power_w` sums currently observed discharge power
+- `combined_battery_net_power_w` is the signed combined battery power
+- `combined_battery_ac_power_w` sums configured AC-side power visibility
+- `combined_battery_learning_profile_count` counts runtime learning profiles
+  that currently contribute observed maxima
+- `combined_battery_observed_max_charge_power_w` and
+  `combined_battery_observed_max_discharge_power_w` summarize the runtime-only
+  learned maxima across sources
+
+`GET /v1/state/runtime` also exposes the lower-level aggregation payload,
+including:
+
+- `combined_battery_usable_capacity_wh`
+- `combined_battery_valid_soc_source_count`
+- `combined_battery_sources`
+- `combined_battery_learning_profiles`
 
 ### `GET /v1/state/dbus-diagnostics`
 

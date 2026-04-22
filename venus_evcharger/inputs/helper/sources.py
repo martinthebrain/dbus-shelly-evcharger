@@ -27,6 +27,7 @@ from venus_evcharger.energy import (
     EnergySourceDefinition,
     EnergySourceSnapshot,
     aggregate_energy_sources,
+    read_energy_source_snapshot,
     update_energy_learning_profiles,
 )
 
@@ -377,7 +378,7 @@ class _AutoInputHelperSourceMixin:
         value = self._get_dbus_value(service_name, path)
         return cast(float | None, self._battery_soc_numeric(value))
 
-    def _battery_source_snapshot(self: Any, source: EnergySourceDefinition, now: float) -> EnergySourceSnapshot:
+    def _dbus_energy_source_snapshot(self: Any, source: EnergySourceDefinition, now: float) -> EnergySourceSnapshot:
         service_name = self._resolve_energy_source_service(source)
         try:
             soc_value = self._read_optional_energy_value(service_name, source.soc_path)
@@ -422,7 +423,7 @@ class _AutoInputHelperSourceMixin:
         try:
             now = time.time()
             source_snapshots = tuple(
-                self._battery_source_snapshot(cast(EnergySourceDefinition, source), now)
+                read_energy_source_snapshot(self, cast(EnergySourceDefinition, source), now)
                 for source in tuple(getattr(self, "auto_energy_sources", ()) or (self._primary_energy_source(),))
             )
             cluster = aggregate_energy_sources(source_snapshots)
