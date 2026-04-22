@@ -253,6 +253,8 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
                 {
                     "battery_combined_charge_power_w": cluster.combined_charge_power_w,
                     "battery_combined_discharge_power_w": cluster.combined_discharge_power_w,
+                    "battery_combined_charge_limit_power_w": cluster.combined_charge_limit_power_w,
+                    "battery_combined_discharge_limit_power_w": cluster.combined_discharge_limit_power_w,
                     "battery_combined_grid_interaction_w": cluster.combined_grid_interaction_w,
                 },
                 learning_summary,

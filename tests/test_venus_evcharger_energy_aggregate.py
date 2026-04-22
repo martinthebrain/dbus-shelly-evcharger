@@ -1,12 +1,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import unittest
+from unittest.mock import patch
 
 from venus_evcharger.energy import (
     EnergySourceSnapshot,
     EnergyLearningProfile,
+    available_energy_source_profiles,
     aggregate_energy_sources,
     derive_energy_forecast,
+    energy_source_profile_details,
+    energy_source_profile_probe_plan,
     load_energy_source_settings,
+    resolve_energy_source_profile,
     summarize_energy_learning_profiles,
     update_energy_learning_profiles,
 )
@@ -68,6 +73,8 @@ class TestVenusEvchargerEnergyAggregate(unittest.TestCase):
         self.assertEqual(cluster.combined_usable_capacity_wh, 15000.0)
         self.assertEqual(cluster.combined_discharge_power_w, 1200.0)
         self.assertEqual(cluster.combined_charge_power_w, 800.0)
+        self.assertIsNone(cluster.combined_charge_limit_power_w)
+        self.assertIsNone(cluster.combined_discharge_limit_power_w)
         self.assertEqual(cluster.combined_net_battery_power_w, 400.0)
         self.assertEqual(cluster.combined_ac_power_w, 3200.0)
         self.assertEqual(cluster.combined_pv_input_power_w, 2500.0)
@@ -98,6 +105,52 @@ class TestVenusEvchargerEnergyAggregate(unittest.TestCase):
 
         self.assertIsNone(cluster.combined_soc)
         self.assertEqual(cluster.effective_soc, 55.0)
+
+    def test_aggregate_energy_sources_deduplicates_scoped_global_values(self) -> None:
+        cluster = aggregate_energy_sources(
+            (
+                EnergySourceSnapshot(
+                    source_id="mb-unit1",
+                    role="hybrid-inverter",
+                    service_name="10.0.0.20",
+                    soc=55.0,
+                    usable_capacity_wh=7000.0,
+                    net_battery_power_w=600.0,
+                    ac_power_w=4200.0,
+                    pv_input_power_w=5100.0,
+                    grid_interaction_w=-1200.0,
+                    ac_power_scope_key="10.0.0.20:502:ac",
+                    pv_input_power_scope_key="10.0.0.20:502:pv",
+                    grid_interaction_scope_key="10.0.0.20:502:meter",
+                    online=True,
+                    confidence=1.0,
+                    captured_at=100.0,
+                ),
+                EnergySourceSnapshot(
+                    source_id="mb-unit2",
+                    role="hybrid-inverter",
+                    service_name="10.0.0.20",
+                    soc=60.0,
+                    usable_capacity_wh=7000.0,
+                    net_battery_power_w=-400.0,
+                    ac_power_w=4200.0,
+                    pv_input_power_w=5100.0,
+                    grid_interaction_w=-1200.0,
+                    ac_power_scope_key="10.0.0.20:502:ac",
+                    pv_input_power_scope_key="10.0.0.20:502:pv",
+                    grid_interaction_scope_key="10.0.0.20:502:meter",
+                    online=True,
+                    confidence=1.0,
+                    captured_at=100.0,
+                ),
+            )
+        )
+
+        self.assertEqual(cluster.combined_discharge_power_w, 600.0)
+        self.assertEqual(cluster.combined_charge_power_w, 400.0)
+        self.assertEqual(cluster.combined_ac_power_w, 4200.0)
+        self.assertEqual(cluster.combined_pv_input_power_w, 5100.0)
+        self.assertEqual(cluster.combined_grid_interaction_w, -1200.0)
 
     def test_load_energy_source_settings_supports_dynamic_sources_and_legacy_defaults(self) -> None:
         legacy_sources, use_combined = load_energy_source_settings(
@@ -176,46 +229,127 @@ class TestVenusEvchargerEnergyAggregate(unittest.TestCase):
         self.assertEqual(configured_sources[0].connector_type, "dbus")
         self.assertIsNone(configured_sources[0].usable_capacity_wh)
 
+    def test_load_energy_source_settings_applies_profile_defaults_and_explicit_overrides(self) -> None:
+        configured_sources, use_combined = load_energy_source_settings(
+            {
+                "AutoEnergySources": "victron,external",
+                "AutoUseCombinedBatterySoc": "1",
+                "AutoEnergySource.victron.Profile": "dbus-battery",
+                "AutoEnergySource.victron.Service": "com.victronenergy.battery.lynxparallel",
+                "AutoEnergySource.victron.UsableCapacityWh": "10240",
+                "AutoEnergySource.external.Profile": "http-hybrid",
+                "AutoEnergySource.external.ConfigPath": "/data/etc/external-energy.ini",
+                "AutoEnergySource.external.UsableCapacityWh": "14000",
+                "AutoEnergySource.external.AcPowerPath": "/custom/ac",
+            }
+        )
+
+        self.assertTrue(use_combined)
+        self.assertEqual(configured_sources[0].profile_name, "dbus-battery")
+        self.assertEqual(configured_sources[0].role, "battery")
+        self.assertEqual(configured_sources[0].connector_type, "dbus")
+        self.assertEqual(configured_sources[0].service_prefix, "com.victronenergy.battery")
+        self.assertEqual(configured_sources[0].battery_power_path, "/Dc/0/Power")
+        self.assertEqual(configured_sources[1].profile_name, "template-http-hybrid")
+        self.assertEqual(configured_sources[1].role, "hybrid-inverter")
+        self.assertEqual(configured_sources[1].connector_type, "template_http")
+        self.assertEqual(configured_sources[1].config_path, "/data/etc/external-energy.ini")
+        self.assertEqual(configured_sources[1].ac_power_path, "/custom/ac")
+
+    def test_energy_source_profiles_support_aliases_and_unknown_names(self) -> None:
+        self.assertEqual(
+            available_energy_source_profiles(),
+            (
+                "dbus-battery",
+                "dbus-hybrid",
+                "template-http-hybrid",
+                "modbus-hybrid",
+                "command-json-hybrid",
+                "huawei_ma_native_ap",
+                "huawei_ma_native_lan",
+                "huawei_ma_sdongle",
+                "huawei_mb_native_ap",
+                "huawei_mb_native_lan",
+                "huawei_mb_sdongle",
+                "huawei_smartlogger_modbus_tcp",
+            ),
+        )
+        self.assertEqual(resolve_energy_source_profile("helper").profile_name, "command-json-hybrid")
+        self.assertIsNone(resolve_energy_source_profile("unknown-profile"))
+        self.assertEqual(resolve_energy_source_profile("huawei_m1_native_ap").profile_name, "huawei_ma_native_ap")
+        self.assertEqual(resolve_energy_source_profile("huawei_mb0_sdongle").profile_name, "huawei_mb_sdongle")
+
+    def test_huawei_energy_source_profiles_expose_details_and_probe_plan(self) -> None:
+        details = energy_source_profile_details("huawei_ma_native_ap")
+        plan = energy_source_profile_probe_plan(
+            "huawei_ma_native_ap",
+            configured_host="10.0.0.15",
+            configured_port="6607",
+            configured_unit_id=1,
+        )
+
+        self.assertEqual(details["vendor_name"], "Huawei")
+        self.assertEqual(details["platform"], "MA")
+        self.assertEqual(details["access_mode"], "native_ap")
+        self.assertEqual(details["default_host"], "192.168.200.1")
+        self.assertEqual(details["default_port_candidates"], [6607, 502])
+        self.assertEqual(details["default_unit_id_candidates"], [0, 1])
+        self.assertEqual(details["write_support"], "experimental")
+        self.assertTrue(details["probe_required"])
+        self.assertEqual(plan["host"], "10.0.0.15")
+        self.assertEqual(plan["port_candidates"], [6607])
+        self.assertEqual(plan["unit_id_candidates"], [1])
+
+    def test_huawei_smartlogger_probe_plan_uses_defaults_without_overrides(self) -> None:
+        plan = energy_source_profile_probe_plan("huawei_smartlogger_modbus_tcp")
+
+        self.assertEqual(plan["profile_name"], "huawei_smartlogger_modbus_tcp")
+        self.assertEqual(plan["connector_type"], "modbus")
+        self.assertEqual(plan["host"], "")
+        self.assertEqual(plan["port_candidates"], [502])
+        self.assertEqual(plan["unit_id_candidates"], [0, 1])
+
     def test_update_energy_learning_profiles_tracks_observed_maxima(self) -> None:
-        profiles = update_energy_learning_profiles(
-            {},
-            (
-                EnergySourceSnapshot(
-                    source_id="hybrid",
-                    role="hybrid-inverter",
-                    service_name="svc",
-                    soc=70.0,
-                    usable_capacity_wh=10000.0,
-                    net_battery_power_w=1500.0,
-                    ac_power_w=3200.0,
-                    grid_interaction_w=600.0,
-                    online=True,
-                    confidence=1.0,
-                    captured_at=75590.0,
+        with patch("venus_evcharger.energy.learning._sample_period", side_effect=("day", "night")):
+            profiles = update_energy_learning_profiles(
+                {},
+                (
+                    EnergySourceSnapshot(
+                        source_id="hybrid",
+                        role="hybrid-inverter",
+                        service_name="svc",
+                        soc=70.0,
+                        usable_capacity_wh=10000.0,
+                        net_battery_power_w=1500.0,
+                        ac_power_w=3200.0,
+                        grid_interaction_w=600.0,
+                        online=True,
+                        confidence=1.0,
+                        captured_at=75590.0,
+                    ),
                 ),
-            ),
-            75590.0,
-        )
-        profiles = update_energy_learning_profiles(
-            profiles,
-            (
-                EnergySourceSnapshot(
-                    source_id="hybrid",
-                    role="hybrid-inverter",
-                    service_name="svc",
-                    soc=68.0,
-                    usable_capacity_wh=10000.0,
-                    net_battery_power_w=-1800.0,
-                    ac_power_w=3500.0,
-                    pv_input_power_w=2200.0,
-                    grid_interaction_w=-900.0,
-                    online=True,
-                    confidence=1.0,
-                    captured_at=75600.0,
+                75590.0,
+            )
+            profiles = update_energy_learning_profiles(
+                profiles,
+                (
+                    EnergySourceSnapshot(
+                        source_id="hybrid",
+                        role="hybrid-inverter",
+                        service_name="svc",
+                        soc=68.0,
+                        usable_capacity_wh=10000.0,
+                        net_battery_power_w=-1800.0,
+                        ac_power_w=3500.0,
+                        pv_input_power_w=2200.0,
+                        grid_interaction_w=-900.0,
+                        online=True,
+                        confidence=1.0,
+                        captured_at=75600.0,
+                    ),
                 ),
-            ),
-            75600.0,
-        )
+                75600.0,
+            )
 
         profile = profiles["hybrid"]
         self.assertEqual(profile.sample_count, 2)
@@ -473,6 +607,29 @@ class TestVenusEvchargerEnergyAggregate(unittest.TestCase):
         self.assertEqual(forecast["battery_headroom_discharge_w"], 1800.0)
         self.assertAlmostEqual(forecast["expected_near_term_export_w"] or 0.0, 210.0, places=6)
         self.assertAlmostEqual(forecast["expected_near_term_import_w"] or 0.0, 100.0, places=6)
+
+    def test_derive_energy_forecast_prefers_documented_charge_discharge_limits(self) -> None:
+        forecast = derive_energy_forecast(
+            {
+                "battery_combined_charge_power_w": 800.0,
+                "battery_combined_discharge_power_w": 1200.0,
+                "battery_combined_charge_limit_power_w": 900.0,
+                "battery_combined_discharge_limit_power_w": 1400.0,
+                "battery_combined_grid_interaction_w": 400.0,
+            },
+            {
+                "observed_max_charge_power_w": 2000.0,
+                "observed_max_discharge_power_w": 3000.0,
+                "average_active_charge_power_w": 1000.0,
+                "average_active_discharge_power_w": 1600.0,
+                "support_bias": 0.5,
+                "import_support_bias": 0.5,
+                "export_bias": 0.75,
+            },
+        )
+
+        self.assertEqual(forecast["battery_headroom_charge_w"], 100.0)
+        self.assertEqual(forecast["battery_headroom_discharge_w"], 200.0)
 
     def test_derive_energy_forecast_covers_average_limit_and_saturation_fallbacks(self) -> None:
         forecast = derive_energy_forecast(

@@ -18,7 +18,7 @@ from venus_evcharger.control import (
 )
 from venus_evcharger.control.events import ControlApiEventBus
 from venus_evcharger.core.common import evse_fault_reason
-from venus_evcharger.energy import summarize_energy_learning_profiles
+from venus_evcharger.energy import energy_source_profile_details, summarize_energy_learning_profiles
 from venus_evcharger.core.contracts import (
     CONTROL_API_ENDPOINTS,
     CONTROL_API_EXPERIMENTAL_ENDPOINTS,
@@ -312,6 +312,23 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
                         "companion_source_pvinverter_service_prefix",
                         "",
                     ),
+                    "auto_use_combined_battery_soc": bool(getattr(self, "auto_use_combined_battery_soc", True)),
+                    "auto_energy_source_ids": [
+                        getattr(source, "source_id", "")
+                        for source in tuple(getattr(self, "auto_energy_sources", ()) or ())
+                    ],
+                    "auto_energy_source_profiles": {
+                        getattr(source, "source_id", ""): getattr(source, "profile_name", "")
+                        for source in tuple(getattr(self, "auto_energy_sources", ()) or ())
+                        if str(getattr(source, "source_id", "")).strip()
+                    },
+                    "auto_energy_source_profile_details": {
+                        getattr(source, "source_id", ""): dict(
+                            energy_source_profile_details(getattr(source, "profile_name", ""))
+                        )
+                        for source in tuple(getattr(self, "auto_energy_sources", ()) or ())
+                        if str(getattr(source, "source_id", "")).strip()
+                    },
                     "backend_mode": getattr(self, "backend_mode", "combined"),
                     "meter_backend": getattr(self, "meter_backend_type", "na"),
                     "switch_backend": getattr(self, "switch_backend_type", "na"),
@@ -319,9 +336,7 @@ class ControlApiMixin(ServiceControllerFactoryMixin):
                     "max_current": getattr(self, "max_current", 0.0),
                     "min_current": getattr(self, "min_current", 0.0),
                     "auto_daytime_only": bool(getattr(self, "auto_daytime_only", False)),
-                    "auto_use_combined_battery_soc": bool(getattr(self, "auto_use_combined_battery_soc", True)),
-                    "auto_energy_source_ids": list(getattr(self, "auto_energy_source_ids", ())),
-                    "auto_energy_source_count": len(tuple(getattr(self, "auto_energy_source_ids", ()))),
+                    "auto_energy_source_count": len(tuple(getattr(self, "auto_energy_sources", ()) or ())),
                     "auto_scheduled_enabled_days": getattr(self, "auto_scheduled_enabled_days", ""),
                     "auto_scheduled_latest_end_time": getattr(self, "auto_scheduled_latest_end_time", ""),
                     "auto_scheduled_night_current_amps": getattr(self, "auto_scheduled_night_current_amps", 0.0),

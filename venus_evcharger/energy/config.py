@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .models import ENERGY_SOURCE_CONNECTOR_TYPES, ENERGY_SOURCE_ROLES, EnergySourceDefinition
+from .profiles import energy_source_profile_defaults
 
 
 def _text(value: Any, default: str = "") -> str:
@@ -56,28 +57,40 @@ def _legacy_primary_source(defaults: Mapping[str, Any]) -> EnergySourceDefinitio
 
 def _configured_source(defaults: Mapping[str, Any], source_id: str) -> EnergySourceDefinition:
     prefix = f"AutoEnergySource.{source_id}."
-    role = _text(defaults.get(f"{prefix}Role"), "battery").lower()
+    profile_name = _text(defaults.get(f"{prefix}Profile")).lower()
+    profile_defaults = energy_source_profile_defaults(profile_name)
+    role = _text(defaults.get(f"{prefix}Role"), str(profile_defaults.get("Role", "battery"))).lower()
     if role not in ENERGY_SOURCE_ROLES:
         role = "battery"
-    connector_type = _text(defaults.get(f"{prefix}Type"), "dbus").lower()
+    connector_type = _text(defaults.get(f"{prefix}Type"), str(profile_defaults.get("Type", "dbus"))).lower()
     if connector_type not in ENERGY_SOURCE_CONNECTOR_TYPES:
         connector_type = "dbus"
     if connector_type == "template_http_energy":
         connector_type = "template_http"
     return EnergySourceDefinition(
         source_id=source_id,
+        profile_name=str(profile_defaults.get("Profile", profile_name or "")),
         role=role,
         connector_type=connector_type,
         config_path=_text(defaults.get(f"{prefix}ConfigPath")),
         service_name=_text(defaults.get(f"{prefix}Service")),
-        service_prefix=_text(defaults.get(f"{prefix}ServicePrefix")),
-        soc_path=_text(defaults.get(f"{prefix}SocPath"), "/Soc"),
+        service_prefix=_text(defaults.get(f"{prefix}ServicePrefix"), str(profile_defaults.get("ServicePrefix", ""))),
+        soc_path=_text(defaults.get(f"{prefix}SocPath"), str(profile_defaults.get("SocPath", "/Soc"))),
         usable_capacity_wh=_float_or_none(defaults.get(f"{prefix}UsableCapacityWh")),
-        battery_power_path=_text(defaults.get(f"{prefix}BatteryPowerPath")),
-        ac_power_path=_text(defaults.get(f"{prefix}AcPowerPath")),
-        pv_power_path=_text(defaults.get(f"{prefix}PvPowerPath")),
-        grid_interaction_path=_text(defaults.get(f"{prefix}GridInteractionPath")),
-        operating_mode_path=_text(defaults.get(f"{prefix}OperatingModePath")),
+        battery_power_path=_text(
+            defaults.get(f"{prefix}BatteryPowerPath"),
+            str(profile_defaults.get("BatteryPowerPath", "")),
+        ),
+        ac_power_path=_text(defaults.get(f"{prefix}AcPowerPath"), str(profile_defaults.get("AcPowerPath", ""))),
+        pv_power_path=_text(defaults.get(f"{prefix}PvPowerPath"), str(profile_defaults.get("PvPowerPath", ""))),
+        grid_interaction_path=_text(
+            defaults.get(f"{prefix}GridInteractionPath"),
+            str(profile_defaults.get("GridInteractionPath", "")),
+        ),
+        operating_mode_path=_text(
+            defaults.get(f"{prefix}OperatingModePath"),
+            str(profile_defaults.get("OperatingModePath", "")),
+        ),
     )
 
 

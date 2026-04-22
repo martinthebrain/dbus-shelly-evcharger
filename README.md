@@ -76,6 +76,14 @@ The first connector layer now supports:
 - `modbus` sources
 - `command_json` helper sources
 
+You can now also start from named energy-source presets such as
+`dbus-battery`, `dbus-hybrid`, `template-http-hybrid`, `modbus-hybrid`, and
+`command-json-hybrid`, then only override the fields that differ on your site.
+The first vendor-specific preset family is now Huawei-oriented and includes
+`huawei_ma_native_ap`, `huawei_ma_native_lan`, `huawei_ma_sdongle`,
+`huawei_mb_native_ap`, `huawei_mb_native_lan`, `huawei_mb_sdongle`, and
+`huawei_smartlogger_modbus_tcp`.
+
 That last `command_json` connector is the intended bridge seam for custom
 vendor integrations and MQTT subscribers: keep protocol-specific logic in one
 small local helper and feed the wallbox service one normalized JSON energy
@@ -83,6 +91,37 @@ snapshot.
 
 For concrete `AutoEnergySources` examples, see
 [CONFIGURATION.md](CONFIGURATION.md).
+
+For active Huawei-like Modbus endpoint detection against host/port/unit-id
+candidates, you can now also run:
+
+```bash
+python3 -m venus_evcharger.energy.probe detect-modbus-energy /data/etc/huawei-ma-modbus.ini --profile huawei_ma_native_ap
+```
+
+And for a full Huawei field check on a reachable endpoint:
+
+```bash
+python3 -m venus_evcharger.energy.probe validate-huawei-energy /data/etc/huawei-mb-modbus.ini --profile huawei_mb_sdongle --host 192.168.8.1
+```
+
+The repo now also includes first Huawei read-template starters:
+
+- [template-energy-source-huawei-ma-modbus.ini](deploy/venus/template-energy-source-huawei-ma-modbus.ini)
+- [template-energy-source-huawei-mb-modbus.ini](deploy/venus/template-energy-source-huawei-mb-modbus.ini)
+- [template-energy-source-huawei-mb-unit1-modbus.ini](deploy/venus/template-energy-source-huawei-mb-unit1-modbus.ini)
+- [template-energy-source-huawei-mb-unit2-modbus.ini](deploy/venus/template-energy-source-huawei-mb-unit2-modbus.ini)
+
+These templates intentionally use `BatteryPowerRead Scale=-1` because
+Huawei's documented battery-power sign is the inverse of the repo-internal
+`net_battery_power_w` semantics.
+Where the Huawei working-mode codes are pinned, the templates map them to
+semantic text labels. Aggregate PV input is now wired from Huawei's documented
+`Total input power` register, and meter-backed grid interaction is wired from
+the Huawei meter active-power register with normalized sign semantics.
+For the MB `unit1` / `unit2` variants, `AcPowerRead`, `PvInputPowerRead`, and
+`GridInteractionRead` remain inverter-global or meter-global values and are
+deduplicated automatically when both units are configured in parallel.
 
 If you also want these external sources to become visible as separate
 Venus-style companion services, the optional companion DBus bridge can now

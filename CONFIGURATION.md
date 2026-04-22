@@ -161,6 +161,7 @@ Main keys:
 
 - `AutoUseCombinedBatterySoc`
 - `AutoEnergySources`
+- `AutoEnergySource.<id>.Profile`
 - `AutoEnergySource.<id>.Role`
 - `AutoEnergySource.<id>.Type`
 - `AutoEnergySource.<id>.ConfigPath`
@@ -187,6 +188,41 @@ Connector types:
 - `modbus`
 - `command_json`
 
+Named profiles:
+
+- `dbus-battery`
+- `dbus-hybrid`
+- `template-http-hybrid`
+- `modbus-hybrid`
+- `command-json-hybrid`
+- `huawei_ma_native_ap`
+- `huawei_ma_native_lan`
+- `huawei_ma_sdongle`
+- `huawei_mb_native_ap`
+- `huawei_mb_native_lan`
+- `huawei_mb_sdongle`
+- `huawei_smartlogger_modbus_tcp`
+
+You can also use short aliases such as `battery`, `hybrid`, `http-hybrid`,
+`modbus`, or `helper`. A profile provides safe defaults for role, connector
+type, and common path fields. Explicit `AutoEnergySource.<id>.*` values still
+win over the profile defaults.
+
+The first vendor-specific presets are Huawei-oriented. They model:
+
+- platform families `MA`, `MB`, and `smartlogger`
+- access modes `native_ap`, `native_lan`, `sdongle`, and `smartlogger`
+- default probe candidates for host, port, and unit-id discovery
+
+For Huawei aliases, these names map internally onto the MA/MB presets:
+
+- `huawei_l1_native_ap`, `huawei_lc0_native_ap`, `huawei_lb0_native_ap`, `huawei_m1_native_ap`
+- `huawei_l1_native_lan`, `huawei_lc0_native_lan`, `huawei_lb0_native_lan`, `huawei_m1_native_lan`
+- `huawei_l1_sdongle`, `huawei_lc0_sdongle`, `huawei_lb0_sdongle`, `huawei_m1_sdongle`
+- `huawei_map0_native_ap`, `huawei_mb0_native_ap`
+- `huawei_map0_native_lan`, `huawei_mb0_native_lan`
+- `huawei_map0_sdongle`, `huawei_mb0_sdongle`
+
 Aggregation rules:
 
 - `combined_soc` is capacity-weighted when one or more sources provide both
@@ -212,6 +248,56 @@ connector layer for non-DBus energy sources.
 `modbus` sources read one compact energy snapshot through a dedicated Modbus
 config file. This is a good fit for external hybrid systems that already expose
 SOC and battery power on TCP or RTU.
+
+For vendor-sensitive TCP setups such as Huawei, you can actively test the
+configured Modbus read section against host/port/unit-id candidates:
+
+```bash
+python3 -m venus_evcharger.energy.probe detect-modbus-energy /data/etc/huawei-ma-modbus.ini --profile huawei_ma_native_ap
+```
+
+That command uses the configured read mapping from the INI file, expands the
+candidate host/port/unit-id set from the selected profile, and returns the
+first successful combination plus the failed attempts before it.
+
+For Huawei-specific field validation on a real endpoint, you can then run:
+
+```bash
+python3 -m venus_evcharger.energy.probe validate-huawei-energy /data/etc/huawei-mb-modbus.ini --profile huawei_mb_sdongle --host 192.168.8.1
+```
+
+That validation run checks the configured field set plus the Huawei meter block
+around `37100` and reports which reads succeeded on the current access path.
+
+The repository now also ships first read-only Huawei starter templates:
+
+- [template-energy-source-huawei-ma-modbus.ini](deploy/venus/template-energy-source-huawei-ma-modbus.ini)
+- [template-energy-source-huawei-mb-modbus.ini](deploy/venus/template-energy-source-huawei-mb-modbus.ini)
+- [template-energy-source-huawei-mb-unit1-modbus.ini](deploy/venus/template-energy-source-huawei-mb-unit1-modbus.ini)
+- [template-energy-source-huawei-mb-unit2-modbus.ini](deploy/venus/template-energy-source-huawei-mb-unit2-modbus.ini)
+
+These templates currently cover the first officially verified baseline fields:
+
+- battery SOC
+- battery charge/discharge power
+- rated charge/discharge power where officially documented
+- device active power
+- aggregate PV input power from Huawei's documented `Total input power` register
+- meter-backed grid interaction power
+- battery working mode with semantic text labels where officially documented
+
+The shipped Huawei templates intentionally set `BatteryPowerRead Scale=-1`
+because Huawei's documented battery-power sign is the inverse of this repo's
+internal `net_battery_power_w` convention.
+The current Huawei starters now set aggregate `PvInputPowerRead` from the
+Huawei `Total input power` register (`32064`).
+They also set `GridInteractionRead` from the Huawei meter active-power register
+(`37113`) with sign normalization into the repo-internal import/export
+convention.
+For the MB `unit1` / `unit2` variants, `AcPowerRead`, `PvInputPowerRead`, and
+`GridInteractionRead` remain inverter-global or meter-global values. Those are
+now deduplicated automatically through the shipped aggregation scope keys, so
+parallel `unit1` + `unit2` setups do not double-count them.
 
 `command_json` sources run one local helper command that returns a JSON object.
 This is the intended bridge point for custom scripts, vendor SDK wrappers, or
@@ -306,18 +392,13 @@ Example: one Victron battery plus one external hybrid inverter:
 AutoUseCombinedBatterySoc=1
 AutoEnergySources=victron,hybrid
 
-AutoEnergySource.victron.Role=battery
+AutoEnergySource.victron.Profile=dbus-battery
 AutoEnergySource.victron.Service=com.victronenergy.battery.lynxparallel
-AutoEnergySource.victron.SocPath=/Soc
 AutoEnergySource.victron.UsableCapacityWh=10240
-AutoEnergySource.victron.BatteryPowerPath=/Dc/0/Power
 
-AutoEnergySource.hybrid.Role=hybrid-inverter
+AutoEnergySource.hybrid.Profile=dbus-hybrid
 AutoEnergySource.hybrid.Service=com.victronenergy.multi.rs.hybrid
-AutoEnergySource.hybrid.SocPath=/Soc
 AutoEnergySource.hybrid.UsableCapacityWh=14000
-AutoEnergySource.hybrid.BatteryPowerPath=/Dc/0/Power
-AutoEnergySource.hybrid.AcPowerPath=/Ac/Power
 
 CompanionDbusBridgeEnabled=1
 CompanionBatteryServiceEnabled=1
@@ -337,17 +418,12 @@ Example: prefix-based discovery for a second source:
 AutoUseCombinedBatterySoc=1
 AutoEnergySources=victron,external
 
-AutoEnergySource.victron.Role=battery
-AutoEnergySource.victron.ServicePrefix=com.victronenergy.battery
-AutoEnergySource.victron.SocPath=/Soc
+AutoEnergySource.victron.Profile=dbus-battery
 AutoEnergySource.victron.UsableCapacityWh=5120
 
-AutoEnergySource.external.Role=hybrid-inverter
+AutoEnergySource.external.Profile=dbus-hybrid
 AutoEnergySource.external.ServicePrefix=com.victronenergy.hybrid
-AutoEnergySource.external.SocPath=/Soc
 AutoEnergySource.external.UsableCapacityWh=10000
-AutoEnergySource.external.BatteryPowerPath=/Dc/0/Power
-AutoEnergySource.external.AcPowerPath=/Ac/Power
 ```
 
 Example: external source through the first non-DBus connector:
@@ -356,17 +432,38 @@ Example: external source through the first non-DBus connector:
 AutoUseCombinedBatterySoc=1
 AutoEnergySources=victron,external
 
-AutoEnergySource.victron.Role=battery
-AutoEnergySource.victron.Type=dbus
-AutoEnergySource.victron.ServicePrefix=com.victronenergy.battery
-AutoEnergySource.victron.SocPath=/Soc
+AutoEnergySource.victron.Profile=dbus-battery
 AutoEnergySource.victron.UsableCapacityWh=5120
 
-AutoEnergySource.external.Role=hybrid-inverter
-AutoEnergySource.external.Type=template_http
+AutoEnergySource.external.Profile=template-http-hybrid
 AutoEnergySource.external.ConfigPath=/data/etc/external-energy.ini
 AutoEnergySource.external.UsableCapacityWh=10000
 ```
+
+Example: Huawei MA platform over the inverter access-point path:
+
+```ini
+AutoUseCombinedBatterySoc=1
+AutoEnergySources=victron,huawei
+
+AutoEnergySource.victron.Profile=dbus-battery
+AutoEnergySource.victron.UsableCapacityWh=5120
+
+AutoEnergySource.huawei.Profile=huawei_ma_native_ap
+AutoEnergySource.huawei.ConfigPath=/data/etc/huawei-ma-modbus.ini
+AutoEnergySource.huawei.Service=SUN2000-MA
+AutoEnergySource.huawei.UsableCapacityWh=14000
+```
+
+Huawei preset notes:
+
+- `huawei_*_native_ap` defaults to AP-style probing with host `192.168.200.1`
+  and port candidates `6607,502`
+- `huawei_*_native_lan` probes ports `502,6607`
+- `huawei_*_sdongle` keeps the same Modbus-TCP preset family but marks the
+  access mode separately for operational tooling
+- `huawei_smartlogger_modbus_tcp` defaults to port `502`
+- all Huawei presets currently mark write support as `experimental`
 
 Example `template_http` energy-source file:
 

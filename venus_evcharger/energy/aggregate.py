@@ -15,6 +15,24 @@ def _sum_optional(values: Iterable[float | None]) -> float | None:
     return sum(numeric_values)
 
 
+def _sum_scoped_values(sources: tuple[EnergySourceSnapshot, ...], value_attr: str, scope_attr: str) -> float | None:
+    numeric_values: list[float] = []
+    seen_scope_keys: set[str] = set()
+    for source in sources:
+        value = getattr(source, value_attr)
+        if value is None:
+            continue
+        scope_key = str(getattr(source, scope_attr, "") or "").strip()
+        if scope_key:
+            if scope_key in seen_scope_keys:
+                continue
+            seen_scope_keys.add(scope_key)
+        numeric_values.append(float(value))
+    if not numeric_values:
+        return None
+    return sum(numeric_values)
+
+
 def _weighted_soc(sources: tuple[EnergySourceSnapshot, ...]) -> tuple[float | None, float | None, int]:
     total_capacity = 0.0
     total_soc_energy = 0.0
@@ -61,10 +79,18 @@ def aggregate_energy_sources(sources: Iterable[EnergySourceSnapshot]) -> EnergyC
         combined_usable_capacity_wh=combined_capacity_wh,
         combined_charge_power_w=_sum_optional(source.charge_power_w for source in normalized_sources),
         combined_discharge_power_w=_sum_optional(source.discharge_power_w for source in normalized_sources),
+        combined_charge_limit_power_w=_sum_optional(source.charge_limit_power_w for source in normalized_sources),
+        combined_discharge_limit_power_w=_sum_optional(
+            source.discharge_limit_power_w for source in normalized_sources
+        ),
         combined_net_battery_power_w=_sum_optional(source.net_battery_power_w for source in normalized_sources),
-        combined_ac_power_w=_sum_optional(source.ac_power_w for source in normalized_sources),
-        combined_pv_input_power_w=_sum_optional(source.pv_input_power_w for source in normalized_sources),
-        combined_grid_interaction_w=_sum_optional(source.grid_interaction_w for source in normalized_sources),
+        combined_ac_power_w=_sum_scoped_values(normalized_sources, "ac_power_w", "ac_power_scope_key"),
+        combined_pv_input_power_w=_sum_scoped_values(normalized_sources, "pv_input_power_w", "pv_input_power_scope_key"),
+        combined_grid_interaction_w=_sum_scoped_values(
+            normalized_sources,
+            "grid_interaction_w",
+            "grid_interaction_scope_key",
+        ),
         average_confidence=_average_confidence(normalized_sources),
         source_count=len(normalized_sources),
         online_source_count=sum(1 for source in normalized_sources if source.online),

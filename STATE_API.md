@@ -207,10 +207,18 @@ including:
 
 Each entry in `combined_battery_sources` may now also include:
 
+- `charge_limit_power_w`
+- `discharge_limit_power_w`
 - `pv_input_power_w`
 - `grid_interaction_w`
 - `operating_mode`
 - `ac_output_power_w`
+
+For vendor-aware templates such as the Huawei Modbus starters, `operating_mode`
+may already be a semantic label like `maximise_self_consumption` instead of a
+raw numeric code. The Huawei starters now also populate `pv_input_power_w` from
+the documented `Total input power` register and `grid_interaction_w` from the
+meter active-power block with normalized sign semantics.
 
 These per-source entries are also the basis for the optional companion DBus
 bridge. When the companion bridge is enabled, normalized battery-like sources
@@ -252,8 +260,18 @@ Typical fields include:
 - runtime paths
 - control API binding settings
 - companion bridge settings
+- `auto_use_combined_battery_soc`
+- `auto_energy_source_ids`
+- `auto_energy_source_profiles`
+- `auto_energy_source_profile_details`
 - backend selection
 - selected scheduled/Auto policy basics
+
+`auto_energy_source_profile_details` exposes a safe outward-facing metadata
+view for configured presets, including vendor/platform/access-mode hints and
+default probe candidates. This is especially useful when local tools should
+explain why one profile such as `huawei_ma_native_ap` behaves differently from
+`huawei_smartlogger_modbus_tcp` without re-encoding that knowledge.
 
 ### `GET /v1/state/health`
 

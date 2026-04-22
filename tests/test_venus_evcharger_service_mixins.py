@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 sys.modules["vedbus"] = MagicMock()
 
 from venus_evcharger.control import ControlCommand
+from venus_evcharger.energy import EnergySourceDefinition
 from venus_evcharger.service.factory import ServiceControllerFactoryMixin
 from venus_evcharger.service.auto import DbusAutoLogicMixin
 from venus_evcharger.service.control import ControlApiMixin
@@ -310,6 +311,11 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         service.companion_pvinverter_service_name = "com.victronenergy.pvinverter.external_101"
         service.companion_source_battery_service_prefix = "com.victronenergy.battery.external"
         service.companion_source_pvinverter_service_prefix = "com.victronenergy.pvinverter.external"
+        service.auto_use_combined_battery_soc = True
+        service.auto_energy_sources = (
+            EnergySourceDefinition(source_id="battery", profile_name="dbus-battery"),
+            EnergySourceDefinition(source_id="hybrid", profile_name="huawei_ma_native_ap"),
+        )
         service.control_api_auth_token = "secret"
         service.product_name = "Venus EV Charger Service"
         service.service_name = "com.victronenergy.evcharger"
@@ -420,6 +426,24 @@ class TestShellyWallboxServiceMixins(unittest.TestCase):
         self.assertTrue(config_effective["state"]["companion_source_services_enabled"])
         self.assertEqual(config_effective["state"]["companion_battery_deviceinstance"], 100)
         self.assertEqual(config_effective["state"]["companion_source_battery_deviceinstance_base"], 200)
+        self.assertTrue(config_effective["state"]["auto_use_combined_battery_soc"])
+        self.assertEqual(config_effective["state"]["auto_energy_source_ids"], ["battery", "hybrid"])
+        self.assertEqual(
+            config_effective["state"]["auto_energy_source_profiles"],
+            {"battery": "dbus-battery", "hybrid": "huawei_ma_native_ap"},
+        )
+        self.assertEqual(
+            config_effective["state"]["auto_energy_source_profile_details"]["hybrid"]["vendor_name"],
+            "Huawei",
+        )
+        self.assertEqual(
+            config_effective["state"]["auto_energy_source_profile_details"]["hybrid"]["platform"],
+            "MA",
+        )
+        self.assertEqual(
+            config_effective["state"]["auto_energy_source_profile_details"]["hybrid"]["access_mode"],
+            "native_ap",
+        )
         self.assertEqual(
             config_effective["state"]["companion_pvinverter_service_name"],
             "com.victronenergy.pvinverter.external_101",

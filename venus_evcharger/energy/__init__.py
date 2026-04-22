@@ -14,6 +14,12 @@ from .models import (
     EnergySourceDefinition,
     EnergySourceSnapshot,
 )
+from .profiles import (
+    available_energy_source_profiles,
+    energy_source_profile_details,
+    energy_source_profile_probe_plan,
+    resolve_energy_source_profile,
+)
 
 __all__ = [
     "ENERGY_SOURCE_CONNECTOR_TYPES",
@@ -23,10 +29,14 @@ __all__ = [
     "EnergySourceDefinition",
     "EnergySourceSnapshot",
     "aggregate_energy_sources",
+    "available_energy_source_profiles",
     "derive_energy_forecast",
+    "energy_source_profile_details",
+    "energy_source_profile_probe_plan",
     "load_energy_source_definitions",
     "load_energy_source_settings",
     "read_energy_source_snapshot",
+    "resolve_energy_source_profile",
     "summarize_energy_learning_profiles",
     "update_energy_learning_profiles",
 ]

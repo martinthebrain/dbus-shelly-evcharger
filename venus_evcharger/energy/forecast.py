@@ -15,14 +15,18 @@ def derive_energy_forecast(
     learning = dict(learning_summary or {})
     charge_power = _non_negative_optional_float(cluster.get("battery_combined_charge_power_w"))
     discharge_power = _non_negative_optional_float(cluster.get("battery_combined_discharge_power_w"))
+    charge_limit_power = _non_negative_optional_float(cluster.get("battery_combined_charge_limit_power_w"))
+    discharge_limit_power = _non_negative_optional_float(cluster.get("battery_combined_discharge_limit_power_w"))
     combined_soc = _non_negative_optional_float(cluster.get("battery_combined_soc"))
     grid_interaction_w = _optional_float(cluster.get("battery_combined_grid_interaction_w"))
     observed_max_charge = _headroom_limit(
+        charge_limit_power,
         learning.get("observed_max_charge_power_w"),
         learning.get("average_active_charge_power_w"),
         charge_power,
     )
     observed_max_discharge = _headroom_limit(
+        discharge_limit_power,
         learning.get("observed_max_discharge_power_w"),
         learning.get("average_active_discharge_power_w"),
         discharge_power,
@@ -70,13 +74,17 @@ def derive_energy_forecast(
 
 
 def _headroom_limit(
+    configured_limit_power_w: object,
     observed_max_power_w: object,
     average_active_power_w: object,
     current_power_w: float | None,
 ) -> float | None:
+    configured = _non_negative_optional_float(configured_limit_power_w)
     observed = _non_negative_optional_float(observed_max_power_w)
     average = _non_negative_optional_float(average_active_power_w)
     current = 0.0 if current_power_w is None else float(current_power_w)
+    if configured is not None:
+        return max(float(configured), current)
     if observed is not None:
         return max(float(observed), current)
     if average is not None:

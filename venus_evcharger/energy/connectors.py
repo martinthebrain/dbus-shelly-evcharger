@@ -67,9 +67,16 @@ class ModbusEnergySourceSettings:
     soc_field: ModbusEnergyFieldSettings | None
     usable_capacity_field: ModbusEnergyFieldSettings | None
     battery_power_field: ModbusEnergyFieldSettings | None
+    charge_limit_power_field: ModbusEnergyFieldSettings | None
+    discharge_limit_power_field: ModbusEnergyFieldSettings | None
     ac_power_field: ModbusEnergyFieldSettings | None
     pv_input_power_field: ModbusEnergyFieldSettings | None
     grid_interaction_field: ModbusEnergyFieldSettings | None
+    operating_mode_field: ModbusEnergyFieldSettings | None
+    operating_mode_map: dict[str, str]
+    ac_power_scope_key: str
+    pv_input_power_scope_key: str
+    grid_interaction_scope_key: str
 
 
 @dataclass(frozen=True)
@@ -263,9 +270,23 @@ def _modbus_energy_source_snapshot(owner: Any, source: EnergySourceDefinition, n
         soc=soc_value,
         usable_capacity_wh=usable_capacity_wh,
         net_battery_power_w=_modbus_field_value(client, settings.battery_power_field),
+        charge_limit_power_w=_modbus_field_value(client, settings.charge_limit_power_field),
+        discharge_limit_power_w=_modbus_field_value(client, settings.discharge_limit_power_field),
         ac_power_w=_modbus_field_value(client, settings.ac_power_field),
         pv_input_power_w=_modbus_field_value(client, settings.pv_input_power_field),
         grid_interaction_w=_modbus_field_value(client, settings.grid_interaction_field),
+        ac_power_scope_key=_render_scope_key(source, settings.transport_settings, settings.ac_power_scope_key),
+        pv_input_power_scope_key=_render_scope_key(
+            source,
+            settings.transport_settings,
+            settings.pv_input_power_scope_key,
+        ),
+        grid_interaction_scope_key=_render_scope_key(
+            source,
+            settings.transport_settings,
+            settings.grid_interaction_scope_key,
+        ),
+        operating_mode=_modbus_field_text(client, settings.operating_mode_field, settings.operating_mode_map),
         online=True,
         confidence=1.0,
         captured_at=now,
@@ -296,9 +317,16 @@ def _modbus_energy_source_settings(runtime: Any, source: EnergySourceDefinition)
         soc_field=_modbus_field_settings(parser, "SocRead"),
         usable_capacity_field=_modbus_field_settings(parser, "UsableCapacityRead"),
         battery_power_field=_modbus_field_settings(parser, "BatteryPowerRead"),
+        charge_limit_power_field=_modbus_field_settings(parser, "ChargeLimitPowerRead"),
+        discharge_limit_power_field=_modbus_field_settings(parser, "DischargeLimitPowerRead"),
         ac_power_field=_modbus_field_settings(parser, "AcPowerRead"),
         pv_input_power_field=_modbus_field_settings(parser, "PvInputPowerRead"),
         grid_interaction_field=_modbus_field_settings(parser, "GridInteractionRead"),
+        operating_mode_field=_modbus_field_settings(parser, "OperatingModeRead"),
+        operating_mode_map=_modbus_text_map(parser, "OperatingModeMap"),
+        ac_power_scope_key=_modbus_aggregation_setting(parser, "AcPowerScopeKey"),
+        pv_input_power_scope_key=_modbus_aggregation_setting(parser, "PvInputPowerScopeKey"),
+        grid_interaction_scope_key=_modbus_aggregation_setting(parser, "GridInteractionScopeKey"),
     )
     _validate_modbus_energy_source_settings(source, settings)
     cache[cache_key] = settings
@@ -321,6 +349,26 @@ def _modbus_field_settings(parser: Any, section_name: str) -> ModbusEnergyFieldS
     )
 
 
+def _modbus_text_map(parser: Any, section_name: str) -> dict[str, str]:
+    if not parser.has_section(section_name):
+        return {}
+    section = parser[section_name]
+    normalized: dict[str, str] = {}
+    for raw_key, raw_value in section.items():
+        key = str(raw_key).strip()
+        value = str(raw_value).strip()
+        if not key or not value:
+            continue
+        normalized[key] = value
+    return normalized
+
+
+def _modbus_aggregation_setting(parser: Any, option_name: str) -> str:
+    if not parser.has_section("Aggregation"):
+        return ""
+    return str(parser["Aggregation"].get(option_name, "")).strip()
+
+
 def _validate_modbus_energy_source_settings(
     source: EnergySourceDefinition,
     settings: ModbusEnergySourceSettings,
@@ -329,9 +377,12 @@ def _validate_modbus_energy_source_settings(
         settings.soc_field is None
         and settings.usable_capacity_field is None
         and settings.battery_power_field is None
+        and settings.charge_limit_power_field is None
+        and settings.discharge_limit_power_field is None
         and settings.ac_power_field is None
         and settings.pv_input_power_field is None
         and settings.grid_interaction_field is None
+        and settings.operating_mode_field is None
         and source.usable_capacity_wh is None
     ):
         raise ValueError(
@@ -364,6 +415,49 @@ def _modbus_field_value(client: ModbusClient, field: ModbusEnergyFieldSettings |
     else:
         numeric_value = float(raw_value)
     return numeric_value * float(field.scale)
+
+
+def _modbus_field_text(
+    client: ModbusClient,
+    field: ModbusEnergyFieldSettings | None,
+    text_map: dict[str, str] | None = None,
+) -> str:
+    value = _modbus_field_value(client, field)
+    if value is None:
+        return ""
+    if float(value).is_integer():
+        normalized = str(int(value))
+    else:
+        normalized = str(value)
+    if text_map:
+        return str(text_map.get(normalized, normalized))
+    return normalized
+
+
+def _render_scope_key(
+    source: EnergySourceDefinition,
+    transport_settings: ModbusTransportSettings,
+    template: str,
+) -> str:
+    normalized = str(template or "").strip()
+    if not normalized:
+        return ""
+    values = {
+        "source_id": source.source_id,
+        "host": transport_settings.host,
+        "port": transport_settings.port,
+        "unit_id": transport_settings.unit_id,
+        "device": transport_settings.device,
+    }
+    try:
+        return normalized.format_map(_ScopeKeyFormatter(values))
+    except Exception:  # noqa: BLE001
+        return normalized
+
+
+class _ScopeKeyFormatter(dict[str, object]):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
 
 
 def _command_json_energy_source_snapshot(owner: Any, source: EnergySourceDefinition, now: float) -> EnergySourceSnapshot:

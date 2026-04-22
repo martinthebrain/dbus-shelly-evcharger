@@ -35,6 +35,10 @@ class _FakeModbusTransport:
             20: (12000,),
             30: (0xF830,),
             40: (3200,),
+            50: (4,),
+            60: (900,),
+            70: (1400,),
+            80: (0xFFFE, 0xD4F0,),
         }
         registers = values[address]
         if len(registers) != count:
@@ -202,8 +206,15 @@ class TestVenusEvchargerEnergyConnectors(unittest.TestCase):
                 "[SocRead]\nRegisterType=holding\nAddress=10\nDataType=uint16\nScale=0.1\n"
                 "[UsableCapacityRead]\nRegisterType=holding\nAddress=20\nDataType=uint16\n"
                 "[BatteryPowerRead]\nRegisterType=holding\nAddress=30\nDataType=int16\n"
+                "[ChargeLimitPowerRead]\nRegisterType=holding\nAddress=60\nDataType=uint16\n"
+                "[DischargeLimitPowerRead]\nRegisterType=holding\nAddress=70\nDataType=uint16\n"
                 "[AcPowerRead]\nRegisterType=holding\nAddress=40\nDataType=uint16\n"
-                "[PvInputPowerRead]\nRegisterType=holding\nAddress=40\nDataType=uint16\n",
+                "[PvInputPowerRead]\nRegisterType=holding\nAddress=40\nDataType=uint16\n"
+                "[GridInteractionRead]\nRegisterType=holding\nAddress=80\nDataType=int32\nScale=-1\n"
+                "[OperatingModeRead]\nRegisterType=holding\nAddress=50\nDataType=uint16\n"
+                "[OperatingModeMap]\n4=maximise_self_consumption\n"
+                "[Aggregation]\nAcPowerScopeKey={host}:{port}:ac\nPvInputPowerScopeKey={host}:{port}:pv\n"
+                "GridInteractionScopeKey={host}:{port}:meter\n",
             )
             runtime = SimpleNamespace(shelly_request_timeout_seconds=2.0)
             owner = SimpleNamespace(service=runtime)
@@ -222,9 +233,40 @@ class TestVenusEvchargerEnergyConnectors(unittest.TestCase):
             self.assertEqual(snapshot.usable_capacity_wh, 12000.0)
             self.assertEqual(snapshot.net_battery_power_w, -2000.0)
             self.assertEqual(snapshot.charge_power_w, 2000.0)
+            self.assertEqual(snapshot.charge_limit_power_w, 900.0)
+            self.assertEqual(snapshot.discharge_limit_power_w, 1400.0)
             self.assertEqual(snapshot.ac_power_w, 3200.0)
             self.assertEqual(snapshot.pv_input_power_w, 3200.0)
+            self.assertEqual(snapshot.grid_interaction_w, 76560.0)
+            self.assertEqual(snapshot.ac_power_scope_key, "192.0.2.10:502:ac")
+            self.assertEqual(snapshot.pv_input_power_scope_key, "192.0.2.10:502:pv")
+            self.assertEqual(snapshot.grid_interaction_scope_key, "192.0.2.10:502:meter")
+            self.assertEqual(snapshot.operating_mode, "maximise_self_consumption")
             self.assertTrue(snapshot.online)
+
+    def test_modbus_connector_supports_negative_scale_for_vendor_sign_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nTransport=tcp\n"
+                "[Transport]\nHost=192.0.2.11\nPort=502\nUnitId=1\nRequestTimeoutSeconds=2.0\n"
+                "[BatteryPowerRead]\nRegisterType=holding\nAddress=30\nDataType=int16\nScale=-1\n",
+            )
+            runtime = SimpleNamespace(shelly_request_timeout_seconds=2.0)
+            owner = SimpleNamespace(service=runtime)
+            source = EnergySourceDefinition(
+                source_id="vendor-battery",
+                role="battery",
+                connector_type="modbus",
+                config_path=config_path,
+            )
+
+            with patch("venus_evcharger.energy.connectors.create_modbus_transport", return_value=_FakeModbusTransport()):
+                snapshot = read_energy_source_snapshot(owner, source, 301.0)
+
+            self.assertEqual(snapshot.net_battery_power_w, 2000.0)
+            self.assertEqual(snapshot.charge_power_w, 0.0)
+            self.assertEqual(snapshot.discharge_power_w, 2000.0)
 
     def test_read_energy_source_snapshot_dispatches_to_command_json_connector(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -403,9 +445,16 @@ class TestVenusEvchargerEnergyConnectors(unittest.TestCase):
                     soc_field=None,
                     usable_capacity_field=None,
                     battery_power_field=None,
+                    charge_limit_power_field=None,
+                    discharge_limit_power_field=None,
                     ac_power_field=None,
                     pv_input_power_field=None,
                     grid_interaction_field=None,
+                    operating_mode_field=None,
+                    operating_mode_map={},
+                    ac_power_scope_key="",
+                    pv_input_power_scope_key="",
+                    grid_interaction_scope_key="",
                 ),
             )
         with self.assertRaisesRegex(ValueError, "requires \\[Command\\] Args"):
@@ -451,9 +500,16 @@ class TestVenusEvchargerEnergyConnectors(unittest.TestCase):
             soc_field=energy_connectors.ModbusEnergyFieldSettings("holding", 1, "uint16", 1.0, "big"),
             usable_capacity_field=None,
             battery_power_field=None,
+            charge_limit_power_field=None,
+            discharge_limit_power_field=None,
             ac_power_field=None,
             pv_input_power_field=None,
             grid_interaction_field=None,
+            operating_mode_field=None,
+            operating_mode_map={},
+            ac_power_scope_key="",
+            pv_input_power_scope_key="",
+            grid_interaction_scope_key="",
         )
         runtime._energy_modbus_settings_cache["cfg.ini"] = cached_settings
         self.assertIs(energy_connectors._modbus_energy_source_settings(runtime, source), cached_settings)
@@ -523,9 +579,16 @@ class TestVenusEvchargerEnergyConnectors(unittest.TestCase):
             soc_field=energy_connectors.ModbusEnergyFieldSettings("holding", 1, "uint16", 1.0, "big"),
             usable_capacity_field=energy_connectors.ModbusEnergyFieldSettings("holding", 2, "uint16", 1.0, "big"),
             battery_power_field=None,
+            charge_limit_power_field=None,
+            discharge_limit_power_field=None,
             ac_power_field=None,
             pv_input_power_field=None,
             grid_interaction_field=None,
+            operating_mode_field=None,
+            operating_mode_map={},
+            ac_power_scope_key="",
+            pv_input_power_scope_key="",
+            grid_interaction_scope_key="",
         )
         modbus_client = SimpleNamespace(read_scalar=MagicMock(side_effect=[150.0, -2.0]))
         with (
@@ -548,14 +611,24 @@ class TestVenusEvchargerEnergyConnectors(unittest.TestCase):
             soc_field=None,
             usable_capacity_field=energy_connectors.ModbusEnergyFieldSettings("holding", 2, "uint16", 1.0, "big"),
             battery_power_field=None,
+            charge_limit_power_field=None,
+            discharge_limit_power_field=None,
             ac_power_field=None,
             pv_input_power_field=None,
             grid_interaction_field=None,
+            operating_mode_field=None,
+            operating_mode_map={},
+            ac_power_scope_key="",
+            pv_input_power_scope_key="",
+            grid_interaction_scope_key="",
         )
         with (
             patch("venus_evcharger.energy.connectors._modbus_energy_source_settings", return_value=fallback_capacity_settings),
             patch("venus_evcharger.energy.connectors._modbus_energy_source_client", return_value=SimpleNamespace()),
-            patch("venus_evcharger.energy.connectors._modbus_field_value", side_effect=[None, None, None, None, None, None]),
+            patch(
+                "venus_evcharger.energy.connectors._modbus_field_value",
+                side_effect=[None, None, None, None, None, None, None, None, None],
+            ),
         ):
             fallback_snapshot = energy_connectors._modbus_energy_source_snapshot(modbus_owner, fallback_capacity_source, 2.5)
         self.assertEqual(fallback_snapshot.usable_capacity_wh, 6400.0)

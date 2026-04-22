@@ -18,6 +18,7 @@ class EnergySourceDefinition:
     """Describe one battery or inverter-like DBus-backed energy source."""
 
     source_id: str
+    profile_name: str = ""
     role: str = "battery"
     connector_type: str = "dbus"
     config_path: str = ""
@@ -42,9 +43,14 @@ class EnergySourceSnapshot:
     soc: float | None = None
     usable_capacity_wh: float | None = None
     net_battery_power_w: float | None = None
+    charge_limit_power_w: float | None = None
+    discharge_limit_power_w: float | None = None
     ac_power_w: float | None = None
     pv_input_power_w: float | None = None
     grid_interaction_w: float | None = None
+    ac_power_scope_key: str = ""
+    pv_input_power_scope_key: str = ""
+    grid_interaction_scope_key: str = ""
     operating_mode: str = ""
     online: bool = False
     confidence: float = 0.0
@@ -72,10 +78,15 @@ class EnergySourceSnapshot:
             "net_battery_power_w": self.net_battery_power_w,
             "charge_power_w": self.charge_power_w,
             "discharge_power_w": self.discharge_power_w,
+            "charge_limit_power_w": self.charge_limit_power_w,
+            "discharge_limit_power_w": self.discharge_limit_power_w,
             "ac_power_w": self.ac_power_w,
             "ac_output_power_w": self.ac_power_w,
             "pv_input_power_w": self.pv_input_power_w,
             "grid_interaction_w": self.grid_interaction_w,
+            "ac_power_scope_key": self.ac_power_scope_key,
+            "pv_input_power_scope_key": self.pv_input_power_scope_key,
+            "grid_interaction_scope_key": self.grid_interaction_scope_key,
             "operating_mode": self.operating_mode,
             "online": self.online,
             "confidence": self.confidence,
@@ -92,6 +103,8 @@ class EnergyClusterSnapshot:
     combined_usable_capacity_wh: float | None = None
     combined_charge_power_w: float | None = None
     combined_discharge_power_w: float | None = None
+    combined_charge_limit_power_w: float | None = None
+    combined_discharge_limit_power_w: float | None = None
     combined_net_battery_power_w: float | None = None
     combined_ac_power_w: float | None = None
     combined_pv_input_power_w: float | None = None
@@ -112,6 +125,8 @@ class EnergyClusterSnapshot:
             "combined_usable_capacity_wh": self.combined_usable_capacity_wh,
             "combined_charge_power_w": self.combined_charge_power_w,
             "combined_discharge_power_w": self.combined_discharge_power_w,
+            "combined_charge_limit_power_w": self.combined_charge_limit_power_w,
+            "combined_discharge_limit_power_w": self.combined_discharge_limit_power_w,
             "combined_net_battery_power_w": self.combined_net_battery_power_w,
             "combined_ac_power_w": self.combined_ac_power_w,
             "combined_ac_output_power_w": self.combined_ac_power_w,
