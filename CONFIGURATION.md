@@ -195,12 +195,23 @@ Named profiles:
 - `template-http-hybrid`
 - `modbus-hybrid`
 - `command-json-hybrid`
+- `opendtu-pvinverter`
 - `huawei_ma_native_ap`
 - `huawei_ma_native_lan`
 - `huawei_ma_sdongle`
+- `huawei_ma_smartlogger_modbus_tcp`
 - `huawei_mb_native_ap`
 - `huawei_mb_native_lan`
 - `huawei_mb_sdongle`
+- `huawei_mb_smartlogger_modbus_tcp`
+- `huawei_mb_unit1`
+- `huawei_mb_unit2`
+- `huawei_l1_*`
+- `huawei_lc0_*`
+- `huawei_lb0_*`
+- `huawei_m1_*`
+- `huawei_map0_*`
+- `huawei_mb0_*`
 - `huawei_smartlogger_modbus_tcp`
 
 You can also use short aliases such as `battery`, `hybrid`, `http-hybrid`,
@@ -211,21 +222,38 @@ win over the profile defaults.
 The first vendor-specific presets are Huawei-oriented. They model:
 
 - platform families `MA`, `MB`, and `smartlogger`
-- access modes `native_ap`, `native_lan`, `sdongle`, and `smartlogger`
+- model families `L1`, `LC0`, `LB0`, `M1`, `MAP0`, and `MB0`
+- access modes `native_ap`, `native_lan`, `sdongle`, `smartlogger`, and MB `unit1` / `unit2`
 - default probe candidates for host, port, and unit-id discovery
 
 The Huawei validation CLI also emits a ready-to-copy
 `recommendation.config_snippet` for the main config plus a compact
 `recommendation.wizard_hint_block` that can be pasted into operator notes.
 
-For Huawei aliases, these names map internally onto the MA/MB presets:
+Huawei family-specific profiles are first-class names. That includes:
 
 - `huawei_l1_native_ap`, `huawei_lc0_native_ap`, `huawei_lb0_native_ap`, `huawei_m1_native_ap`
 - `huawei_l1_native_lan`, `huawei_lc0_native_lan`, `huawei_lb0_native_lan`, `huawei_m1_native_lan`
 - `huawei_l1_sdongle`, `huawei_lc0_sdongle`, `huawei_lb0_sdongle`, `huawei_m1_sdongle`
+- `huawei_l1_smartlogger_modbus_tcp`, `huawei_lc0_smartlogger_modbus_tcp`, `huawei_lb0_smartlogger_modbus_tcp`, `huawei_m1_smartlogger_modbus_tcp`
 - `huawei_map0_native_ap`, `huawei_mb0_native_ap`
 - `huawei_map0_native_lan`, `huawei_mb0_native_lan`
 - `huawei_map0_sdongle`, `huawei_mb0_sdongle`
+- `huawei_map0_smartlogger_modbus_tcp`, `huawei_mb0_smartlogger_modbus_tcp`
+- `huawei_map0_unit1`, `huawei_map0_unit2`, `huawei_mb0_unit1`, `huawei_mb0_unit2`
+
+Regional `SUN5000` family names are accepted as compatibility aliases for the
+matching `LB0` and `MAP0` profiles.
+
+There is also a direct OpenDTU preset for PV-only sources:
+
+- `opendtu-pvinverter`
+
+Useful aliases:
+
+- `opendtu`
+- `opendtu-inverter`
+- `growatt-opendtu`
 
 Aggregation rules:
 
@@ -358,36 +386,313 @@ Main keys:
 - `CompanionDbusBridgeEnabled`
 - `CompanionBatteryServiceEnabled`
 - `CompanionPvInverterServiceEnabled`
+- `CompanionGridServiceEnabled`
+- `CompanionGridAuthoritativeSource`
 - `CompanionSourceServicesEnabled`
+- `CompanionSourceGridServicesEnabled`
 - `CompanionBatteryDeviceInstance`
 - `CompanionPvInverterDeviceInstance`
+- `CompanionGridDeviceInstance`
 - `CompanionSourceBatteryDeviceInstanceBase`
 - `CompanionSourcePvInverterDeviceInstanceBase`
+- `CompanionSourceGridDeviceInstanceBase`
+- `CompanionGridHoldSeconds`
+- `CompanionGridSmoothingAlpha`
+- `CompanionGridSmoothingMaxJumpWatts`
+- `CompanionSourceGridHoldSeconds`
+- `CompanionSourceGridSmoothingAlpha`
+- `CompanionSourceGridSmoothingMaxJumpWatts`
 - `CompanionBatteryServiceName`
 - `CompanionPvInverterServiceName`
+- `CompanionGridServiceName`
 - `CompanionSourceBatteryServicePrefix`
 - `CompanionSourcePvInverterServicePrefix`
+- `CompanionSourceGridServicePrefix`
 
 Current scope:
 
 - one aggregated battery-like companion service
 - one aggregated PV-inverter-like companion service
+- one optional aggregated grid-meter-like companion service
 - optional per-source battery companion services for `battery` and
   `hybrid-inverter` roles
 - optional per-source PV-inverter companion services for `hybrid-inverter` and
   `inverter` roles
+- optional per-source grid companion services for normalized sources that
+  currently expose `grid_interaction_w`
 - both stay separate from the EV charger service identity
 
 The aggregated services keep one stable Venus-style summary view. The per-source
 services mirror normalized entries from `battery_sources` and give the Venus
 GUI individual external devices to render without folding foreign-energy
 modeling into the main EV charger DBus service.
+The grid companion path is intentionally opt-in, so a site can expose an
+external meter view such as a Huawei-backed grid reading only when that should
+act as the local single source of truth.
+
+When `CompanionGridAuthoritativeSource` is set to an `AutoEnergySource`
+`source_id`, the aggregated external grid companion stops using the combined
+grid sum and instead follows only that one normalized source. This is useful
+for topologies where one external meter path should be the explicit grid truth,
+for example `huawei` in a Huawei + OpenDTU + Victron installation.
+
+Grid hardening knobs:
+
+- `CompanionGridHoldSeconds` keeps the last valid aggregated grid reading alive
+  for a short outage window before the aggregated grid companion flips to
+  disconnected/`0`
+- `CompanionGridSmoothingAlpha` optionally smooths fresh aggregated grid
+  updates; `1.0` means no smoothing, lower values increasingly damp abrupt
+  jumps
+- `CompanionGridSmoothingMaxJumpWatts` limits smoothing to smaller aggregated
+  jumps; `0` keeps smoothing active for all jumps, positive values let larger
+  step changes pass through immediately
+- `CompanionSourceGridHoldSeconds` applies the same short-outage hold behavior
+  to per-source grid companion services
+- `CompanionSourceGridSmoothingAlpha` applies the same optional smoothing to
+  per-source grid companion services
+- `CompanionSourceGridSmoothingMaxJumpWatts` applies the same “only smooth
+  smaller jumps” rule to per-source grid companion services
+
+For sites where the external meter path is generally stable but Modbus or HTTP
+can blip for a second or two, a small hold window such as `5` seconds and a
+neutral smoothing alpha such as `1.0` usually avoids visible grid-power
+flutter without hiding longer faults.
+
+### Battery discharge-balance policy
+
+When `AutoEnergySources` aggregates more than one battery-like source, the
+service also derives a discharge-balance error in watts. A small optional
+policy layer can use that error in two ways:
+
+- raise a visible warning in the operational state once the imbalance grows
+  beyond a configured threshold
+- add a soft extra surplus penalty to Auto mode so charging becomes more
+  conservative while one ESS is carrying noticeably more discharge than its
+  current fair-share target
+
+Main keys:
+
+- `AutoBatteryDischargeBalancePolicyEnabled`
+- `AutoBatteryDischargeBalanceWarnErrorWatts`
+- `AutoBatteryDischargeBalanceBiasStartErrorWatts`
+- `AutoBatteryDischargeBalanceBiasMaxPenaltyWatts`
+- `AutoBatteryDischargeBalanceBiasMode`
+- `AutoBatteryDischargeBalanceBiasReserveMarginSoc`
+- `AutoBatteryDischargeBalanceCoordinationEnabled`
+- `AutoBatteryDischargeBalanceCoordinationSupportMode`
+- `AutoBatteryDischargeBalanceCoordinationStartErrorWatts`
+- `AutoBatteryDischargeBalanceCoordinationMaxPenaltyWatts`
+- `AutoBatteryDischargeBalanceVictronBiasEnabled`
+- `AutoBatteryDischargeBalanceVictronBiasSourceId`
+- `AutoBatteryDischargeBalanceVictronBiasService`
+- `AutoBatteryDischargeBalanceVictronBiasPath`
+- `AutoBatteryDischargeBalanceVictronBiasBaseSetpointWatts`
+- `AutoBatteryDischargeBalanceVictronBiasDeadbandWatts`
+- `AutoBatteryDischargeBalanceVictronBiasActivationMode`
+- `AutoBatteryDischargeBalanceVictronBiasSupportMode`
+- `AutoBatteryDischargeBalanceVictronBiasKp`
+- `AutoBatteryDischargeBalanceVictronBiasKi`
+- `AutoBatteryDischargeBalanceVictronBiasKd`
+- `AutoBatteryDischargeBalanceVictronBiasIntegralLimitWatts`
+- `AutoBatteryDischargeBalanceVictronBiasMaxAbsWatts`
+- `AutoBatteryDischargeBalanceVictronBiasRampRateWattsPerSecond`
+- `AutoBatteryDischargeBalanceVictronBiasMinUpdateSeconds`
+- `AutoBatteryDischargeBalanceVictronBiasAutoApplyEnabled`
+- `AutoBatteryDischargeBalanceVictronBiasAutoApplyMinConfidence`
+- `AutoBatteryDischargeBalanceVictronBiasAutoApplyMinProfileSamples`
+- `AutoBatteryDischargeBalanceVictronBiasAutoApplyMinStabilityScore`
+- `AutoBatteryDischargeBalanceVictronBiasAutoApplyBlend`
+- `AutoBatteryDischargeBalanceVictronBiasObservationWindowSeconds`
+- `AutoBatteryDischargeBalanceVictronBiasOscillationLockoutEnabled`
+- `AutoBatteryDischargeBalanceVictronBiasOscillationLockoutWindowSeconds`
+- `AutoBatteryDischargeBalanceVictronBiasOscillationLockoutMinDirectionChanges`
+- `AutoBatteryDischargeBalanceVictronBiasOscillationLockoutDurationSeconds`
+- `AutoBatteryDischargeBalanceVictronBiasRollbackEnabled`
+- `AutoBatteryDischargeBalanceVictronBiasRollbackMinStabilityScore`
+- `AutoBatteryDischargeBalanceVictronBiasTelemetryRequireCleanPhases`
+
+`AutoBatteryDischargeBalanceBiasMode` supports:
+
+- `always`
+- `export_only`
+- `above_reserve_band`
+- `export_and_above_reserve_band`
+
+`AutoBatteryDischargeBalanceBiasReserveMarginSoc` defines how far the combined
+SOC should sit above the learned reserve-band floor before reserve-gated bias
+becomes active.
+
+`AutoBatteryDischargeBalanceCoordinationEnabled` adds a second, even more
+conservative penalty stage, but only when at least two configured battery or
+hybrid sources are currently classified as control-ready. This is still not a
+foreign ESS setpoint path. It only tells Auto mode to back off a bit more when
+real multi-ESS coordination looks realistic for the current source mix.
+
+`AutoBatteryDischargeBalanceCoordinationSupportMode` supports:
+
+- `supported_only`
+- `allow_experimental`
+
+Use `supported_only` when you only want this second-stage penalty to react to
+profiles that advertise a supported write path. Use `allow_experimental` when
+experimental profile write paths may also count as coordination-ready for this
+soft penalty stage.
+
+`AutoBatteryDischargeBalanceVictronBiasEnabled` enables a first experimental
+indirect coordination path for mixed ESS setups. This path does not write a
+foreign ESS. Instead it adjusts one local Victron GX DBus setpoint so the
+shared grid value nudges the second ESS to back off or contribute more through
+its own controller.
+
+Main Victron-bias keys:
+
+- `AutoBatteryDischargeBalanceVictronBiasSourceId`
+- `AutoBatteryDischargeBalanceVictronBiasService`
+- `AutoBatteryDischargeBalanceVictronBiasPath`
+- `AutoBatteryDischargeBalanceVictronBiasBaseSetpointWatts`
+- `AutoBatteryDischargeBalanceVictronBiasDeadbandWatts`
+- `AutoBatteryDischargeBalanceVictronBiasActivationMode`
+- `AutoBatteryDischargeBalanceVictronBiasSupportMode`
+- `AutoBatteryDischargeBalanceVictronBiasKp`
+- `AutoBatteryDischargeBalanceVictronBiasKi`
+- `AutoBatteryDischargeBalanceVictronBiasKd`
+- `AutoBatteryDischargeBalanceVictronBiasIntegralLimitWatts`
+- `AutoBatteryDischargeBalanceVictronBiasMaxAbsWatts`
+- `AutoBatteryDischargeBalanceVictronBiasRampRateWattsPerSecond`
+- `AutoBatteryDischargeBalanceVictronBiasMinUpdateSeconds`
+- `AutoBatteryDischargeBalanceVictronBiasAutoApplyEnabled`
+- `AutoBatteryDischargeBalanceVictronBiasAutoApplyMinConfidence`
+- `AutoBatteryDischargeBalanceVictronBiasAutoApplyMinProfileSamples`
+- `AutoBatteryDischargeBalanceVictronBiasAutoApplyMinStabilityScore`
+- `AutoBatteryDischargeBalanceVictronBiasAutoApplyBlend`
+- `AutoBatteryDischargeBalanceVictronBiasObservationWindowSeconds`
+- `AutoBatteryDischargeBalanceVictronBiasOscillationLockoutEnabled`
+- `AutoBatteryDischargeBalanceVictronBiasOscillationLockoutWindowSeconds`
+- `AutoBatteryDischargeBalanceVictronBiasOscillationLockoutMinDirectionChanges`
+- `AutoBatteryDischargeBalanceVictronBiasOscillationLockoutDurationSeconds`
+- `AutoBatteryDischargeBalanceVictronBiasRollbackEnabled`
+- `AutoBatteryDischargeBalanceVictronBiasRollbackMinStabilityScore`
+- `AutoBatteryDischargeBalanceVictronBiasTelemetryRequireCleanPhases`
+
+`AutoBatteryDischargeBalanceVictronBiasSupportMode` supports:
+
+- `supported_only`
+- `allow_experimental`
+
+The default target is `com.victronenergy.settings` at
+`/Settings/CGwacs/AcPowerSetPoint`. Keep this path disabled until the local GX
+side really owns that setpoint for the installation. The controller includes a
+deadband, integral clamp, output clamp, ramp-rate limit, and minimum update
+interval so brief balance noise does not translate into setpoint chatter.
+
+`AutoBatteryDischargeBalanceVictronBiasActivationMode` supports:
+
+- `always`
+- `export_only`
+- `above_reserve_band`
+- `export_and_above_reserve_band`
+
+The learning and recommendation path is now profiled by:
+
+- action asymmetry: `more_export` vs `less_export`
+- site regime: `export` vs `import`
+- day phase: `day` vs `night`
+- reserve phase: `reserve_band` vs `above_reserve_band`
+
+Each learned profile carries a small formal snapshot with:
+
+- `typical_response_delay_seconds`
+- `effective_gain`
+- `safe_ramp_rate_watts_per_second`
+- `preferred_bias_limit_watts`
+
+`AutoBatteryDischargeBalanceVictronBiasAutoApplyEnabled` lets the service
+apply learned recommendations at runtime without editing the base config.
+Guardrails are controlled through:
+
+- `AutoBatteryDischargeBalanceVictronBiasAutoApplyMinConfidence`
+- `AutoBatteryDischargeBalanceVictronBiasAutoApplyMinProfileSamples`
+- `AutoBatteryDischargeBalanceVictronBiasAutoApplyMinStabilityScore`
+- `AutoBatteryDischargeBalanceVictronBiasAutoApplyBlend`
+
+Auto-apply is intentionally guarded and only runs when enough good telemetry
+has accumulated for the currently active learning profile.
+
+The current hardening stage adds four extra guardrails around that loop:
+
+- anti-oscillation lockout after repeated `more_export`/`less_export` flips
+- rollback to the last stable learned tuning
+- learning only in relatively clean telemetry phases
+- stepwise auto-apply with an observation window between changes
+
+The relevant keys are:
+
+- `AutoBatteryDischargeBalanceVictronBiasObservationWindowSeconds`
+- `AutoBatteryDischargeBalanceVictronBiasOscillationLockoutEnabled`
+- `AutoBatteryDischargeBalanceVictronBiasOscillationLockoutWindowSeconds`
+- `AutoBatteryDischargeBalanceVictronBiasOscillationLockoutMinDirectionChanges`
+- `AutoBatteryDischargeBalanceVictronBiasOscillationLockoutDurationSeconds`
+- `AutoBatteryDischargeBalanceVictronBiasRollbackEnabled`
+- `AutoBatteryDischargeBalanceVictronBiasRollbackMinStabilityScore`
+- `AutoBatteryDischargeBalanceVictronBiasTelemetryRequireCleanPhases`
+
+Suggested starting point:
+
+```ini
+AutoBatteryDischargeBalancePolicyEnabled=1
+AutoBatteryDischargeBalanceWarnErrorWatts=500
+AutoBatteryDischargeBalanceBiasStartErrorWatts=750
+AutoBatteryDischargeBalanceBiasMaxPenaltyWatts=300
+AutoBatteryDischargeBalanceBiasMode=export_and_above_reserve_band
+AutoBatteryDischargeBalanceBiasReserveMarginSoc=5
+AutoBatteryDischargeBalanceCoordinationEnabled=1
+AutoBatteryDischargeBalanceCoordinationSupportMode=supported_only
+AutoBatteryDischargeBalanceCoordinationStartErrorWatts=1000
+AutoBatteryDischargeBalanceCoordinationMaxPenaltyWatts=200
+AutoBatteryDischargeBalanceVictronBiasEnabled=1
+AutoBatteryDischargeBalanceVictronBiasSourceId=victron
+AutoBatteryDischargeBalanceVictronBiasService=com.victronenergy.settings
+AutoBatteryDischargeBalanceVictronBiasPath=/Settings/CGwacs/AcPowerSetPoint
+AutoBatteryDischargeBalanceVictronBiasBaseSetpointWatts=50
+AutoBatteryDischargeBalanceVictronBiasDeadbandWatts=100
+AutoBatteryDischargeBalanceVictronBiasActivationMode=export_and_above_reserve_band
+AutoBatteryDischargeBalanceVictronBiasSupportMode=supported_only
+AutoBatteryDischargeBalanceVictronBiasKp=0.2
+AutoBatteryDischargeBalanceVictronBiasKi=0.02
+AutoBatteryDischargeBalanceVictronBiasKd=0.0
+AutoBatteryDischargeBalanceVictronBiasIntegralLimitWatts=250
+AutoBatteryDischargeBalanceVictronBiasMaxAbsWatts=500
+AutoBatteryDischargeBalanceVictronBiasRampRateWattsPerSecond=50
+AutoBatteryDischargeBalanceVictronBiasMinUpdateSeconds=2
+AutoBatteryDischargeBalanceVictronBiasAutoApplyEnabled=0
+AutoBatteryDischargeBalanceVictronBiasAutoApplyMinConfidence=0.85
+AutoBatteryDischargeBalanceVictronBiasAutoApplyMinProfileSamples=3
+AutoBatteryDischargeBalanceVictronBiasAutoApplyMinStabilityScore=0.75
+AutoBatteryDischargeBalanceVictronBiasAutoApplyBlend=0.25
+AutoBatteryDischargeBalanceVictronBiasObservationWindowSeconds=30
+AutoBatteryDischargeBalanceVictronBiasOscillationLockoutEnabled=1
+AutoBatteryDischargeBalanceVictronBiasOscillationLockoutWindowSeconds=120
+AutoBatteryDischargeBalanceVictronBiasOscillationLockoutMinDirectionChanges=3
+AutoBatteryDischargeBalanceVictronBiasOscillationLockoutDurationSeconds=180
+AutoBatteryDischargeBalanceVictronBiasRollbackEnabled=1
+AutoBatteryDischargeBalanceVictronBiasRollbackMinStabilityScore=0.45
+AutoBatteryDischargeBalanceVictronBiasTelemetryRequireCleanPhases=1
+```
+
+This policy is intentionally soft. It does not command foreign ESS devices or
+force equal discharge. It only makes the Auto policy more cautious and exposes
+the imbalance clearly through the local state surface. The Victron-bias path is
+the first exception: it is still indirect, but it can move one local Victron GX
+setpoint when enabled.
 
 Per-source naming/device-instance rules:
 
 - battery-like source services use `CompanionSourceBatteryServicePrefix`
   plus a sanitized `source_id`
 - PV-like source services use `CompanionSourcePvInverterServicePrefix`
+  plus a sanitized `source_id`
+- grid-like source services use `CompanionSourceGridServicePrefix`
   plus a sanitized `source_id`
 - source services allocate `DeviceInstance` values starting at the configured
   `...Base` value in snapshot order
@@ -409,13 +714,25 @@ AutoEnergySource.hybrid.UsableCapacityWh=14000
 CompanionDbusBridgeEnabled=1
 CompanionBatteryServiceEnabled=1
 CompanionPvInverterServiceEnabled=1
+CompanionGridServiceEnabled=0
+CompanionGridAuthoritativeSource=
 CompanionSourceServicesEnabled=1
+CompanionSourceGridServicesEnabled=0
+CompanionGridHoldSeconds=5
+CompanionGridSmoothingAlpha=1.0
+CompanionGridSmoothingMaxJumpWatts=0
+CompanionSourceGridHoldSeconds=5
+CompanionSourceGridSmoothingAlpha=1.0
+CompanionSourceGridSmoothingMaxJumpWatts=0
 CompanionBatteryServiceName=com.victronenergy.battery.external_100
 CompanionPvInverterServiceName=com.victronenergy.pvinverter.external_101
+CompanionGridServiceName=com.victronenergy.grid.external_102
 CompanionSourceBatteryServicePrefix=com.victronenergy.battery.external
 CompanionSourcePvInverterServicePrefix=com.victronenergy.pvinverter.external
+CompanionSourceGridServicePrefix=com.victronenergy.grid.external
 CompanionSourceBatteryDeviceInstanceBase=200
 CompanionSourcePvInverterDeviceInstanceBase=300
+CompanionSourceGridDeviceInstanceBase=400
 ```
 
 Example: prefix-based discovery for a second source:

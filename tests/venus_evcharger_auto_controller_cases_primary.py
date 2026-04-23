@@ -472,6 +472,205 @@ class TestAutoDecisionControllerPrimary(AutoDecisionControllerTestCase):
             1.25,
         )
 
+    def test_battery_discharge_balance_policy_warns_and_adds_soft_penalty(self):
+        controller, service = self._make_controller()
+        service.auto_battery_discharge_balance_policy_enabled = True
+        service.auto_battery_discharge_balance_warn_error_watts = 400.0
+        service.auto_battery_discharge_balance_bias_start_error_watts = 500.0
+        service.auto_battery_discharge_balance_bias_max_penalty_watts = 300.0
+        service.auto_battery_discharge_balance_bias_mode = "always"
+        service._warning_throttled = MagicMock()
+        service._add_auto_sample = MagicMock()
+        service._average_auto_metric = MagicMock(side_effect=[1200.0, 100.0])
+        service._last_energy_cluster = {
+            "battery_sources": [
+                {"source_id": "hybrid", "charge_power_w": 0.0, "discharge_power_w": 400.0},
+            ],
+            "battery_combined_soc": 60.0,
+            "battery_discharge_balance_error_w": 750.0,
+            "battery_discharge_balance_eligible_source_count": 2,
+            "battery_discharge_balance_active_source_count": 1,
+        }
+        service._last_energy_learning_profiles = {
+            "hybrid": {"observed_max_discharge_power_w": 1000.0, "sample_count": 3},
+        }
+
+        surplus, _grid = controller._update_average_metrics(100.0, 2200.0, 400.0, 60.0, False)
+
+        self.assertEqual(surplus, 650.0)
+        self.assertEqual(service._last_auto_metrics["battery_surplus_penalty_w"], 550.0)
+        self.assertEqual(service._last_auto_metrics["battery_discharge_balance_policy_enabled"], 1)
+        self.assertEqual(service._last_auto_metrics["battery_discharge_balance_warning_active"], 1)
+        self.assertEqual(service._last_auto_metrics["battery_discharge_balance_warning_error_w"], 750.0)
+        self.assertEqual(service._last_auto_metrics["battery_discharge_balance_warn_threshold_w"], 400.0)
+        self.assertEqual(service._last_auto_metrics["battery_discharge_balance_bias_mode"], "always")
+        self.assertEqual(service._last_auto_metrics["battery_discharge_balance_bias_gate_active"], 1)
+        self.assertEqual(service._last_auto_metrics["battery_discharge_balance_bias_start_error_w"], 500.0)
+        self.assertEqual(service._last_auto_metrics["battery_discharge_balance_bias_penalty_w"], 150.0)
+        self.assertEqual(service._last_auto_metrics["battery_discharge_balance_coordination_feasibility"], "observe_only")
+        self.assertEqual(service._last_auto_metrics["battery_discharge_balance_coordination_advisory_active"], 1)
+        self.assertEqual(
+            service._last_auto_metrics["battery_discharge_balance_coordination_advisory_reason"],
+            "no_configured_source_offers_a_write_path",
+        )
+        self.assertEqual(service._warning_throttled.call_count, 2)
+
+    def test_battery_discharge_balance_policy_can_gate_bias_to_export_only(self):
+        controller, service = self._make_controller()
+        service.auto_battery_discharge_balance_policy_enabled = True
+        service.auto_battery_discharge_balance_warn_error_watts = 400.0
+        service.auto_battery_discharge_balance_bias_start_error_watts = 500.0
+        service.auto_battery_discharge_balance_bias_max_penalty_watts = 300.0
+        service.auto_battery_discharge_balance_bias_mode = "export_only"
+        service._warning_throttled = MagicMock()
+        service._last_energy_cluster = {
+            "battery_sources": [
+                {"source_id": "hybrid", "charge_power_w": 0.0, "discharge_power_w": 400.0},
+            ],
+            "battery_combined_soc": 60.0,
+            "battery_combined_grid_interaction_w": 200.0,
+            "battery_discharge_balance_error_w": 750.0,
+            "battery_discharge_balance_eligible_source_count": 2,
+            "battery_discharge_balance_active_source_count": 1,
+        }
+        service._last_energy_learning_profiles = {
+            "hybrid": {"observed_max_discharge_power_w": 1000.0, "sample_count": 3},
+        }
+
+        activity = controller._combined_battery_activity_context()
+
+        self.assertEqual(activity["discharge_balance_bias_mode"], "export_only")
+        self.assertEqual(activity["discharge_balance_bias_gate_active"], 0)
+        self.assertEqual(activity["discharge_balance_bias_penalty_w"], 0.0)
+        self.assertEqual(activity["discharge_balance_coordination_feasibility"], "observe_only")
+        self.assertEqual(activity["discharge_balance_coordination_advisory_active"], 1)
+        self.assertEqual(service._warning_throttled.call_count, 2)
+
+    def test_battery_discharge_balance_policy_can_gate_bias_to_reserve_band(self):
+        controller, service = self._make_controller()
+        service.auto_battery_discharge_balance_policy_enabled = True
+        service.auto_battery_discharge_balance_warn_error_watts = 400.0
+        service.auto_battery_discharge_balance_bias_start_error_watts = 500.0
+        service.auto_battery_discharge_balance_bias_max_penalty_watts = 300.0
+        service.auto_battery_discharge_balance_bias_mode = "above_reserve_band"
+        service.auto_battery_discharge_balance_bias_reserve_margin_soc = 5.0
+        service._warning_throttled = MagicMock()
+        service._last_energy_cluster = {
+            "battery_sources": [
+                {"source_id": "hybrid", "charge_power_w": 0.0, "discharge_power_w": 400.0},
+            ],
+            "battery_combined_soc": 42.0,
+            "battery_discharge_balance_error_w": 750.0,
+            "battery_discharge_balance_eligible_source_count": 2,
+            "battery_discharge_balance_active_source_count": 1,
+        }
+        service._last_energy_learning_profiles = {
+            "hybrid": {"observed_max_discharge_power_w": 1000.0, "sample_count": 3},
+            "other": {"reserve_band_floor_soc": 40.0},
+        }
+
+        activity = controller._combined_battery_activity_context()
+
+        self.assertEqual(activity["discharge_balance_bias_mode"], "above_reserve_band")
+        self.assertEqual(activity["discharge_balance_bias_gate_active"], 0)
+        self.assertEqual(activity["discharge_balance_bias_penalty_w"], 0.0)
+
+    def test_battery_discharge_balance_coordination_penalty_only_activates_with_two_ready_sources(self):
+        controller, service = self._make_controller()
+        service.auto_battery_discharge_balance_coordination_enabled = True
+        service.auto_battery_discharge_balance_coordination_support_mode = "supported_only"
+        service.auto_battery_discharge_balance_coordination_start_error_watts = 500.0
+        service.auto_battery_discharge_balance_coordination_max_penalty_watts = 200.0
+        service._last_energy_cluster = {
+            "battery_sources": [
+                {"source_id": "hybrid", "charge_power_w": 0.0, "discharge_power_w": 400.0},
+            ],
+            "battery_discharge_balance_error_w": 750.0,
+            "battery_discharge_balance_eligible_source_count": 2,
+            "battery_discharge_balance_active_source_count": 1,
+            "battery_discharge_balance_control_ready_count": 2,
+            "battery_discharge_balance_supported_control_source_count": 2,
+            "battery_discharge_balance_experimental_control_source_count": 0,
+        }
+        service._last_energy_learning_profiles = {
+            "hybrid": {"observed_max_discharge_power_w": 1000.0, "sample_count": 3},
+        }
+
+        activity = controller._combined_battery_activity_context()
+
+        self.assertEqual(activity["discharge_balance_coordination_policy_enabled"], 1)
+        self.assertEqual(activity["discharge_balance_coordination_support_mode"], "supported_only")
+        self.assertEqual(activity["discharge_balance_coordination_feasibility"], "supported")
+        self.assertEqual(activity["discharge_balance_coordination_gate_active"], 1)
+        self.assertEqual(activity["discharge_balance_coordination_start_error_w"], 500.0)
+        self.assertEqual(activity["discharge_balance_coordination_penalty_w"], 100.0)
+        self.assertEqual(activity["surplus_penalty_w"], 500.0)
+
+    def test_battery_discharge_balance_coordination_penalty_stays_inactive_when_only_one_source_is_ready(self):
+        controller, service = self._make_controller()
+        service.auto_battery_discharge_balance_coordination_enabled = True
+        service.auto_battery_discharge_balance_coordination_support_mode = "supported_only"
+        service.auto_battery_discharge_balance_coordination_start_error_watts = 500.0
+        service.auto_battery_discharge_balance_coordination_max_penalty_watts = 200.0
+        service._last_energy_cluster = {
+            "battery_sources": [
+                {"source_id": "hybrid", "charge_power_w": 0.0, "discharge_power_w": 400.0},
+            ],
+            "battery_discharge_balance_error_w": 750.0,
+            "battery_discharge_balance_eligible_source_count": 2,
+            "battery_discharge_balance_active_source_count": 1,
+            "battery_discharge_balance_control_candidate_count": 2,
+            "battery_discharge_balance_control_ready_count": 1,
+            "battery_discharge_balance_supported_control_source_count": 2,
+        }
+        service._last_energy_learning_profiles = {
+            "hybrid": {"observed_max_discharge_power_w": 1000.0, "sample_count": 3},
+        }
+
+        activity = controller._combined_battery_activity_context()
+
+        self.assertEqual(activity["discharge_balance_coordination_policy_enabled"], 1)
+        self.assertEqual(activity["discharge_balance_coordination_feasibility"], "blocked_by_source_availability")
+        self.assertEqual(activity["discharge_balance_coordination_gate_active"], 0)
+        self.assertEqual(activity["discharge_balance_coordination_penalty_w"], 0.0)
+        self.assertEqual(activity["surplus_penalty_w"], 400.0)
+
+    def test_battery_discharge_balance_coordination_support_mode_can_keep_experimental_paths_inactive(self):
+        controller, service = self._make_controller()
+        service.auto_battery_discharge_balance_coordination_enabled = True
+        service.auto_battery_discharge_balance_coordination_support_mode = "supported_only"
+        service.auto_battery_discharge_balance_coordination_start_error_watts = 500.0
+        service.auto_battery_discharge_balance_coordination_max_penalty_watts = 200.0
+        service._last_energy_cluster = {
+            "battery_sources": [
+                {"source_id": "hybrid", "charge_power_w": 0.0, "discharge_power_w": 400.0},
+            ],
+            "battery_discharge_balance_error_w": 750.0,
+            "battery_discharge_balance_eligible_source_count": 2,
+            "battery_discharge_balance_active_source_count": 1,
+            "battery_discharge_balance_control_ready_count": 2,
+            "battery_discharge_balance_supported_control_source_count": 1,
+            "battery_discharge_balance_experimental_control_source_count": 1,
+        }
+        service._last_energy_learning_profiles = {
+            "hybrid": {"observed_max_discharge_power_w": 1000.0, "sample_count": 3},
+        }
+
+        activity = controller._combined_battery_activity_context()
+
+        self.assertEqual(activity["discharge_balance_coordination_support_mode"], "supported_only")
+        self.assertEqual(activity["discharge_balance_coordination_feasibility"], "experimental")
+        self.assertEqual(activity["discharge_balance_coordination_gate_active"], 0)
+        self.assertEqual(activity["discharge_balance_coordination_penalty_w"], 0.0)
+
+        service.auto_battery_discharge_balance_coordination_support_mode = "allow_experimental"
+        activity = controller._combined_battery_activity_context()
+
+        self.assertEqual(activity["discharge_balance_coordination_support_mode"], "allow_experimental")
+        self.assertEqual(activity["discharge_balance_coordination_feasibility"], "experimental")
+        self.assertEqual(activity["discharge_balance_coordination_gate_active"], 1)
+        self.assertEqual(activity["discharge_balance_coordination_penalty_w"], 100.0)
+
     def test_battery_learning_behavior_prefers_night_support_bias_when_time_is_night(self):
         controller, service = self._make_controller()
         service._time_now = lambda: datetime(2026, 4, 22, 23, 0).timestamp()

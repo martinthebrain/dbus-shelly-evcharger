@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Shared helpers for external energy-source connectors."""
+
+from __future__ import annotations
+
+from typing import Any, Iterable, cast
+
+from venus_evcharger.backend.template_support import json_path_value
+from venus_evcharger.core.contracts import finite_float_or_none, normalize_binary_flag
+
+
+def _runtime_owner(owner: Any) -> Any:
+    return getattr(owner, "service", owner)
+
+
+def _cache_map(runtime: Any, attr_name: str) -> dict[str, Any]:
+    cache = getattr(runtime, attr_name, None)
+    if isinstance(cache, dict):
+        return cast(dict[str, Any], cache)
+    setattr(runtime, attr_name, {})
+    return cast(dict[str, Any], getattr(runtime, attr_name))
+
+
+def _normalized_connector_type(raw_value: object) -> str:
+    normalized = str(raw_value).strip().lower()
+    if normalized == "template_http_energy":
+        return "template_http"
+    return normalized or "dbus"
+
+
+def _optional_path(value: object) -> str | None:
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _optional_float_path(payload: dict[str, object], path: str | None) -> float | None:
+    if path is None:
+        return None
+    return finite_float_or_none(json_path_value(payload, path))
+
+
+def _optional_text_path(payload: dict[str, object], path: str | None) -> str | None:
+    if path is None:
+        return None
+    value = json_path_value(payload, path)
+    text = "" if value is None else str(value).strip()
+    return text or None
+
+
+def _optional_bool_path(payload: dict[str, object], path: str | None) -> bool | None:
+    if path is None:
+        return None
+    value = json_path_value(payload, path)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(int(value))
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "false", "yes", "no", "on", "off", "enabled", "disabled"}:
+            return bool(normalize_binary_flag(text))
+    return bool(normalize_binary_flag(value))
+
+
+def _optional_confidence_path(payload: dict[str, object], path: str | None) -> float | None:
+    value = _optional_float_path(payload, path)
+    if value is None:
+        return None
+    return min(1.0, max(0.0, float(value)))
+
+
+def _sum_optional(values: Iterable[float | None]) -> float | None:
+    numeric = [float(value) for value in values if value is not None]
+    if not numeric:
+        return None
+    return float(sum(numeric))
+
+
+def _csv_filter(raw_value: object) -> tuple[str, ...]:
+    raw = str(raw_value).strip()
+    if not raw:
+        return ()
+    return tuple(item.strip() for item in raw.split(",") if item.strip())

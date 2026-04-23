@@ -47,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
         "state_name",
         choices=(
             "summary",
+            "victron-bias-recommendation",
             "runtime",
             "operational",
             "dbus-diagnostics",

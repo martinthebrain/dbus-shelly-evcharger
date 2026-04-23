@@ -201,6 +201,11 @@ class _StateValidationMixin:
         self._clamp_surplus_thresholds(svc)
         self._clamp_legacy_fractional_values(svc)
         self._clamp_legacy_volatility_band(svc)
+        self._normalize_discharge_balance_bias_mode(svc)
+        self._normalize_discharge_balance_coordination_support_mode(svc)
+        self._normalize_victron_balance_activation_mode(svc)
+        self._normalize_victron_balance_support_mode(svc)
+        self._normalize_victron_balance_auto_apply_settings(svc)
         self._validate_optional_non_negative_int(svc, "auto_phase_mismatch_lockout_count", "AutoPhaseMismatchLockoutCount")
         self._validate_optional_non_negative_int(svc, "auto_contactor_fault_latch_count", "AutoContactorFaultLatchCount")
 
@@ -211,6 +216,24 @@ class _StateValidationMixin:
             "auto_scheduled_night_start_delay_seconds",
             "auto_stop_surplus_volatility_low_watts",
             "auto_stop_surplus_volatility_high_watts",
+            "auto_battery_discharge_balance_warn_error_watts",
+            "auto_battery_discharge_balance_bias_start_error_watts",
+            "auto_battery_discharge_balance_bias_max_penalty_watts",
+            "auto_battery_discharge_balance_bias_reserve_margin_soc",
+            "auto_battery_discharge_balance_coordination_start_error_watts",
+            "auto_battery_discharge_balance_coordination_max_penalty_watts",
+            "auto_battery_discharge_balance_victron_bias_base_setpoint_watts",
+            "auto_battery_discharge_balance_victron_bias_deadband_watts",
+            "auto_battery_discharge_balance_victron_bias_kp",
+            "auto_battery_discharge_balance_victron_bias_ki",
+            "auto_battery_discharge_balance_victron_bias_kd",
+            "auto_battery_discharge_balance_victron_bias_integral_limit_watts",
+            "auto_battery_discharge_balance_victron_bias_max_abs_watts",
+            "auto_battery_discharge_balance_victron_bias_ramp_rate_watts_per_second",
+            "auto_battery_discharge_balance_victron_bias_min_update_seconds",
+            "auto_battery_discharge_balance_victron_bias_auto_apply_min_confidence",
+            "auto_battery_discharge_balance_victron_bias_auto_apply_min_stability_score",
+            "auto_battery_discharge_balance_victron_bias_auto_apply_blend",
             "auto_phase_upshift_headroom_watts",
             "auto_phase_downshift_margin_watts",
             "auto_learn_charge_power_min_watts",
@@ -233,6 +256,136 @@ class _StateValidationMixin:
             svc.auto_reference_charge_power_watts,
         )
         svc.auto_reference_charge_power_watts = 1900.0
+
+    @staticmethod
+    def _normalize_discharge_balance_bias_mode(svc: Any) -> None:
+        if not hasattr(svc, "auto_battery_discharge_balance_bias_mode"):
+            return
+        allowed = {
+            "always",
+            "export_only",
+            "above_reserve_band",
+            "export_and_above_reserve_band",
+        }
+        raw_value = str(getattr(svc, "auto_battery_discharge_balance_bias_mode", "") or "").strip().lower()
+        if raw_value in allowed:
+            svc.auto_battery_discharge_balance_bias_mode = raw_value
+            return
+        logging.warning(
+            "AutoBatteryDischargeBalanceBiasMode %s invalid, clamping to always",
+            getattr(svc, "auto_battery_discharge_balance_bias_mode", ""),
+        )
+        svc.auto_battery_discharge_balance_bias_mode = "always"
+
+    @staticmethod
+    def _normalize_discharge_balance_coordination_support_mode(svc: Any) -> None:
+        if not hasattr(svc, "auto_battery_discharge_balance_coordination_support_mode"):
+            return
+        allowed = {
+            "supported_only",
+            "allow_experimental",
+        }
+        raw_value = str(
+            getattr(svc, "auto_battery_discharge_balance_coordination_support_mode", "") or ""
+        ).strip().lower()
+        if raw_value in allowed:
+            svc.auto_battery_discharge_balance_coordination_support_mode = raw_value
+            return
+        logging.warning(
+            "AutoBatteryDischargeBalanceCoordinationSupportMode %s invalid, clamping to supported_only",
+            getattr(svc, "auto_battery_discharge_balance_coordination_support_mode", ""),
+        )
+        svc.auto_battery_discharge_balance_coordination_support_mode = "supported_only"
+
+    @staticmethod
+    def _normalize_victron_balance_support_mode(svc: Any) -> None:
+        if not hasattr(svc, "auto_battery_discharge_balance_victron_bias_support_mode"):
+            return
+        allowed = {
+            "supported_only",
+            "allow_experimental",
+        }
+        raw_value = str(getattr(svc, "auto_battery_discharge_balance_victron_bias_support_mode", "") or "").strip().lower()
+        if raw_value in allowed:
+            svc.auto_battery_discharge_balance_victron_bias_support_mode = raw_value
+            return
+        logging.warning(
+            "AutoBatteryDischargeBalanceVictronBiasSupportMode %s invalid, clamping to allow_experimental",
+            getattr(svc, "auto_battery_discharge_balance_victron_bias_support_mode", ""),
+        )
+        svc.auto_battery_discharge_balance_victron_bias_support_mode = "allow_experimental"
+
+    @staticmethod
+    def _normalize_victron_balance_activation_mode(svc: Any) -> None:
+        if not hasattr(svc, "auto_battery_discharge_balance_victron_bias_activation_mode"):
+            return
+        allowed = {
+            "always",
+            "export_only",
+            "above_reserve_band",
+            "export_and_above_reserve_band",
+        }
+        raw_value = str(getattr(svc, "auto_battery_discharge_balance_victron_bias_activation_mode", "") or "").strip().lower()
+        if raw_value in allowed:
+            svc.auto_battery_discharge_balance_victron_bias_activation_mode = raw_value
+            return
+        logging.warning(
+            "AutoBatteryDischargeBalanceVictronBiasActivationMode %s invalid, clamping to always",
+            getattr(svc, "auto_battery_discharge_balance_victron_bias_activation_mode", ""),
+        )
+        svc.auto_battery_discharge_balance_victron_bias_activation_mode = "always"
+
+    def _normalize_victron_balance_auto_apply_settings(self, svc: Any) -> None:
+        if hasattr(svc, "auto_battery_discharge_balance_victron_bias_auto_apply_min_confidence"):
+            self._clamp_fraction(
+                svc,
+                "auto_battery_discharge_balance_victron_bias_auto_apply_min_confidence",
+                "AutoBatteryDischargeBalanceVictronBiasAutoApplyMinConfidence",
+                0.85,
+            )
+        if hasattr(svc, "auto_battery_discharge_balance_victron_bias_auto_apply_min_stability_score"):
+            self._clamp_fraction(
+                svc,
+                "auto_battery_discharge_balance_victron_bias_auto_apply_min_stability_score",
+                "AutoBatteryDischargeBalanceVictronBiasAutoApplyMinStabilityScore",
+                0.75,
+            )
+        if hasattr(svc, "auto_battery_discharge_balance_victron_bias_auto_apply_blend"):
+            self._clamp_fraction(
+                svc,
+                "auto_battery_discharge_balance_victron_bias_auto_apply_blend",
+                "AutoBatteryDischargeBalanceVictronBiasAutoApplyBlend",
+                0.25,
+            )
+        self._validate_optional_non_negative_int(
+            svc,
+            "auto_battery_discharge_balance_victron_bias_auto_apply_min_profile_samples",
+            "AutoBatteryDischargeBalanceVictronBiasAutoApplyMinProfileSamples",
+        )
+        self._clamp_non_negative_float(
+            svc,
+            "auto_battery_discharge_balance_victron_bias_observation_window_seconds",
+        )
+        self._clamp_non_negative_float(
+            svc,
+            "auto_battery_discharge_balance_victron_bias_oscillation_lockout_window_seconds",
+        )
+        self._validate_optional_non_negative_int(
+            svc,
+            "auto_battery_discharge_balance_victron_bias_oscillation_lockout_min_direction_changes",
+            "AutoBatteryDischargeBalanceVictronBiasOscillationLockoutMinDirectionChanges",
+        )
+        self._clamp_non_negative_float(
+            svc,
+            "auto_battery_discharge_balance_victron_bias_oscillation_lockout_duration_seconds",
+        )
+        if hasattr(svc, "auto_battery_discharge_balance_victron_bias_rollback_min_stability_score"):
+            self._clamp_fraction(
+                svc,
+                "auto_battery_discharge_balance_victron_bias_rollback_min_stability_score",
+                "AutoBatteryDischargeBalanceVictronBiasRollbackMinStabilityScore",
+                0.45,
+            )
 
     def _clamp_legacy_fractional_values(self, svc: Any) -> None:
         for attr_name, label, default in (

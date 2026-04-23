@@ -9,7 +9,7 @@ from typing import Any
 
 ENERGY_SOURCE_ROLES = frozenset({"battery", "hybrid-inverter", "inverter"})
 ENERGY_SOURCE_CONNECTOR_TYPES = frozenset(
-    {"dbus", "template_http", "template_http_energy", "modbus", "command_json"}
+    {"dbus", "template_http", "template_http_energy", "modbus", "command_json", "opendtu_http"}
 )
 
 

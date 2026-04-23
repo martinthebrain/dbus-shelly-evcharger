@@ -41,6 +41,7 @@ class TestVenusEvchargerControlContracts(unittest.TestCase):
         self.assertIn("/v1/state/version", CONTROL_API_STATE_ENDPOINTS)
         self.assertIn("/v1/state/summary", CONTROL_API_STATE_ENDPOINTS)
         self.assertIn("/v1/state/topology", CONTROL_API_STATE_ENDPOINTS)
+        self.assertIn("/v1/state/victron-bias-recommendation", CONTROL_API_STATE_ENDPOINTS)
         self.assertEqual(CONTROL_API_EXPERIMENTAL_ENDPOINTS, frozenset({"/v1/events"}))
         self.assertIn("/v1/capabilities", CONTROL_API_STABLE_ENDPOINTS)
         self.assertIn("unauthorized", CONTROL_API_ERROR_CODES)

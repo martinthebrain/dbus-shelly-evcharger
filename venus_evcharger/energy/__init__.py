@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Energy-source helpers for multi-source battery and inverter integration."""
 
-from .aggregate import aggregate_energy_sources
+from .aggregate import aggregate_energy_sources, derive_discharge_balance_metrics, derive_discharge_control_metrics
 from .config import load_energy_source_definitions, load_energy_source_settings
 from .connectors import read_energy_source_snapshot
 from .forecast import derive_energy_forecast
@@ -30,6 +30,8 @@ __all__ = [
     "EnergySourceSnapshot",
     "aggregate_energy_sources",
     "available_energy_source_profiles",
+    "derive_discharge_balance_metrics",
+    "derive_discharge_control_metrics",
     "derive_energy_forecast",
     "energy_source_profile_details",
     "energy_source_profile_probe_plan",

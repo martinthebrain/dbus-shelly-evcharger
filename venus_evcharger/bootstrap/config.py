@@ -183,19 +183,48 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
             "CompanionPvInverterServiceEnabled",
             "1",
         ).strip().lower() in ("1", "true", "yes", "on")
+        svc.companion_grid_service_enabled = defaults.get(
+            "CompanionGridServiceEnabled",
+            "0",
+        ).strip().lower() in ("1", "true", "yes", "on")
+        svc.companion_grid_authoritative_source = str(
+            _config_value(defaults, "CompanionGridAuthoritativeSource", "")
+        ).strip()
+        svc.companion_grid_hold_seconds = float(_config_value(defaults, "CompanionGridHoldSeconds", 5.0))
+        svc.companion_grid_smoothing_alpha = float(_config_value(defaults, "CompanionGridSmoothingAlpha", 1.0))
+        svc.companion_grid_smoothing_max_jump_watts = float(
+            _config_value(defaults, "CompanionGridSmoothingMaxJumpWatts", 0.0)
+        )
         svc.companion_source_services_enabled = defaults.get(
             "CompanionSourceServicesEnabled",
             "1",
         ).strip().lower() in ("1", "true", "yes", "on")
+        svc.companion_source_grid_services_enabled = defaults.get(
+            "CompanionSourceGridServicesEnabled",
+            "0",
+        ).strip().lower() in ("1", "true", "yes", "on")
+        svc.companion_source_grid_hold_seconds = float(_config_value(defaults, "CompanionSourceGridHoldSeconds", 5.0))
+        svc.companion_source_grid_smoothing_alpha = float(
+            _config_value(defaults, "CompanionSourceGridSmoothingAlpha", 1.0)
+        )
+        svc.companion_source_grid_smoothing_max_jump_watts = float(
+            _config_value(defaults, "CompanionSourceGridSmoothingMaxJumpWatts", 0.0)
+        )
         svc.companion_battery_deviceinstance = int(_config_value(defaults, "CompanionBatteryDeviceInstance", svc.deviceinstance + 40))
         svc.companion_pvinverter_deviceinstance = int(
             _config_value(defaults, "CompanionPvInverterDeviceInstance", svc.deviceinstance + 41)
+        )
+        svc.companion_grid_deviceinstance = int(
+            _config_value(defaults, "CompanionGridDeviceInstance", svc.deviceinstance + 42)
         )
         svc.companion_source_battery_deviceinstance_base = int(
             _config_value(defaults, "CompanionSourceBatteryDeviceInstanceBase", svc.deviceinstance + 140)
         )
         svc.companion_source_pvinverter_deviceinstance_base = int(
             _config_value(defaults, "CompanionSourcePvInverterDeviceInstanceBase", svc.deviceinstance + 240)
+        )
+        svc.companion_source_grid_deviceinstance_base = int(
+            _config_value(defaults, "CompanionSourceGridDeviceInstanceBase", svc.deviceinstance + 340)
         )
         svc.companion_battery_service_name = defaults.get(
             "CompanionBatteryServiceName",
@@ -205,6 +234,10 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
             "CompanionPvInverterServiceName",
             f"com.victronenergy.pvinverter.external_{svc.companion_pvinverter_deviceinstance}",
         ).strip()
+        svc.companion_grid_service_name = defaults.get(
+            "CompanionGridServiceName",
+            f"com.victronenergy.grid.external_{svc.companion_grid_deviceinstance}",
+        ).strip()
         svc.companion_source_battery_service_prefix = defaults.get(
             "CompanionSourceBatteryServicePrefix",
             "com.victronenergy.battery.external",
@@ -212,6 +245,10 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
         svc.companion_source_pvinverter_service_prefix = defaults.get(
             "CompanionSourcePvInverterServicePrefix",
             "com.victronenergy.pvinverter.external",
+        ).strip()
+        svc.companion_source_grid_service_prefix = defaults.get(
+            "CompanionSourceGridServicePrefix",
+            "com.victronenergy.grid.external",
         ).strip()
         svc.control_api_listen_host = ""
         svc.control_api_listen_port = 0
@@ -313,6 +350,127 @@ class _ServiceBootstrapConfigMixin(_ComposableControllerMixin):
         ).strip()
         svc.auto_audit_log_max_age_hours = float(_config_value(defaults, "AutoAuditLogMaxAgeHours", 168))
         svc.auto_audit_log_repeat_seconds = float(_config_value(defaults, "AutoAuditLogRepeatSeconds", 30))
+        svc.auto_battery_discharge_balance_policy_enabled = defaults.get(
+            "AutoBatteryDischargeBalancePolicyEnabled",
+            "0",
+        ).strip().lower() in ("1", "true", "yes", "on")
+        svc.auto_battery_discharge_balance_warn_error_watts = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceWarnErrorWatts", 500.0)
+        )
+        svc.auto_battery_discharge_balance_bias_start_error_watts = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceBiasStartErrorWatts", 750.0)
+        )
+        svc.auto_battery_discharge_balance_bias_max_penalty_watts = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceBiasMaxPenaltyWatts", 300.0)
+        )
+        svc.auto_battery_discharge_balance_bias_mode = str(
+            _config_value(defaults, "AutoBatteryDischargeBalanceBiasMode", "always")
+        ).strip().lower()
+        svc.auto_battery_discharge_balance_bias_reserve_margin_soc = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceBiasReserveMarginSoc", 5.0)
+        )
+        svc.auto_battery_discharge_balance_coordination_enabled = defaults.get(
+            "AutoBatteryDischargeBalanceCoordinationEnabled",
+            "0",
+        ).strip().lower() in ("1", "true", "yes", "on")
+        svc.auto_battery_discharge_balance_coordination_support_mode = str(
+            _config_value(defaults, "AutoBatteryDischargeBalanceCoordinationSupportMode", "supported_only")
+        ).strip().lower()
+        svc.auto_battery_discharge_balance_coordination_start_error_watts = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceCoordinationStartErrorWatts", 1000.0)
+        )
+        svc.auto_battery_discharge_balance_coordination_max_penalty_watts = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceCoordinationMaxPenaltyWatts", 200.0)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_enabled = defaults.get(
+            "AutoBatteryDischargeBalanceVictronBiasEnabled",
+            "0",
+        ).strip().lower() in ("1", "true", "yes", "on")
+        svc.auto_battery_discharge_balance_victron_bias_source_id = str(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasSourceId", "")
+        ).strip()
+        svc.auto_battery_discharge_balance_victron_bias_service = str(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasService", "com.victronenergy.settings")
+        ).strip()
+        svc.auto_battery_discharge_balance_victron_bias_path = str(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasPath", "/Settings/CGwacs/AcPowerSetPoint")
+        ).strip()
+        svc.auto_battery_discharge_balance_victron_bias_base_setpoint_watts = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasBaseSetpointWatts", 50.0)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_deadband_watts = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasDeadbandWatts", 100.0)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_activation_mode = str(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasActivationMode", "always")
+        ).strip().lower()
+        svc.auto_battery_discharge_balance_victron_bias_support_mode = str(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasSupportMode", "allow_experimental")
+        ).strip().lower()
+        svc.auto_battery_discharge_balance_victron_bias_kp = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasKp", 0.2)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_ki = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasKi", 0.02)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_kd = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasKd", 0.0)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_integral_limit_watts = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasIntegralLimitWatts", 250.0)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_max_abs_watts = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasMaxAbsWatts", 500.0)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_ramp_rate_watts_per_second = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasRampRateWattsPerSecond", 50.0)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_min_update_seconds = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasMinUpdateSeconds", 2.0)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_auto_apply_enabled = defaults.get(
+            "AutoBatteryDischargeBalanceVictronBiasAutoApplyEnabled",
+            "0",
+        ).strip().lower() in ("1", "true", "yes", "on")
+        svc.auto_battery_discharge_balance_victron_bias_auto_apply_min_confidence = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasAutoApplyMinConfidence", 0.85)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_auto_apply_min_profile_samples = int(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasAutoApplyMinProfileSamples", 3)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_auto_apply_min_stability_score = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasAutoApplyMinStabilityScore", 0.75)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_auto_apply_blend = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasAutoApplyBlend", 0.25)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_observation_window_seconds = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasObservationWindowSeconds", 30.0)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_oscillation_lockout_enabled = defaults.get(
+            "AutoBatteryDischargeBalanceVictronBiasOscillationLockoutEnabled",
+            "1",
+        ).strip().lower() in ("1", "true", "yes", "on")
+        svc.auto_battery_discharge_balance_victron_bias_oscillation_lockout_window_seconds = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasOscillationLockoutWindowSeconds", 120.0)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_oscillation_lockout_min_direction_changes = int(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasOscillationLockoutMinDirectionChanges", 3)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_oscillation_lockout_duration_seconds = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasOscillationLockoutDurationSeconds", 180.0)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_rollback_enabled = defaults.get(
+            "AutoBatteryDischargeBalanceVictronBiasRollbackEnabled",
+            "1",
+        ).strip().lower() in ("1", "true", "yes", "on")
+        svc.auto_battery_discharge_balance_victron_bias_rollback_min_stability_score = float(
+            _config_value(defaults, "AutoBatteryDischargeBalanceVictronBiasRollbackMinStabilityScore", 0.45)
+        )
+        svc.auto_battery_discharge_balance_victron_bias_require_clean_phases = defaults.get(
+            "AutoBatteryDischargeBalanceVictronBiasTelemetryRequireCleanPhases",
+            "1",
+        ).strip().lower() in ("1", "true", "yes", "on")
 
     def _load_auto_daytime_policy(self, defaults: configparser.SectionProxy) -> None:
         """Load seasonal day-window behavior for Auto mode.

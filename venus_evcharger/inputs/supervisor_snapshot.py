@@ -24,11 +24,20 @@ class _AutoInputSupervisorSnapshotMixin:
         "battery_headroom_discharge_w",
         "expected_near_term_export_w",
         "expected_near_term_import_w",
+        "battery_discharge_balance_error_w",
+        "battery_discharge_balance_max_abs_error_w",
+        "battery_discharge_balance_total_discharge_w",
     )
     OPTIONAL_COUNT_FIELDS = (
         "battery_source_count",
         "battery_online_source_count",
         "battery_valid_soc_source_count",
+        "battery_discharge_balance_eligible_source_count",
+        "battery_discharge_balance_active_source_count",
+        "battery_discharge_balance_control_candidate_count",
+        "battery_discharge_balance_control_ready_count",
+        "battery_discharge_balance_supported_control_source_count",
+        "battery_discharge_balance_experimental_control_source_count",
     )
 
     @staticmethod

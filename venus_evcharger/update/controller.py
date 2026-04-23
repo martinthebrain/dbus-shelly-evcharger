@@ -18,6 +18,7 @@ from venus_evcharger.update.relay import _UpdateCycleRelayMixin
 from venus_evcharger.update.runtime_cycle import _UpdateCycleRuntimeMixin
 from venus_evcharger.update.software_update_support import _UpdateCycleSoftwareUpdateMixin
 from venus_evcharger.update.state import _UpdateCycleStateMixin
+from venus_evcharger.update.victron_ess_balance import _UpdateCycleVictronEssBalanceMixin
 
 
 class UpdateCycleController(
@@ -26,6 +27,7 @@ class UpdateCycleController(
     _UpdateCycleOfflineMixin,
     _UpdateCycleInputCacheMixin,
     _UpdateCycleLearningRuntimeMixin,
+    _UpdateCycleVictronEssBalanceMixin,
     _UpdateCycleRuntimeMixin,
     _UpdateCycleStateMixin,
     _UpdateCycleRelayMixin,

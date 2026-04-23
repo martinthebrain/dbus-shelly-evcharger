@@ -273,6 +273,70 @@ class TestShellyWallboxSetupWizard(unittest.TestCase):
                 (config_path.parent / "wizard-auto-energy-merge.ini").read_text(encoding="utf-8"),
             )
 
+    def test_configure_wallbox_can_read_manifest_backed_recommendation_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bundle_prefix = temp_path / "energy-rec"
+            config_file = temp_path / "bundle-source.ini"
+            wizard_file = temp_path / "bundle-source.wizard.txt"
+            summary_file = temp_path / "bundle-source.summary.txt"
+            manifest_file = temp_path / "energy-rec.manifest.json"
+            config_file.write_text(
+                "AutoEnergySource.hybrid_ext.Profile=huawei_mb_sdongle\n"
+                "AutoEnergySource.hybrid_ext.ConfigPath=/data/etc/huawei-mb-modbus.ini\n",
+                encoding="utf-8",
+            )
+            wizard_file.write_text("External energy recommendation\n", encoding="utf-8")
+            summary_file.write_text("Use profile huawei_mb_sdongle\n", encoding="utf-8")
+            manifest_file.write_text(
+                json.dumps(
+                    {
+                        "schema_type": "energy-recommendation-bundle",
+                        "schema_version": 1,
+                        "source_id": "hybrid_ext",
+                        "profile": "huawei_mb_sdongle",
+                        "config_path": "/data/etc/huawei-mb-modbus.ini",
+                        "files": {
+                            "config_snippet": str(config_file),
+                            "wizard_hint": str(wizard_file),
+                            "summary": str(summary_file),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config_path = temp_path / "config.ini"
+
+            result = configure_wallbox(
+                WizardAnswers(
+                    profile="simple-relay",
+                    host_input="192.168.1.44",
+                    meter_host_input=None,
+                    switch_host_input=None,
+                    charger_host_input=None,
+                    device_instance=61,
+                    phase="L1",
+                    policy_mode="manual",
+                    digest_auth=False,
+                    username="",
+                    password="",
+                    split_preset=None,
+                    charger_backend=None,
+                    transport_kind="serial_rtu",
+                    transport_host="192.168.1.44",
+                    transport_port=502,
+                    transport_device="/dev/ttyUSB0",
+                    transport_unit_id=1,
+                ),
+                config_path=config_path,
+                template_path=default_template_path(),
+                imported_from=None,
+                energy_recommendation_prefix=str(bundle_prefix),
+            )
+
+            self.assertEqual(result.suggested_energy_sources[0]["source_id"], "hybrid_ext")
+            self.assertIn("wizard-energy-hybrid_ext.ini", result.generated_files)
+
     def test_configure_wallbox_can_apply_suggested_energy_merge_to_main_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

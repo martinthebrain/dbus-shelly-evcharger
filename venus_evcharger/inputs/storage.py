@@ -17,6 +17,8 @@ from venus_evcharger.energy import (
     EnergySourceDefinition,
     EnergySourceSnapshot,
     aggregate_energy_sources,
+    derive_discharge_balance_metrics,
+    derive_discharge_control_metrics,
     derive_energy_forecast,
     read_energy_source_snapshot,
     summarize_energy_learning_profiles,
@@ -249,6 +251,17 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
             learning_summary = summarize_energy_learning_profiles(
                 getattr(cache_owner, "_last_energy_learning_profiles", {})
             )
+            discharge_balance = derive_discharge_balance_metrics(
+                cluster.sources,
+                getattr(cache_owner, "_last_energy_learning_profiles", {}),
+            )
+            discharge_control = derive_discharge_control_metrics(
+                cluster.sources,
+                {
+                    source.source_id: source
+                    for source in tuple(getattr(svc, "auto_energy_sources", ()) or (self._primary_energy_source(),))
+                },
+            )
             forecast = derive_energy_forecast(
                 {
                     "battery_combined_charge_power_w": cluster.combined_charge_power_w,
@@ -259,6 +272,13 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
                 },
                 learning_summary,
             )
+            source_payloads = [source.as_dict() for source in cluster.sources]
+            source_balance = cast(dict[str, dict[str, object]], discharge_balance.get("sources", {}))
+            source_control = cast(dict[str, dict[str, object]], discharge_control.get("sources", {}))
+            for source_payload in source_payloads:
+                source_metrics = source_balance.get(str(source_payload.get("source_id", "")), {})
+                source_payload.update(source_metrics)
+                source_payload.update(source_control.get(str(source_payload.get("source_id", "")), {}))
             self._mark_source_recovery("battery", "Battery SOC readings recovered")
             battery_payload: dict[str, object] = {
                 "battery_soc": effective_soc,
@@ -274,6 +294,23 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
                 "battery_headroom_discharge_w": forecast["battery_headroom_discharge_w"],
                 "expected_near_term_export_w": forecast["expected_near_term_export_w"],
                 "expected_near_term_import_w": forecast["expected_near_term_import_w"],
+                "battery_discharge_balance_mode": discharge_balance.get("mode"),
+                "battery_discharge_balance_target_distribution_mode": discharge_balance.get("target_distribution_mode"),
+                "battery_discharge_balance_error_w": discharge_balance.get("error_w"),
+                "battery_discharge_balance_max_abs_error_w": discharge_balance.get("max_abs_error_w"),
+                "battery_discharge_balance_total_discharge_w": discharge_balance.get("total_discharge_w"),
+                "battery_discharge_balance_eligible_source_count": discharge_balance.get("eligible_source_count", 0),
+                "battery_discharge_balance_active_source_count": discharge_balance.get("active_source_count", 0),
+                "battery_discharge_balance_control_candidate_count": discharge_control.get("control_candidate_count", 0),
+                "battery_discharge_balance_control_ready_count": discharge_control.get("control_ready_count", 0),
+                "battery_discharge_balance_supported_control_source_count": discharge_control.get(
+                    "supported_control_source_count",
+                    0,
+                ),
+                "battery_discharge_balance_experimental_control_source_count": discharge_control.get(
+                    "experimental_control_source_count",
+                    0,
+                ),
                 "battery_average_confidence": cluster.average_confidence,
                 "battery_source_count": cluster.source_count,
                 "battery_online_source_count": cluster.online_source_count,
@@ -281,7 +318,7 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
                 "battery_battery_source_count": cluster.battery_source_count,
                 "battery_hybrid_inverter_source_count": cluster.hybrid_inverter_source_count,
                 "battery_inverter_source_count": cluster.inverter_source_count,
-                "battery_sources": [source.as_dict() for source in cluster.sources],
+                "battery_sources": source_payloads,
                 "battery_learning_profiles": {
                     source_id: profile.as_dict()
                     for source_id, profile in getattr(cache_owner, "_last_energy_learning_profiles", {}).items()
@@ -316,6 +353,17 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
                 "battery_headroom_discharge_w": None,
                 "expected_near_term_export_w": None,
                 "expected_near_term_import_w": None,
+                "battery_discharge_balance_mode": "",
+                "battery_discharge_balance_target_distribution_mode": "",
+                "battery_discharge_balance_error_w": None,
+                "battery_discharge_balance_max_abs_error_w": None,
+                "battery_discharge_balance_total_discharge_w": None,
+                "battery_discharge_balance_eligible_source_count": 0,
+                "battery_discharge_balance_active_source_count": 0,
+                "battery_discharge_balance_control_candidate_count": 0,
+                "battery_discharge_balance_control_ready_count": 0,
+                "battery_discharge_balance_supported_control_source_count": 0,
+                "battery_discharge_balance_experimental_control_source_count": 0,
                 "battery_average_confidence": None,
                 "battery_source_count": 0,
                 "battery_online_source_count": 0,

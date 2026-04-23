@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+from typing import Any, cast
+
 from tests.venus_evcharger_auto_input_helper_support import (
     AutoInputHelperTestCase,
     MagicMock,
@@ -7,7 +9,7 @@ from tests.venus_evcharger_auto_input_helper_support import (
     sys,
     unittest,
 )
-from venus_evcharger.energy import EnergySourceDefinition, EnergySourceSnapshot
+from venus_evcharger.energy import EnergyLearningProfile, EnergySourceDefinition, EnergySourceSnapshot
 
 
 class TestShellyWallboxAutoInputHelperSources(AutoInputHelperTestCase):
@@ -353,6 +355,61 @@ class TestShellyWallboxAutoInputHelperSources(AutoInputHelperTestCase):
         self.assertEqual(snapshot["battery_combined_soc"], 55.0)
         self.assertEqual(snapshot["battery_headroom_charge_w"], 0.0)
         self.assertEqual(snapshot["expected_near_term_export_w"], 475.0)
+
+        helper = self._make_helper()
+        helper.auto_energy_sources = (
+            EnergySourceDefinition(source_id="victron", profile_name="dbus-battery", role="battery", connector_type="dbus"),
+            EnergySourceDefinition(
+                source_id="huawei",
+                profile_name="huawei_ma_native_ap",
+                role="hybrid-inverter",
+                connector_type="dbus",
+            ),
+        )
+        helper._energy_learning_profiles = {
+            "victron": EnergyLearningProfile(source_id="victron", observed_min_discharge_soc=40.0),
+            "huawei": EnergyLearningProfile(source_id="huawei", observed_min_discharge_soc=20.0),
+        }
+        with patch(
+            "venus_evcharger.inputs.helper.sources.read_energy_source_snapshot",
+            side_effect=[
+                EnergySourceSnapshot(
+                    source_id="victron",
+                    role="battery",
+                    service_name="svc-victron",
+                    soc=60.0,
+                    usable_capacity_wh=10000.0,
+                    net_battery_power_w=1500.0,
+                    online=True,
+                    confidence=1.0,
+                    captured_at=100.0,
+                ),
+                EnergySourceSnapshot(
+                    source_id="huawei",
+                    role="hybrid-inverter",
+                    service_name="svc-huawei",
+                    soc=60.0,
+                    usable_capacity_wh=5000.0,
+                    net_battery_power_w=0.0,
+                    online=True,
+                    confidence=1.0,
+                    captured_at=100.0,
+                ),
+            ],
+        ), patch("venus_evcharger_auto_input_helper.time.time", return_value=100.0):
+            snapshot = helper._get_battery_snapshot()
+
+        battery_sources = cast(list[dict[str, Any]], snapshot["battery_sources"])
+        self.assertEqual(snapshot["battery_discharge_balance_mode"], "capacity_reserve_weighted")
+        self.assertEqual(snapshot["battery_discharge_balance_target_distribution_mode"], "capacity_reserve_weighted")
+        self.assertEqual(snapshot["battery_discharge_balance_error_w"], 500.0)
+        self.assertEqual(snapshot["battery_discharge_balance_active_source_count"], 1)
+        self.assertEqual(snapshot["battery_discharge_balance_control_candidate_count"], 1)
+        self.assertEqual(snapshot["battery_discharge_balance_control_ready_count"], 1)
+        self.assertEqual(battery_sources[0]["discharge_balance_target_power_w"], 1000.0)
+        self.assertEqual(battery_sources[1]["discharge_balance_target_power_w"], 500.0)
+        self.assertEqual(battery_sources[0]["discharge_balance_control_support"], "unsupported")
+        self.assertEqual(battery_sources[1]["discharge_balance_control_support"], "experimental")
 
     def test_helper_source_helpers_cover_invalidations_dict_init_and_non_primary_errors(self):
         helper = self._make_helper()

@@ -63,6 +63,15 @@ class TestVenusEvchargerControlClient(unittest.TestCase):
         client.get.assert_called_once_with("/v1/state/runtime", headers=None)
         self.assertEqual(client._request_headers(None, json_payload=None), {"Accept": "application/json"})
 
+    def test_state_helper_accepts_victron_bias_recommendation_short_name(self) -> None:
+        client = LocalControlApiClient(base_url="http://127.0.0.1:8765", bearer_token="")
+        client.get = MagicMock(return_value=ControlApiClientResponse(status=200, headers={}, body='{"ok":true}'))  # type: ignore[method-assign]
+
+        response = client.state("victron-bias-recommendation")
+
+        self.assertEqual(response.status, 200)
+        client.get.assert_called_once_with("/v1/state/victron-bias-recommendation", headers=None)
+
     def test_health_and_openapi_delegate_to_get(self) -> None:
         client = LocalControlApiClient(base_url="http://127.0.0.1:8765", bearer_token="")
         client.get = MagicMock(return_value=ControlApiClientResponse(status=200, headers={}, body='{"ok":true}'))  # type: ignore[method-assign]

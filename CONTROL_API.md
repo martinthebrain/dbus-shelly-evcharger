@@ -77,6 +77,18 @@ This keeps API control metadata runtime-only and avoids writing it to flash-back
 - `GET /v1/events`
 - all `GET /v1/state/*`
 
+Focused recommendation readout:
+
+- `GET /v1/state/victron-bias-recommendation`
+
+This small state payload is meant for direct operator use and exposes:
+
+- current Victron-bias `kp`, `ki`, and ramp values
+- recommended `kp`, `ki`, and ramp values
+- recommendation confidence and reason
+- a copy-paste-ready INI snippet
+- a short operator hint
+
 ### Authenticated control endpoint
 
 - `POST /v1/control/command`
@@ -575,6 +587,12 @@ Exit codes:
 
 That means shell automation can treat `1` as an application/API failure and `2`
 as a local usage bug.
+
+Example:
+
+```bash
+python3 ./venus_evchargerctl.py --token READ-TOKEN state victron-bias-recommendation
+```
 
 ## Versioning
 

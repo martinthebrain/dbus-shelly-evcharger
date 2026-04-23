@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import venus_evcharger.inputs.dbus as wallbox_dbus_inputs
 from venus_evcharger.inputs.dbus import DbusInputController
-from venus_evcharger.energy import EnergySourceDefinition, EnergySourceSnapshot
+from venus_evcharger.energy import EnergyLearningProfile, EnergySourceDefinition, EnergySourceSnapshot
 
 
 class TestDbusInputController(unittest.TestCase):
@@ -311,6 +311,75 @@ class TestDbusInputController(unittest.TestCase):
 
         self.assertIsNone(failed["battery_soc"])
         self.assertEqual(failed["battery_source_count"], 0)
+
+    def test_get_battery_snapshot_includes_discharge_balance_diagnostics(self) -> None:
+        service = self._make_service()
+        controller = DbusInputController(service)
+        controller_any = cast(Any, controller)
+        service.auto_energy_sources = (
+            EnergySourceDefinition(source_id="victron", profile_name="dbus-battery", role="battery", connector_type="dbus"),
+            EnergySourceDefinition(
+                source_id="huawei",
+                profile_name="huawei_ma_native_ap",
+                role="hybrid-inverter",
+                connector_type="dbus",
+            ),
+        )
+        service._source_retry_ready = MagicMock(return_value=True)
+        service._service = SimpleNamespace(
+            _last_energy_learning_profiles={
+                "victron": EnergyLearningProfile(source_id="victron", observed_min_discharge_soc=40.0),
+                "huawei": EnergyLearningProfile(source_id="huawei", observed_min_discharge_soc=20.0),
+            }
+        )
+        controller_any._source_retry_ready = service._source_retry_ready
+        controller_any._handle_source_failure = MagicMock(return_value=None)
+        controller_any._mark_source_recovery = MagicMock()
+
+        with patch(
+            "venus_evcharger.inputs.storage.read_energy_source_snapshot",
+            side_effect=[
+                EnergySourceSnapshot(
+                    source_id="victron",
+                    role="battery",
+                    service_name="svc-victron",
+                    soc=60.0,
+                    usable_capacity_wh=10000.0,
+                    net_battery_power_w=1500.0,
+                    online=True,
+                    confidence=1.0,
+                    captured_at=100.0,
+                ),
+                EnergySourceSnapshot(
+                    source_id="huawei",
+                    role="hybrid-inverter",
+                    service_name="svc-huawei",
+                    soc=60.0,
+                    usable_capacity_wh=5000.0,
+                    net_battery_power_w=0.0,
+                    online=True,
+                    confidence=1.0,
+                    captured_at=100.0,
+                ),
+            ],
+        ), patch("venus_evcharger.inputs.storage.time.time", return_value=100.0):
+            snapshot = controller.get_battery_snapshot()
+
+        battery_sources = cast(list[dict[str, Any]], snapshot["battery_sources"])
+        self.assertEqual(snapshot["battery_discharge_balance_mode"], "capacity_reserve_weighted")
+        self.assertEqual(snapshot["battery_discharge_balance_target_distribution_mode"], "capacity_reserve_weighted")
+        self.assertEqual(snapshot["battery_discharge_balance_error_w"], 500.0)
+        self.assertEqual(snapshot["battery_discharge_balance_active_source_count"], 1)
+        self.assertEqual(snapshot["battery_discharge_balance_control_candidate_count"], 1)
+        self.assertEqual(snapshot["battery_discharge_balance_control_ready_count"], 1)
+        self.assertEqual(battery_sources[0]["discharge_balance_target_power_w"], 1000.0)
+        self.assertEqual(battery_sources[1]["discharge_balance_target_power_w"], 500.0)
+        self.assertEqual(battery_sources[0]["discharge_balance_weight_basis"], "available_energy_above_reserve")
+        self.assertEqual(battery_sources[1]["discharge_balance_weight_basis"], "available_energy_above_reserve")
+        self.assertEqual(battery_sources[0]["discharge_balance_control_support"], "unsupported")
+        self.assertEqual(battery_sources[1]["discharge_balance_control_support"], "experimental")
+        self.assertFalse(battery_sources[0]["discharge_balance_control_candidate"])
+        self.assertTrue(battery_sources[1]["discharge_balance_control_candidate"])
 
     def test_storage_helpers_cover_empty_paths_retry_and_non_primary_failure(self) -> None:
         service = self._make_service()

@@ -298,6 +298,14 @@ class TestLocalControlApiHttpServer(unittest.TestCase):
             _state_api_operational_payload=MagicMock(
                 return_value={"ok": True, "api_version": "v1", "kind": "operational", "state": {"mode": 1}}
             ),
+            _state_api_victron_bias_recommendation_payload=MagicMock(
+                return_value={
+                    "ok": True,
+                    "api_version": "v1",
+                    "kind": "victron-bias-recommendation",
+                    "state": {"recommendation_reason": "telemetry_nominal"},
+                }
+            ),
         )
         server = LocalControlApiHttpServer(service, host="127.0.0.1", port=8765)
 
@@ -310,6 +318,7 @@ class TestLocalControlApiHttpServer(unittest.TestCase):
         summary_handler = _FakeHandler("/v1/state/summary")
         runtime_handler = _FakeHandler("/v1/state/runtime")
         operational_handler = _FakeHandler("/v1/state/operational")
+        recommendation_handler = _FakeHandler("/v1/state/victron-bias-recommendation")
 
         server._handle_get(capabilities_handler)
         server._handle_get(diagnostics_handler)
@@ -320,6 +329,7 @@ class TestLocalControlApiHttpServer(unittest.TestCase):
         server._handle_get(summary_handler)
         server._handle_get(runtime_handler)
         server._handle_get(operational_handler)
+        server._handle_get(recommendation_handler)
 
         self.assertEqual(capabilities_handler.status_code, 200)
         self.assertEqual(capabilities_handler.response_headers["ETag"], '"state-1"')
@@ -336,6 +346,7 @@ class TestLocalControlApiHttpServer(unittest.TestCase):
         self.assertEqual(summary_handler.json_payload()["kind"], "summary")
         self.assertEqual(runtime_handler.json_payload()["kind"], "runtime")
         self.assertEqual(operational_handler.json_payload()["kind"], "operational")
+        self.assertEqual(recommendation_handler.json_payload()["kind"], "victron-bias-recommendation")
 
     def test_execute_payload_preserves_existing_tracking_when_service_returns_it(self) -> None:
         command = ControlCommand(

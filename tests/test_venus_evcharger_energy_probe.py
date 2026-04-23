@@ -240,6 +240,76 @@ class TestVenusEvchargerEnergyProbe(unittest.TestCase):
         self.assertTrue(sections["HuaweiMeterActivePowerRead"]["ok"])
         self.assertEqual(sections["HuaweiMeterActivePowerRead"]["scaled_value"], 1000.0)
 
+    def test_validate_huawei_energy_source_uses_family_templates_for_unit_and_smartlogger_variants(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "huawei.ini",
+                "[Adapter]\nType=modbus\n"
+                "[Transport]\nRequestTimeoutSeconds=2.0\n"
+                "[SocRead]\nRegisterType=holding\nAddress=10\nDataType=uint16\nScale=0.1\n"
+                "[BatteryPowerRead]\nRegisterType=holding\nAddress=30\nDataType=int16\nScale=-1\n"
+                "[AcPowerRead]\nRegisterType=holding\nAddress=40\nDataType=uint16\n"
+                "[PvInputPowerRead]\nRegisterType=holding\nAddress=50\nDataType=uint16\n"
+                "[GridInteractionRead]\nRegisterType=holding\nAddress=60\nDataType=int32\nScale=-1\n"
+                "[OperatingModeRead]\nRegisterType=holding\nAddress=70\nDataType=uint16\n",
+            )
+
+            def fake_transport(settings: object) -> object:
+                port = getattr(settings, "port")
+                if port != 502:
+                    raise TimeoutError("tcp timeout")
+                return _FieldProbeTransport(
+                    {
+                        10: (500,),
+                        30: (0xFFF6,),
+                        40: (3000,),
+                        50: (2500,),
+                        60: (0, 400,),
+                        70: (2,),
+                        37100: (1,),
+                        37113: (0, 250,),
+                        37119: (0, 10,),
+                        37121: (0, 5,),
+                        37125: (2,),
+                    }
+                )
+
+            with patch("venus_evcharger.energy.probe.create_modbus_transport", side_effect=fake_transport):
+                unit_payload = validate_huawei_energy_source(
+                    config_path,
+                    profile_name="huawei_map0_unit1",
+                    host="10.0.0.26",
+                )
+                smartlogger_payload = validate_huawei_energy_source(
+                    config_path,
+                    profile_name="huawei_l1_smartlogger_modbus_tcp",
+                    host="10.0.0.27",
+                )
+
+        self.assertEqual(unit_payload["recommendation"]["suggested_profile"], "huawei_map0_unit1")
+        self.assertEqual(
+            unit_payload["recommendation"]["suggested_template"],
+            "deploy/venus/template-energy-source-huawei-mb-unit1-modbus.ini",
+        )
+        self.assertEqual(
+            unit_payload["recommendation"]["suggested_config_path"],
+            "/data/etc/huawei-mb-unit1-modbus.ini",
+        )
+        self.assertIn(
+            "AutoEnergySource.huawei.Profile=huawei_map0_unit1",
+            unit_payload["recommendation"]["config_snippet"],
+        )
+        self.assertEqual(smartlogger_payload["recommendation"]["suggested_profile"], "huawei_l1_smartlogger_modbus_tcp")
+        self.assertEqual(
+            smartlogger_payload["recommendation"]["suggested_template"],
+            "deploy/venus/template-energy-source-huawei-ma-modbus.ini",
+        )
+        self.assertEqual(
+            smartlogger_payload["recommendation"]["suggested_config_path"],
+            "/data/etc/huawei-ma-modbus.ini",
+        )
+
     def test_main_validate_huawei_energy_prints_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = self._write_config(
@@ -430,6 +500,7 @@ class TestVenusEvchargerEnergyProbe(unittest.TestCase):
             self.assertEqual(written_files["config_snippet"], str(output_prefix) + ".ini")
             self.assertEqual(written_files["wizard_hint"], str(output_prefix) + ".wizard.txt")
             self.assertEqual(written_files["summary"], str(output_prefix) + ".summary.txt")
+            self.assertEqual(written_files["manifest"], str(output_prefix) + ".manifest.json")
             self.assertIn(
                 "AutoEnergySource.huawei.Profile=huawei_smartlogger_modbus_tcp",
                 Path(written_files["config_snippet"]).read_text(encoding="utf-8"),
@@ -442,6 +513,12 @@ class TestVenusEvchargerEnergyProbe(unittest.TestCase):
                 "Use profile huawei_smartlogger_modbus_tcp",
                 Path(written_files["summary"]).read_text(encoding="utf-8"),
             )
+            manifest = json.loads(Path(written_files["manifest"]).read_text(encoding="utf-8"))
+            self.assertEqual(manifest["schema_type"], "energy-recommendation-bundle")
+            self.assertEqual(manifest["schema_version"], 1)
+            self.assertEqual(manifest["source_id"], "huawei")
+            self.assertEqual(manifest["profile"], "huawei_smartlogger_modbus_tcp")
+            self.assertEqual(manifest["config_path"], "/data/etc/huawei-mb-modbus.ini")
 
     def test_validate_huawei_energy_source_can_render_custom_source_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

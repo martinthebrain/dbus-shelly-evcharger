@@ -193,6 +193,7 @@ class TestVenusEvchargerControlOpenApi(unittest.TestCase):
                 "/v1/state/topology",
                 "/v1/state/update",
                 "/v1/state/version",
+                "/v1/state/victron-bias-recommendation",
             ],
             "request_schema_refs": [
                 "LegacyUnknownWriteCommandRequest",

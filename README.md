@@ -3,38 +3,35 @@
 [![CI](https://github.com/martinthebrain/venus-evcharger-service/actions/workflows/ci.yml/badge.svg)](https://github.com/martinthebrain/venus-evcharger-service/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/martinthebrain/venus-evcharger-service/graph/badge.svg)](https://codecov.io/gh/martinthebrain/venus-evcharger-service)
 
-`venus-evcharger-service` brings EV charging setups into Victron Venus OS as a
-full EV charger service with GUI tile, DBus integration, MQTT reachability,
-Auto logic, Scheduled logic, backend abstraction, and GX-friendly deployment.
+`venus-evcharger-service` exposes an EV charging setup as a Victron Venus OS EV
+charger service with DBus integration, GUI tile support, Auto logic, Scheduled
+logic, and GX-friendly deployment.
 
-It fits simple relay-driven charging bricks, Shelly-based relay paths, native
-charger integrations such as go-e, and modular topologies with external meter,
-switch, charger, and phase-switch components.
+It is meant for real-world setups that are not a single fixed wallbox:
+portable EVSEs behind relays, Shelly-based switching, native chargers such as
+go-e, split meter/switch/charger topologies, and external energy sources such
+as hybrid inverters.
 
-## What This Repository Delivers
+## What You Get
 
-- Victron EV charger service on DBus for Venus OS and Cerbo GX
-- Manual, Auto, and Scheduled/Plan charging modes
-- DBus and MQTT control surface for day-to-day runtime settings
-- Optional local HTTP Control API v1 for process-local automation
-- Native Shelly backends plus configurable HTTP and Modbus adapters
-- Native charger integrations for go-e, SimpleEVSE, and SmartEVSE
-- External phase-switch coordination through switch backends and `switch_group`
-- Runtime diagnostics for status, faults, retry, recovery, scheduled state,
-  phase state, contactor state, and backend composition
-- GX-focused bootstrap and updater flow for field deployment under `/data`
-- Broad automated test coverage across runtime behavior, invariants, topology
-  conflicts, config-space validation, and outward-state publishing
+- EV charger service on DBus for Venus OS / Cerbo GX
+- Manual, Auto, and Scheduled charging modes
+- DBus and MQTT runtime control
+- optional local HTTP Control API
+- Shelly, HTTP template, Modbus, and native charger backend families
+- optional external phase switching
+- diagnostics for runtime, faults, retries, recovery, scheduling, and topology
+- installer, updater, bootstrap, and setup wizard for `/data` deployments
 
 ## Typical Setups
 
-| Setup | Main idea | Typical backend shape |
-| --- | --- | --- |
-| Shelly relay + charging brick | Victron controls a relay path that powers a portable EVSE | `combined` or `split relay+meter` |
-| Native charger | Charger handles enable/current directly | `split` with `ChargerType=...` |
-| Native charger + external phase switch | Charger handles current, external relays handle phase layout | `ChargerType=...` + `SwitchType=switch_group` |
-| Multi-device wallbox | Meter, switch, charger, and feedback come from different devices | `split` |
-| RS485 / Modbus EVSE | Charger control via Modbus RTU or TCP | `modbus_charger`, `simpleevse_charger`, `smartevse_charger` |
+| Setup | Main idea |
+| --- | --- |
+| Shelly relay + charging brick | Victron switches the charging path of a portable EVSE |
+| Native charger | Charger handles enable/current directly |
+| Native charger + external phase switch | Charger controls current, external relays control phases |
+| Multi-device wallbox | Meter, switch, charger, and feedback come from different devices |
+| External energy sources | Battery / hybrid inverter data augments Auto mode |
 
 ## Charging Modes
 
@@ -42,314 +39,89 @@ switch, charger, and phase-switch components.
 
 `/Mode = 0`
 
-- Direct start/stop control from the Victron EV charger tile
-- Real relay or charger state is mirrored back into the GUI
+- direct start/stop from the Victron EV charger tile
+- outward state mirrors the real relay or charger state
 
 ### Auto
 
 `/Mode = 1`
 
-Auto mode combines:
+Auto mode can combine:
 
 - PV surplus
 - grid import/export
 - battery SOC
-- optional aggregated battery and hybrid-inverter SOC
-- daytime windows
+- optional aggregated external energy sources
 - start/stop delays
-- minimum runtime and minimum off-time
-- recovery timers after missing grid data
+- minimum runtime and off-time
 - optional high-SOC profile
-- learned charging power and adaptive smoothing
+- learned charge-power behavior
 - optional automatic phase switching
 
-The Auto input layer can combine more than one battery-like DBus source. This
-is useful when a Victron battery and an external hybrid inverter should both
-influence charging decisions. When capacities are configured, the service uses
-a capacity-weighted combined SOC and also publishes combined battery charge,
-discharge, net, and AC power visibility for diagnostics and local API clients.
-
-The first connector layer now supports:
-
-- direct `dbus` sources
-- `template_http` sources
-- `modbus` sources
-- `command_json` helper sources
-
-You can now also start from named energy-source presets such as
-`dbus-battery`, `dbus-hybrid`, `template-http-hybrid`, `modbus-hybrid`, and
-`command-json-hybrid`, then only override the fields that differ on your site.
-The first vendor-specific preset family is now Huawei-oriented and includes
-`huawei_ma_native_ap`, `huawei_ma_native_lan`, `huawei_ma_sdongle`,
-`huawei_mb_native_ap`, `huawei_mb_native_lan`, `huawei_mb_sdongle`, and
-`huawei_smartlogger_modbus_tcp`.
-
-That last `command_json` connector is the intended bridge seam for custom
-vendor integrations and MQTT subscribers: keep protocol-specific logic in one
-small local helper and feed the wallbox service one normalized JSON energy
-snapshot.
-
-For concrete `AutoEnergySources` examples, see
-[CONFIGURATION.md](CONFIGURATION.md).
-
-For active Huawei-like Modbus endpoint detection against host/port/unit-id
-candidates, you can now also run:
-
-```bash
-python3 -m venus_evcharger.energy.probe detect-modbus-energy /data/etc/huawei-ma-modbus.ini --profile huawei_ma_native_ap
-```
-
-And for a full Huawei field check on a reachable endpoint:
-
-```bash
-python3 -m venus_evcharger.energy.probe validate-huawei-energy /data/etc/huawei-mb-modbus.ini --profile huawei_mb_sdongle --host 192.168.8.1
-```
-
-The Huawei validation output now also includes a copyable
-`recommendation.config_snippet` for the main config and a short
-`recommendation.wizard_hint_block` for operator notes or a future wizard flow.
-If you want persisted helper files from one run, use
-`--write-recommendation-prefix /some/path/huawei-rec`.
-The setup wizard can also ingest that bundle later via
-`--energy-recommendation-prefix /some/path/huawei-rec`. If you want the wizard
-to apply the suggested `AutoEnergySources=` merge directly to the generated
-main config, add `--apply-energy-merge`. If you already know the usable
-battery capacity for weighted combined SOC, add
-`--energy-default-usable-capacity-wh <Wh>` in the same run.
-For more than one suggested external energy source, repeat
-`--energy-recommendation-prefix` and use
-`--energy-usable-capacity-wh <source_id>=<Wh>` per source when needed.
-
-For a short Huawei operator runbook, see
-[HUAWEI_INTEGRATION.md](HUAWEI_INTEGRATION.md).
-
-The repo now also includes first Huawei read-template starters:
-
-- [template-energy-source-huawei-ma-modbus.ini](deploy/venus/template-energy-source-huawei-ma-modbus.ini)
-- [template-energy-source-huawei-mb-modbus.ini](deploy/venus/template-energy-source-huawei-mb-modbus.ini)
-- [template-energy-source-huawei-mb-unit1-modbus.ini](deploy/venus/template-energy-source-huawei-mb-unit1-modbus.ini)
-- [template-energy-source-huawei-mb-unit2-modbus.ini](deploy/venus/template-energy-source-huawei-mb-unit2-modbus.ini)
-
-These templates intentionally use `BatteryPowerRead Scale=-1` because
-Huawei's documented battery-power sign is the inverse of the repo-internal
-`net_battery_power_w` semantics.
-Where the Huawei working-mode codes are pinned, the templates map them to
-semantic text labels. Aggregate PV input is now wired from Huawei's documented
-`Total input power` register, and meter-backed grid interaction is wired from
-the Huawei meter active-power register with normalized sign semantics.
-For the MB `unit1` / `unit2` variants, `AcPowerRead`, `PvInputPowerRead`, and
-`GridInteractionRead` remain inverter-global or meter-global values and are
-deduplicated automatically when both units are configured in parallel.
-
-If you also want these external sources to become visible as separate
-Venus-style companion services, the optional companion DBus bridge can now
-publish both:
-
-- one aggregated external battery / PV summary
-- per-source `com.victronenergy.battery.external.*` services for battery-like
-  sources
-- per-source `com.victronenergy.pvinverter.external.*` services for inverter-
-  like sources
-
-That keeps the EV charger DBus identity clean while still making foreign energy
-devices visible in the GUI.
-
-The service publishes rich Auto diagnostics on DBus, including status source,
-fault state, recovery state, retry state, scheduled state, phase state,
-contactor state, and backend state.
-
-### Scheduled / Plan
+### Scheduled
 
 `/Mode = 2`
 
-Scheduled mode runs Auto policy during the configured daytime window and adds a
-night-boost window for selected target days.
+Scheduled mode reuses Auto policy and adds daytime / night-boost behavior for
+selected target days.
 
-Key controls:
+## Quick Start
 
-- `/Auto/ScheduledEnabledDays`
-- `/Auto/ScheduledFallbackDelaySeconds`
-- `/Auto/ScheduledLatestEndTime`
-- `/Auto/ScheduledNightCurrent`
+1. Copy the repository to a writable path under `/data`, for example
+   `/data/venus-evcharger-service`.
+2. Edit [deploy/venus/config.venus_evcharger.ini](deploy/venus/config.venus_evcharger.ini).
+3. Install the service:
 
-Key diagnostics:
+   ```bash
+   cd /data/venus-evcharger-service
+   ./deploy/venus/install_venus_evcharger_service.sh
+   ```
 
-- `/Auto/ScheduledState`
-- `/Auto/ScheduledStateCode`
-- `/Auto/ScheduledReason`
-- `/Auto/ScheduledReasonCode`
-- `/Auto/ScheduledNightBoostActive`
-- `/Auto/ScheduledTargetDay`
-- `/Auto/ScheduledTargetDate`
-- `/Auto/ScheduledFallbackStart`
-- `/Auto/ScheduledBoostUntil`
+4. Optional for first setup or reconfiguration:
 
-## Supported Backend Families
+   ```bash
+   ./deploy/venus/configure_venus_evcharger_service.sh
+   ```
 
-### Native Shelly
+5. Restart the service:
 
-- `shelly_combined`
-- `shelly_meter`
-- `shelly_switch`
-- `shelly_contactor_switch`
+   ```bash
+   svc -t /service/dbus-venus-evcharger
+   ```
 
-Shelly profile presets are documented in
-[SHELLY_PROFILES.md](SHELLY_PROFILES.md).
+6. Verify the service:
 
-### Template Adapters
+   ```bash
+   svstat /service/dbus-venus-evcharger
+   dbus -y com.victronenergy.evcharger.http_60 /Connected GetValue
+   ```
 
-- `template_meter`
-- `template_switch`
-- `template_charger`
+## External Energy Sources
 
-These adapters map HTTP endpoints and JSON paths into the normalized wallbox
-surface. They are useful for vendor APIs, small helper services, and mixed
-installations.
+The service can combine additional battery-like or hybrid-inverter-like energy
+sources for Auto mode. Supported connector families include:
 
-### Native Charger Backends
+- `dbus`
+- `template_http`
+- `modbus`
+- `command_json`
+- `opendtu_http`
 
-| Backend | Transport | Delivered functions |
-| --- | --- | --- |
-| `goe_charger` | HTTP | enable, disable, current, status, power, energy |
-| `simpleevse_charger` | Modbus | enable, disable, current, status, fault |
-| `smartevse_charger` | Modbus | enable, disable, current, status, fault |
-| `modbus_charger` | Modbus | generic profile-driven charger mapping |
+Named profiles are available for generic sources and for Huawei family
+variants. OpenDTU can also be read directly through the service via
+`opendtu-pvinverter`, without a separate OpenDTU-to-DBus bridge. For
+configuration details and examples, see
+[CONFIGURATION.md](CONFIGURATION.md). For the Huawei-specific operator guide,
+see [HUAWEI_INTEGRATION.md](HUAWEI_INTEGRATION.md).
 
-Backend examples, transport notes, charger-native topologies, and Modbus
-starter configs live in [CHARGER_BACKENDS.md](CHARGER_BACKENDS.md).
+## Control Surfaces
 
-### External Phase Switching
+- DBus: primary Venus OS integration surface
+- MQTT: mirrors the published runtime paths through the Venus MQTT bridge
+- HTTP: optional local Control API for process-local automation
 
-- `switch_group`
-
-`switch_group` maps child switch configs to logical phases such as `P1`,
-`P1_P2`, and `P1_P2_P3`. This is a strong fit for contactor banks, mixed
-hardware, and chargers whose current control and phase switching live in
-different devices.
-
-## Runtime Control Through DBus And MQTT
-
-The Venus MQTT bridge exposes the same runtime paths that the service publishes
-on DBus, so the wallbox can be steered locally in the GX UI and remotely in
-Home Assistant or other MQTT clients.
-
-Runtime override paths cover these groups:
-
-- Core charging:
-  `/Mode`, `/AutoStart`, `/SetCurrent`, `/MinCurrent`, `/MaxCurrent`,
-  `/PhaseSelection`
-- Auto thresholds and timing:
-  `/Auto/StartSurplusWatts`, `/Auto/StopSurplusWatts`, `/Auto/MinSoc`,
-  `/Auto/ResumeSoc`, `/Auto/StartDelaySeconds`, `/Auto/StopDelaySeconds`,
-  `/Auto/DbusBackoffBaseSeconds`, `/Auto/DbusBackoffMaxSeconds`,
-  `/Auto/GridRecoveryStartSeconds`, `/Auto/StopSurplusDelaySeconds`
-- Learned-power and smoothing:
-  `/Auto/StopSurplusVolatilityLowWatts`,
-  `/Auto/StopSurplusVolatilityHighWatts`,
-  `/Auto/ReferenceChargePowerWatts`, `/Auto/LearnChargePowerEnabled`,
-  `/Auto/LearnChargePowerMinWatts`, `/Auto/LearnChargePowerAlpha`,
-  `/Auto/LearnChargePowerStartDelaySeconds`,
-  `/Auto/LearnChargePowerWindowSeconds`,
-  `/Auto/LearnChargePowerMaxAgeSeconds`
-- Phase policy:
-  `/Auto/PhaseSwitching`, `/Auto/PhasePreferLowestWhenIdle`,
-  `/Auto/PhaseUpshiftDelaySeconds`, `/Auto/PhaseDownshiftDelaySeconds`,
-  `/Auto/PhaseUpshiftHeadroomWatts`, `/Auto/PhaseDownshiftMarginWatts`,
-  `/Auto/PhaseMismatchRetrySeconds`, `/Auto/PhaseMismatchLockoutCount`,
-  `/Auto/PhaseMismatchLockoutSeconds`
-- Scheduled policy:
-  `/Auto/ScheduledEnabledDays`, `/Auto/ScheduledFallbackDelaySeconds`,
-  `/Auto/ScheduledLatestEndTime`, `/Auto/ScheduledNightCurrent`
-- Software update control:
-  `/Auto/SoftwareUpdateRun`
-- Software update visibility:
-  `/Auto/SoftwareUpdateAvailable`, `/Auto/SoftwareUpdateState`,
-  `/Auto/SoftwareUpdateStateCode`, `/Auto/SoftwareUpdateDetail`,
-  `/Auto/SoftwareUpdateCurrentVersion`, `/Auto/SoftwareUpdateAvailableVersion`,
-  `/Auto/SoftwareUpdateNoUpdateActive`
-
-Operational metadata:
-
-- `/Auto/RuntimeOverridesActive`
-- `/Auto/RuntimeOverridesPath`
-
-The default `RuntimeOverridesPath` uses `/run/...`, so DBus and MQTT control
-values stay in RAM during runtime and fall back to the base config after a GX
-reboot.
-
-Software update cadence:
-
-- remote availability check once per week
-- one delayed auto-refresh run about one hour after a GX reboot
-- manual refresh run through DBus or MQTT when `noUpdate` is absent
-- fixed outward update states including `available-blocked` for
-  "update exists and local policy blocks installation"
-
-## Local HTTP Control API
-
-For process-local automation, the service can also expose a small versioned
-HTTP control surface on top of the same canonical command handling used by
-DBus writes.
-
-Reference docs:
-
-- [API_OVERVIEW.md](API_OVERVIEW.md)
-- [DEV_API_WORKFLOW.md](DEV_API_WORKFLOW.md)
-- [API_OPERATOR_GUIDE.md](API_OPERATOR_GUIDE.md)
-- [CONTROL_API.md](CONTROL_API.md)
-- [STATE_API.md](STATE_API.md)
-- [API_VERSIONING.md](API_VERSIONING.md)
-- [examples/control_api_client.py](examples/control_api_client.py)
-
-Config keys:
-
-- `ControlApiEnabled`
-- `ControlApiHost`
-- `ControlApiPort`
-- `ControlApiAuthToken`
-- `ControlApiReadToken`
-- `ControlApiControlToken`
-- `ControlApiAdminToken`
-- `ControlApiUpdateToken`
-- `ControlApiLocalhostOnly`
-- `ControlApiUnixSocketPath`
-- `ControlApiRateLimitMaxRequests`
-- `ControlApiRateLimitWindowSeconds`
-- `ControlApiCriticalCooldownSeconds`
-
-Endpoints:
-
-- `GET /v1/openapi.json`
-- `GET /v1/capabilities`
-- `GET /v1/control/health`
-- `GET /v1/state/healthz`
-- `POST /v1/control/command`
-- `GET /v1/events`
-- `GET /v1/state/version`
-- `GET /v1/state/build`
-- `GET /v1/state/contracts`
-- `GET /v1/state/config-effective`
-- `GET /v1/state/summary`
-- `GET /v1/state/runtime`
-- `GET /v1/state/operational`
-- `GET /v1/state/dbus-diagnostics`
-- `GET /v1/state/topology`
-- `GET /v1/state/update`
-- `GET /v1/state/health`
-
-The full request/response contract, auth rules, idempotency behavior, event
-stream, `curl` examples, Python example, and CLI snippets live in
-[CONTROL_API.md](CONTROL_API.md).
-
-Fastest local self-check:
-
-```bash
-python3 ./venus_evchargerctl.py --token READ-TOKEN doctor
-```
-
-That runs the small local API/CLI self-test and is the best first command when
-you want to confirm that the listener, auth, state reads, and event path are
-alive on a development machine.
+The stable control contract lives in [CONTROL_API.md](CONTROL_API.md). The
+stable read/state contract lives in [STATE_API.md](STATE_API.md).
 
 <!-- BEGIN:README_LOCAL_HTTP_CONTROL_API_GETTING_STARTED -->
 Quick start:
@@ -367,193 +139,31 @@ For a short local developer runbook on a normal PC, see
 [DEV_API_WORKFLOW.md](DEV_API_WORKFLOW.md).
 <!-- END:README_LOCAL_HTTP_CONTROL_API_GETTING_STARTED -->
 
-On the installed Venus/GX target, use the deploy wrapper:
+## Backends
 
-- `./deploy/venus/venus_evchargerctl.sh health`
-- `./deploy/venus/venus_evchargerctl.sh --token READ-TOKEN state summary`
-- `./deploy/venus/venus_evchargerctl.sh --unix-socket /run/venus-evcharger-control.sock --token CONTROL-TOKEN command set-mode 1`
+Main backend groups:
 
-API audit and idempotency metadata are intentionally runtime-only. Keep their
-paths on `/run/...` or `/tmp/...`; they are not meant for flash-backed storage.
-For process-local automation, prefer a unix socket over TCP when practical.
+- Shelly relay / meter / switch backends
+- template adapters for custom HTTP-based integrations
+- native charger backends such as `goe_charger`, `simpleevse_charger`,
+  `smartevse_charger`, and `modbus_charger`
+- `switch_group` for external phase-switch coordination
 
-`venus_evchargerctl` exit codes:
+Backend-specific notes and starter mappings live in
+[CHARGER_BACKENDS.md](CHARGER_BACKENDS.md) and
+[SHELLY_PROFILES.md](SHELLY_PROFILES.md).
 
-- `0` success with `2xx` API response
-- `1` request reached the API but failed or was rejected
-- `2` CLI usage error
+## Where To Look Next
 
-For read-only local inspection, the same listener also exposes:
-
-- `GET /v1/state/summary`
-- `GET /v1/state/runtime`
-- `GET /v1/state/operational`
-- `GET /v1/state/dbus-diagnostics`
-- `GET /v1/state/topology`
-- `GET /v1/state/update`
-- `GET /v1/state/version`
-- `GET /v1/state/build`
-- `GET /v1/state/contracts`
-- `GET /v1/state/config-effective`
-- `GET /v1/state/health`
-
-The stable state/read contract lives in [STATE_API.md](STATE_API.md). Formal
-stability rules for `v1` live in [API_VERSIONING.md](API_VERSIONING.md).
-
-## Install On Cerbo GX / Venus OS
-
-### Quick Start
-
-1. Copy the repository to a writable path under `/data`, for example
-   `/data/venus-evcharger-service`.
-2. Edit `deploy/venus/config.venus_evcharger.ini`.
-3. Run:
-
-   ```bash
-   cd /data/venus-evcharger-service
-   ./deploy/venus/install_venus_evcharger_service.sh
-   ```
-
-   For guided first-time setup or an intentional reconfiguration, run the
-   optional wizard before restarting the service:
-
-   ```bash
-   ./deploy/venus/configure_venus_evcharger_service.sh
-   ```
-
-   The wizard also supports non-interactive presets, import/clone defaults from
-   an existing config or the last wizard result, dry-run JSON previews,
-   guarded `--force` overwrites, separate `--meter-host` / `--switch-host` /
-   `--charger-host` role inputs, hidden password prompts for interactive auth
-   setup, optional `--live-check` probing or targeted `--probe-role`
-   adapter checks, guided Auto/Scheduled starter values, preset compatibility
-   warnings, and writes a small result/audit trail plus topology summary
-   beside the config for later review.
-
-   Split-topology presets now cover documented starter layouts such as:
-   `template-stack`, `shelly-meter-goe`, `goe-external-switch-group`,
-   `shelly-meter-goe-switch-group`, `shelly-io-modbus-charger`, and
-   `shelly-meter-modbus-switch-group`. Native Modbus charger presets now also
-   cover device-specific mappings for `abb-terra-ac-modbus`,
-   `cfos-power-brain-modbus`, and `openwb-modbus-secondary`.
-
-4. Restart the service:
-
-   ```bash
-   svc -t /service/dbus-venus-evcharger
-   ```
-
-5. Verify the service:
-
-   ```bash
-   svstat /service/dbus-venus-evcharger
-   dbus -y com.victronenergy.evcharger.http_60 /Connected GetValue
-   ```
-
-### One-File Bootstrap
-
-`install.sh` supports a small-footprint bootstrap flow for GX devices. Place it
-under `/data`, run it there, and let it materialize the working tree plus the
-regular Venus installer.
-
-Bootstrap highlights:
-
-- refreshes the local updater
-- populates the wallbox tree under a target directory
-- preserves the local wallbox config
-- additively merges newly shipped template keys into the preserved config
-  without overwriting existing local values
-- keeps existing config comments and layout where possible, and writes a
-  timestamped backup before a merge rewrite
-- validates the merged wallbox config before activating a refreshed tree
-- records updater status and audit metadata under `.bootstrap-state/`
-- supports `--dry-run` preview output for careful field updates
-- supports bundle manifests and detached signatures
-- keeps release directories under `releases/<version>/`
-- advances `current/` after the new release is ready
-- keeps `previous/` available for rollback
-
-Useful bootstrap variables:
-
-- `VENUS_EVCHARGER_TARGET_DIR`
-- `VENUS_EVCHARGER_CHANNEL`
-- `VENUS_EVCHARGER_SOURCE_DIR`
-- `VENUS_EVCHARGER_MANIFEST_SOURCE`
-- `VENUS_EVCHARGER_BOOTSTRAP_PUBKEY`
-- `VENUS_EVCHARGER_REQUIRE_SIGNED_MANIFEST`
-
-The full installation walkthrough lives in [INSTALL.md](INSTALL.md).
-The bootstrap and updater flow is described in [UPDATE_FLOW.md](UPDATE_FLOW.md).
-
-## Configuration Guide
-
-The main deployment file is:
-
-- `deploy/venus/config.venus_evcharger.ini`
-
-The full configuration guide lives in [CONFIGURATION.md](CONFIGURATION.md).
-
-Start with these settings:
-
-- `Host`
-- `DeviceInstance`
-- `Phase`
-- `DigestAuth`, `Username`, `Password` when your device uses auth
-- DBus service selectors for battery, PV, and grid when you pin them manually
-
-Then shape the installation in three layers:
-
-1. **Service identity and DBus mapping**
-2. **Backend selection**
-3. **Policy tuning for Auto and Scheduled**
-
-### Backend Selection Patterns
-
-| Pattern | Core settings |
-| --- | --- |
-| Combined relay + meter | `Mode=combined`, `Type=shelly_combined` or another combined backend |
-| Split relay + meter | `Mode=split`, `MeterType=...`, `SwitchType=...` |
-| Native charger | `Mode=split`, `ChargerType=...` |
-| Native charger + external phase switch | `Mode=split`, `ChargerType=...`, `SwitchType=switch_group` |
-
-### Probe And Validation
-
-Validate a full wallbox config before deployment:
-
-```bash
-python3 -m venus_evcharger.backend.probe validate-wallbox deploy/venus/config.venus_evcharger.ini
-```
-
-Validate an individual adapter file:
-
-```bash
-python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-meter.ini
-python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-switch.ini
-python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-charger.ini
-```
-
-## Diagnostics And Operations
-
-Operations and live DBus diagnostics are collected in
-[DIAGNOSTICS.md](DIAGNOSTICS.md).
-
-For common field issues and quick checks, see
-[TROUBLESHOOTING.md](TROUBLESHOOTING.md).
-
-## Design Spec And Contracts
-
-The compact state and priority spec lives in [STATE_MODEL.md](STATE_MODEL.md).
-
-It defines:
-
-- outward truth priority
-- authoritative sources
-- persistence rules
-- topology rules
-- safeguard expectations for future changes
-
-Runtime-near contracts back the spec at the publish edge, so outward state
-fields stay coherent as the feature set grows.
+- [INSTALL.md](INSTALL.md): installation walkthrough
+- [CONFIGURATION.md](CONFIGURATION.md): main config guide
+- [CONTROL_API.md](CONTROL_API.md): HTTP control API
+- [STATE_API.md](STATE_API.md): stable outward state contract
+- [HUAWEI_INTEGRATION.md](HUAWEI_INTEGRATION.md): Huawei setup guide
+- [DIAGNOSTICS.md](DIAGNOSTICS.md): operations and diagnostics
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md): field debugging
+- [UPDATE_FLOW.md](UPDATE_FLOW.md): bootstrap and updater flow
+- [CONTRIBUTING.md](CONTRIBUTING.md): contributor guidance
 
 ## Development
 
@@ -567,11 +177,3 @@ make check
 make typecheck
 make stress
 ```
-
-The codebase is organized around a stable service entrypoint, clear package
-boundaries for auto/update/backend/bootstrap concerns, and a growing set of
-tests around invariants, topologies, and outward-state contracts. That makes it
-straightforward to extend hardware support, policy layers, and diagnostics while
-keeping the visible behavior crisp.
-
-Contributor guidance lives in [CONTRIBUTING.md](CONTRIBUTING.md).

@@ -197,6 +197,243 @@ class TestVenusEvchargerEnergyConnectors(unittest.TestCase):
             self.assertEqual(snapshot.usable_capacity_wh, 7000.0)
             self.assertEqual(snapshot.discharge_power_w, 900.0)
 
+    def test_read_energy_source_snapshot_dispatches_to_opendtu_connector(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nBaseUrl=http://opendtu.local\nRequestTimeoutSeconds=2.0\n"
+                "[OpenDTU]\nStatusUrl=/api/livedata/status\nInverterStatusUrl=/api/livedata/status?inv=${serial}\n",
+            )
+            session = MagicMock()
+            session.get.return_value = _FakeResponse(
+                {
+                    "inverters": [
+                        {
+                            "serial": "114182000000",
+                            "reachable": True,
+                            "producing": True,
+                            "data_age": 4,
+                            "AC": {"0": {"Power": {"v": 120.5}}},
+                            "DC": {
+                                "0": {"Power": {"v": 70.0}},
+                                "1": {"Power": {"v": 68.0}},
+                            },
+                        },
+                        {
+                            "serial": "114182000001",
+                            "reachable": False,
+                            "producing": False,
+                            "data_age": 700,
+                            "AC": {"0": {"Power": {"v": 0.0}}},
+                            "DC": {"0": {"Power": {"v": 0.0}}},
+                        },
+                    ],
+                    "total": {"Power": {"v": 120.5}},
+                }
+            )
+            runtime = SimpleNamespace(session=session, shelly_request_timeout_seconds=2.0)
+            owner = SimpleNamespace(service=runtime)
+            source = EnergySourceDefinition(
+                source_id="pv",
+                role="inverter",
+                connector_type="opendtu_http",
+                config_path=config_path,
+                service_name="opendtu",
+            )
+
+            snapshot = read_energy_source_snapshot(owner, source, 150.0)
+
+            self.assertEqual(snapshot.service_name, "opendtu")
+            self.assertEqual(snapshot.ac_power_w, 120.5)
+            self.assertEqual(snapshot.pv_input_power_w, 138.0)
+            self.assertEqual(snapshot.operating_mode, "producing")
+            self.assertTrue(snapshot.online)
+            self.assertEqual(snapshot.confidence, 0.5)
+            self.assertEqual(snapshot.captured_at, 150.0)
+            session.get.assert_called_once_with(url="http://opendtu.local/api/livedata/status", timeout=2.0)
+
+    def test_opendtu_connector_fetches_detail_payloads_for_older_api_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nBaseUrl=http://opendtu.local\nRequestTimeoutSeconds=2.0\n"
+                "[OpenDTU]\nStatusUrl=/api/livedata/status\nInverterStatusUrl=/api/livedata/status?inv=${serial}\n"
+                "InverterSerials=114182000000\n",
+            )
+            session = MagicMock()
+            session.get.side_effect = [
+                _FakeResponse(
+                    {
+                        "inverters": [
+                            {
+                                "serial": "114182000000",
+                                "reachable": True,
+                                "producing": True,
+                                "data_age": 5,
+                            },
+                            {
+                                "serial": "114182000001",
+                                "reachable": True,
+                                "producing": True,
+                                "data_age": 5,
+                            },
+                        ],
+                        "total": {"Power": {"v": 222.0}},
+                    }
+                ),
+                _FakeResponse(
+                    {
+                        "inverters": [
+                            {
+                                "serial": "114182000000",
+                                "reachable": True,
+                                "producing": True,
+                                "data_age": 5,
+                                "AC": {"0": {"Power": {"v": 111.0}}},
+                                "DC": {"0": {"Power": {"v": 118.0}}},
+                            }
+                        ]
+                    }
+                ),
+            ]
+            runtime = SimpleNamespace(session=session, shelly_request_timeout_seconds=2.0)
+            owner = SimpleNamespace(service=runtime)
+            source = EnergySourceDefinition(
+                source_id="pv",
+                role="inverter",
+                connector_type="opendtu_http",
+                config_path=config_path,
+            )
+
+            snapshot = read_energy_source_snapshot(owner, source, 151.0)
+
+            self.assertEqual(snapshot.ac_power_w, 111.0)
+            self.assertEqual(snapshot.pv_input_power_w, 118.0)
+            self.assertTrue(snapshot.online)
+            self.assertEqual(snapshot.confidence, 1.0)
+            self.assertEqual(session.get.call_count, 2)
+            session.get.assert_any_call(url="http://opendtu.local/api/livedata/status?inv=114182000000", timeout=2.0)
+
+    def test_opendtu_connector_treats_night_idle_payload_as_online_without_detail_requests(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nBaseUrl=http://opendtu.local\nRequestTimeoutSeconds=2.0\n"
+                "[OpenDTU]\nStatusUrl=/api/livedata/status\nInverterStatusUrl=/api/livedata/status?inv=${serial}\n",
+            )
+            session = MagicMock()
+            session.get.return_value = _FakeResponse(
+                {
+                    "inverters": [
+                        {
+                            "serial": "138284795068",
+                            "reachable": False,
+                            "producing": False,
+                            "data_age": 6119,
+                        },
+                        {
+                            "serial": "138284597017",
+                            "reachable": False,
+                            "producing": False,
+                            "data_age": 5984,
+                        },
+                    ],
+                    "total": {"Power": {"v": 0.0}},
+                    "hints": {"radio_problem": False},
+                }
+            )
+            runtime = SimpleNamespace(session=session, shelly_request_timeout_seconds=2.0)
+            owner = SimpleNamespace(service=runtime)
+            source = EnergySourceDefinition(
+                source_id="pv",
+                role="inverter",
+                connector_type="opendtu_http",
+                config_path=config_path,
+            )
+
+            snapshot = read_energy_source_snapshot(owner, source, 152.0)
+
+            self.assertEqual(snapshot.ac_power_w, 0.0)
+            self.assertIsNone(snapshot.pv_input_power_w)
+            self.assertEqual(snapshot.operating_mode, "idle")
+            self.assertTrue(snapshot.online)
+            self.assertEqual(snapshot.confidence, 1.0)
+            self.assertEqual(session.get.call_count, 1)
+            session.get.assert_called_once_with(url="http://opendtu.local/api/livedata/status", timeout=2.0)
+
+    def test_opendtu_connector_keeps_radio_problem_payload_offline(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nBaseUrl=http://opendtu.local\nRequestTimeoutSeconds=2.0\n"
+                "[OpenDTU]\nStatusUrl=/api/livedata/status\nInverterStatusUrl=/api/livedata/status?inv=${serial}\n",
+            )
+            session = MagicMock()
+            session.get.return_value = _FakeResponse(
+                {
+                    "inverters": [
+                        {
+                            "serial": "138284795068",
+                            "reachable": False,
+                            "producing": False,
+                            "data_age": 6119,
+                        }
+                    ],
+                    "total": {"Power": {"v": 0.0}},
+                    "hints": {"radio_problem": True},
+                }
+            )
+            runtime = SimpleNamespace(session=session, shelly_request_timeout_seconds=2.0)
+            owner = SimpleNamespace(service=runtime)
+            source = EnergySourceDefinition(
+                source_id="pv",
+                role="inverter",
+                connector_type="opendtu_http",
+                config_path=config_path,
+            )
+
+            snapshot = read_energy_source_snapshot(owner, source, 153.0)
+
+            self.assertFalse(snapshot.online)
+            self.assertEqual(snapshot.confidence, 0.0)
+            session.get.assert_called_once_with(url="http://opendtu.local/api/livedata/status", timeout=2.0)
+
+    def test_opendtu_connector_keeps_hybrid_source_strict_for_unreachable_idle_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = self._write_config(
+                temp_dir,
+                "[Adapter]\nBaseUrl=http://opendtu.local\nRequestTimeoutSeconds=2.0\n"
+                "[OpenDTU]\nStatusUrl=/api/livedata/status\nInverterStatusUrl=/api/livedata/status?inv=${serial}\n",
+            )
+            session = MagicMock()
+            session.get.return_value = _FakeResponse(
+                {
+                    "inverters": [
+                        {
+                            "serial": "138284795068",
+                            "reachable": False,
+                            "producing": False,
+                            "data_age": 6119,
+                        }
+                    ],
+                    "total": {"Power": {"v": 0.0}},
+                    "hints": {"radio_problem": False},
+                }
+            )
+            runtime = SimpleNamespace(session=session, shelly_request_timeout_seconds=2.0)
+            owner = SimpleNamespace(service=runtime)
+            source = EnergySourceDefinition(
+                source_id="hybrid-like",
+                role="hybrid-inverter",
+                connector_type="opendtu_http",
+                config_path=config_path,
+            )
+
+            snapshot = read_energy_source_snapshot(owner, source, 154.0)
+
+            self.assertFalse(snapshot.online)
+            self.assertEqual(snapshot.confidence, 0.0)
+
     def test_read_energy_source_snapshot_dispatches_to_modbus_connector(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = self._write_config(

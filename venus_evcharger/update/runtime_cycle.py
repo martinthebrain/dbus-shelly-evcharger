@@ -100,6 +100,7 @@ class _UpdateCycleRuntimeMixin:
                 grid_power,
             )
         )
+        self.apply_victron_ess_balance_bias(self.service, now, auto_mode_active)
         relay_on, power, current, relay_confirmed = self.apply_relay_decision(
             desired_relay,
             relay_on,

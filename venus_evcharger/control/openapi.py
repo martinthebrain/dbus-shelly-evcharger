@@ -128,6 +128,7 @@ def _state_schema_name(path: str) -> str:
         "/v1/state/topology": "StateTopology",
         "/v1/state/update": "StateUpdate",
         "/v1/state/version": "StateVersion",
+        "/v1/state/victron-bias-recommendation": "StateVictronBiasRecommendation",
     }[path]
 
 
@@ -458,6 +459,7 @@ def _component_schemas() -> dict[str, Any]:
         ("StateTopology", "topology"),
         ("StateUpdate", "update"),
         ("StateVersion", "version"),
+        ("StateVictronBiasRecommendation", "victron-bias-recommendation"),
     ):
         if default_kind == "summary":
             schemas[schema_name] = _object_schema(

@@ -119,6 +119,95 @@ Stable fields in `state` include:
 - `combined_battery_reserve_band_ceiling_soc`
 - `combined_battery_reserve_band_width_soc`
 - `combined_battery_direction_change_count`
+- `battery_discharge_balance_mode`
+- `battery_discharge_balance_target_distribution_mode`
+- `battery_discharge_balance_error_w`
+- `battery_discharge_balance_max_abs_error_w`
+- `battery_discharge_balance_total_discharge_w`
+- `battery_discharge_balance_eligible_source_count`
+- `battery_discharge_balance_active_source_count`
+- `battery_discharge_balance_control_candidate_count`
+- `battery_discharge_balance_control_ready_count`
+- `battery_discharge_balance_supported_control_source_count`
+- `battery_discharge_balance_experimental_control_source_count`
+- `battery_discharge_balance_policy_enabled`
+- `battery_discharge_balance_warning_active`
+- `battery_discharge_balance_warning_error_w`
+- `battery_discharge_balance_warn_threshold_w`
+- `battery_discharge_balance_bias_mode`
+- `battery_discharge_balance_bias_gate_active`
+- `battery_discharge_balance_bias_start_error_w`
+- `battery_discharge_balance_bias_penalty_w`
+- `battery_discharge_balance_coordination_policy_enabled`
+- `battery_discharge_balance_coordination_support_mode`
+- `battery_discharge_balance_coordination_feasibility`
+- `battery_discharge_balance_coordination_gate_active`
+- `battery_discharge_balance_coordination_start_error_w`
+- `battery_discharge_balance_coordination_penalty_w`
+- `battery_discharge_balance_coordination_advisory_active`
+- `battery_discharge_balance_coordination_advisory_reason`
+- `battery_discharge_balance_victron_bias_enabled`
+- `battery_discharge_balance_victron_bias_active`
+- `battery_discharge_balance_victron_bias_source_id`
+- `battery_discharge_balance_victron_bias_topology_key`
+- `battery_discharge_balance_victron_bias_activation_mode`
+- `battery_discharge_balance_victron_bias_activation_gate_active`
+- `battery_discharge_balance_victron_bias_support_mode`
+- `battery_discharge_balance_victron_bias_learning_profile_key`
+- `battery_discharge_balance_victron_bias_learning_profile_action_direction`
+- `battery_discharge_balance_victron_bias_learning_profile_site_regime`
+- `battery_discharge_balance_victron_bias_learning_profile_direction`
+- `battery_discharge_balance_victron_bias_learning_profile_day_phase`
+- `battery_discharge_balance_victron_bias_learning_profile_reserve_phase`
+- `battery_discharge_balance_victron_bias_learning_profile_sample_count`
+- `battery_discharge_balance_victron_bias_learning_profile_response_delay_seconds`
+- `battery_discharge_balance_victron_bias_learning_profile_estimated_gain`
+- `battery_discharge_balance_victron_bias_learning_profile_overshoot_count`
+- `battery_discharge_balance_victron_bias_learning_profile_settled_count`
+- `battery_discharge_balance_victron_bias_learning_profile_stability_score`
+- `battery_discharge_balance_victron_bias_learning_profile_safe_ramp_rate_watts_per_second`
+- `battery_discharge_balance_victron_bias_learning_profile_preferred_bias_limit_watts`
+- `battery_discharge_balance_victron_bias_source_error_w`
+- `battery_discharge_balance_victron_bias_pid_output_w`
+- `battery_discharge_balance_victron_bias_setpoint_w`
+- `battery_discharge_balance_victron_bias_telemetry_clean`
+- `battery_discharge_balance_victron_bias_telemetry_clean_reason`
+- `battery_discharge_balance_victron_bias_response_delay_seconds`
+- `battery_discharge_balance_victron_bias_estimated_gain`
+- `battery_discharge_balance_victron_bias_overshoot_active`
+- `battery_discharge_balance_victron_bias_overshoot_count`
+- `battery_discharge_balance_victron_bias_settling_active`
+- `battery_discharge_balance_victron_bias_settled_count`
+- `battery_discharge_balance_victron_bias_stability_score`
+- `battery_discharge_balance_victron_bias_oscillation_lockout_enabled`
+- `battery_discharge_balance_victron_bias_oscillation_lockout_active`
+- `battery_discharge_balance_victron_bias_oscillation_lockout_reason`
+- `battery_discharge_balance_victron_bias_oscillation_lockout_until`
+- `battery_discharge_balance_victron_bias_oscillation_direction_change_count`
+- `battery_discharge_balance_victron_bias_recommended_kp`
+- `battery_discharge_balance_victron_bias_recommended_ki`
+- `battery_discharge_balance_victron_bias_recommended_kd`
+- `battery_discharge_balance_victron_bias_recommended_deadband_watts`
+- `battery_discharge_balance_victron_bias_recommended_max_abs_watts`
+- `battery_discharge_balance_victron_bias_recommended_ramp_rate_watts_per_second`
+- `battery_discharge_balance_victron_bias_recommended_activation_mode`
+- `battery_discharge_balance_victron_bias_recommendation_confidence`
+- `battery_discharge_balance_victron_bias_recommendation_reason`
+- `battery_discharge_balance_victron_bias_recommendation_profile_key`
+- `battery_discharge_balance_victron_bias_recommendation_ini_snippet`
+- `battery_discharge_balance_victron_bias_recommendation_hint`
+- `battery_discharge_balance_victron_bias_auto_apply_enabled`
+- `battery_discharge_balance_victron_bias_auto_apply_active`
+- `battery_discharge_balance_victron_bias_auto_apply_reason`
+- `battery_discharge_balance_victron_bias_auto_apply_generation`
+- `battery_discharge_balance_victron_bias_auto_apply_observation_window_active`
+- `battery_discharge_balance_victron_bias_auto_apply_observation_window_until`
+- `battery_discharge_balance_victron_bias_auto_apply_last_param`
+- `battery_discharge_balance_victron_bias_rollback_enabled`
+- `battery_discharge_balance_victron_bias_rollback_active`
+- `battery_discharge_balance_victron_bias_rollback_reason`
+- `battery_discharge_balance_victron_bias_rollback_stable_profile_key`
+- `battery_discharge_balance_victron_bias_reason`
 
 These combined battery fields are populated from the normalized multi-source
 energy snapshot used by Auto mode. With `AutoEnergySources=...`, the service
@@ -192,6 +281,142 @@ combined result here for local tooling and troubleshooting.
   conservative SOC reserve band across the contributing sources
 - `combined_battery_direction_change_count` counts observed charge/discharge
   reversals in the runtime learning window
+- `battery_discharge_balance_mode` describes the current fairness heuristic
+  used for per-source discharge comparison
+- `battery_discharge_balance_target_distribution_mode` repeats the currently
+  active target-distribution rule in explicit coordination language
+- `battery_discharge_balance_error_w` is the aggregate redistribution amount
+  that would be needed to bring the active battery-like sources onto their
+  current fair-share targets
+- `battery_discharge_balance_max_abs_error_w` is the largest absolute
+  per-source target deviation in the current snapshot
+- `battery_discharge_balance_total_discharge_w` is the total currently active
+  discharge power that the fairness calculation distributes
+- `battery_discharge_balance_eligible_source_count` counts online battery-like
+  sources that currently participate in the fairness model
+- `battery_discharge_balance_active_source_count` counts participating sources
+  that are actively discharging in the current snapshot
+- `battery_discharge_balance_control_candidate_count` counts battery-like
+  sources whose configured profile at least hints at some potential write path
+- `battery_discharge_balance_control_ready_count` counts those candidates that
+  are also online in the current snapshot
+- `battery_discharge_balance_supported_control_source_count` counts sources
+  whose current profile marks write support as supported
+- `battery_discharge_balance_experimental_control_source_count` counts sources
+  whose current profile marks write support as experimental
+- `battery_discharge_balance_policy_enabled` shows whether the soft
+  discharge-balance policy is enabled in config
+- `battery_discharge_balance_warning_active` shows whether the current
+  discharge imbalance crossed the configured warning threshold
+- `battery_discharge_balance_warning_error_w` repeats the current imbalance
+  magnitude when the warning is active
+- `battery_discharge_balance_warn_threshold_w` shows the configured warning
+  threshold in watts
+- `battery_discharge_balance_bias_mode` shows how the soft imbalance penalty is
+  gated, for example `always`, `export_only`, or
+  `export_and_above_reserve_band`
+- `battery_discharge_balance_bias_gate_active` shows whether the current site
+  conditions actually allow the soft imbalance penalty to take effect
+- `battery_discharge_balance_bias_start_error_w` shows when the soft
+  discharge-balance penalty begins to ramp in
+- `battery_discharge_balance_bias_penalty_w` shows the currently applied
+  extra Auto-mode surplus penalty derived from that imbalance
+- `battery_discharge_balance_coordination_policy_enabled` shows whether the
+  second-stage conservative coordination penalty is enabled in config
+- `battery_discharge_balance_coordination_support_mode` shows whether that
+  second-stage penalty currently reacts only to `supported` write paths or may
+  also react to `experimental` ones
+- `battery_discharge_balance_coordination_feasibility` summarizes whether the
+  current source mix looks `supported`, `experimental`, `partial`,
+  `blocked_by_source_availability`, `observe_only`, or `not_needed` for real
+  multi-ESS coordination
+- `battery_discharge_balance_coordination_gate_active` shows whether that
+  second-stage coordination penalty is currently allowed to take effect
+- `battery_discharge_balance_coordination_start_error_w` shows when the
+  coordination-stage penalty begins to ramp in
+- `battery_discharge_balance_coordination_penalty_w` shows the currently
+  applied coordination-stage surplus penalty
+- `battery_discharge_balance_coordination_advisory_active` shows whether the
+  current imbalance should be treated as operator-visible advisory rather than
+  silently tolerated
+- `battery_discharge_balance_coordination_advisory_reason` explains that
+  advisory in compact repo terms such as
+  `only_some_sources_offer_a_write_path`
+- `battery_discharge_balance_victron_bias_enabled` shows whether the
+  experimental Victron-side balance-bias controller is enabled in config
+- `battery_discharge_balance_victron_bias_active` shows whether that
+  controller is currently holding or applying a Victron-side setpoint
+- `battery_discharge_balance_victron_bias_source_id` shows which source is
+  treated as the local Victron-side battery path for this controller
+- `battery_discharge_balance_victron_bias_topology_key` identifies the
+  currently learned Victron-bias topology, so persisted learning can be reused
+  only for the same source/service/path/energy-source combination
+- `battery_discharge_balance_victron_bias_activation_mode` shows the current
+  controller activation gate such as `always`, `export_only`,
+  `above_reserve_band`, or `export_and_above_reserve_band`
+- `battery_discharge_balance_victron_bias_activation_gate_active` shows
+  whether that gate currently allows the controller to run
+- `battery_discharge_balance_victron_bias_support_mode` shows whether that
+  controller currently requires `supported` write support or may also use
+  `experimental`
+- `battery_discharge_balance_victron_bias_learning_profile_action_direction`
+  splits telemetry between `more_export` and `less_export`
+- `battery_discharge_balance_victron_bias_learning_profile_site_regime`,
+  `..._day_phase`, and `..._reserve_phase` show the currently active profiled
+  learning bucket
+- `battery_discharge_balance_victron_bias_learning_profile_safe_ramp_rate_watts_per_second`
+  and `..._preferred_bias_limit_watts` expose the small formal learned profile
+  values derived from that active bucket
+- `battery_discharge_balance_victron_bias_source_error_w` repeats the signed
+  per-source discharge-balance error used as the controller input
+- `battery_discharge_balance_victron_bias_pid_output_w` shows the current PID
+  controller output before the configured base setpoint is added
+- `battery_discharge_balance_victron_bias_setpoint_w` shows the current target
+  setpoint written or held for the Victron-side GX path
+- `battery_discharge_balance_victron_bias_response_delay_seconds` is a
+  runtime-learned response estimate for how long the shared site behavior
+  typically takes to react measurably after a Victron-side bias command
+- `battery_discharge_balance_victron_bias_estimated_gain` is a small learned
+  effectiveness estimate for how much absolute discharge-balance error tends
+  to improve per watt of commanded Victron-side bias
+- `battery_discharge_balance_victron_bias_overshoot_active` shows whether the
+  current learned command episode has already crossed through the error sign
+  and therefore looks like an overshoot
+- `battery_discharge_balance_victron_bias_overshoot_count` counts those
+  overshoot episodes since service start
+- `battery_discharge_balance_victron_bias_settling_active` shows whether the
+  current learned command episode is still waiting to settle inside the
+  configured deadband
+- `battery_discharge_balance_victron_bias_settled_count` counts learned
+  command episodes that reached the configured deadband without being reset
+- `battery_discharge_balance_victron_bias_stability_score` is a conservative
+  heuristic `0..1` runtime score derived from settling success, overshoot
+  behavior, learned gain, and response delay
+- `battery_discharge_balance_victron_bias_recommended_kp`,
+  `battery_discharge_balance_victron_bias_recommended_ki`,
+  `..._recommended_kd`, `..._recommended_deadband_watts`,
+  `..._recommended_max_abs_watts`,
+  `..._recommended_ramp_rate_watts_per_second`, and
+  `..._recommended_activation_mode` are observational recommendations derived
+  from the learned telemetry and the current controller tuning
+- `battery_discharge_balance_victron_bias_recommendation_confidence` is a
+  conservative `0..1` confidence score for those observational recommendations
+  based on sample count and stability
+- `battery_discharge_balance_victron_bias_recommendation_reason` explains the
+  current recommendation in compact repo terms such as
+  `insufficient_telemetry`, `slow_response`, `overshoot_risk`, or
+  `can_relax_conservatism`
+- `battery_discharge_balance_victron_bias_recommendation_ini_snippet` is a
+  copy-paste-ready INI block for the currently recommended Victron-bias
+  tuning values
+- `battery_discharge_balance_victron_bias_recommendation_hint` is a short
+  operator-facing summary sentence for the same recommendation
+- `battery_discharge_balance_victron_bias_auto_apply_enabled`,
+  `..._auto_apply_active`, `..._auto_apply_reason`, and
+  `..._auto_apply_generation` expose the guarded runtime self-tuning stage
+- `battery_discharge_balance_victron_bias_reason` explains the current
+  controller state in compact repo terms such as `applied`,
+  `auto-mode-inactive-restored`, or `victron-source-support-blocked`
 
 `GET /v1/state/runtime` also exposes the lower-level aggregation payload,
 including:
@@ -213,6 +438,23 @@ Each entry in `combined_battery_sources` may now also include:
 - `grid_interaction_w`
 - `operating_mode`
 - `ac_output_power_w`
+- `discharge_balance_eligible`
+- `discharge_balance_weight`
+- `discharge_balance_weight_basis`
+- `discharge_balance_available_energy_wh`
+- `discharge_balance_reserve_floor_soc`
+- `discharge_balance_target_distribution_mode`
+- `discharge_balance_target_share`
+- `discharge_balance_target_power_w`
+- `discharge_balance_actual_power_w`
+- `discharge_balance_error_w`
+- `discharge_balance_relative_error`
+- `discharge_balance_control_profile_name`
+- `discharge_balance_control_connector_type`
+- `discharge_balance_control_support`
+- `discharge_balance_control_candidate`
+- `discharge_balance_control_ready`
+- `discharge_balance_control_reason`
 
 For vendor-aware templates such as the Huawei Modbus starters, `operating_mode`
 may already be a semantic label like `maximise_self_consumption` instead of a
@@ -224,7 +466,37 @@ These per-source entries are also the basis for the optional companion DBus
 bridge. When the companion bridge is enabled, normalized battery-like sources
 can be published as `com.victronenergy.battery.external.*` services and
 normalized inverter-like sources as `com.victronenergy.pvinverter.external.*`
-services without changing the main EV charger DBus identity.
+services without changing the main EV charger DBus identity. Sources that
+currently expose `grid_interaction_w` can also be published as optional
+`com.victronenergy.grid.external.*` services when the grid companion path is
+enabled in config.
+
+The `discharge_balance_*` fields are diagnostic-only. They help identify
+whether multiple ESS or battery-like sources are discharging in proportion to
+their currently available energy and reserve headroom, but they do not yet
+actively coordinate or command those sources.
+
+`discharge_balance_weight_basis` makes the target basis explicit per source:
+
+- `available_energy_above_reserve`
+- `usable_capacity_fallback`
+- `uniform_fallback`
+
+The `discharge_balance_control_*` fields are also diagnostic-only. They do not
+mean the service already commands that ESS; they only show whether the current
+configured profile suggests no write path, an experimental one, or a supported
+one.
+
+The coordination-feasibility fields build on top of those write hints. The
+optional coordination penalty still does not mean the service sends ESS
+setpoints or truly orchestrates both systems. It only allows Auto mode to back
+off a little more once at least two sources look control-ready and a large
+imbalance is already visible.
+
+When the optional Auto discharge-balance policy is enabled, the operational
+state can additionally show a warning state and a conservative extra surplus
+penalty. This still does not command either ESS directly; it only makes Auto
+mode more cautious while a large imbalance is present.
 
 ### `GET /v1/state/dbus-diagnostics`
 
@@ -260,6 +532,9 @@ Typical fields include:
 - runtime paths
 - control API binding settings
 - companion bridge settings
+- companion grid authoritative-source setting
+- companion grid hold/smoothing settings
+- companion grid smoothing jump-threshold settings
 - `auto_use_combined_battery_soc`
 - `auto_energy_source_ids`
 - `auto_energy_source_profiles`

@@ -271,6 +271,131 @@ class TestServiceStateControllerQuaternary(ServiceStateControllerTestBase):
 
             self.assertIsNone(service.learned_charge_power_watts)
             self.assertIsNone(service.learned_charge_power_voltage)
+
+    def test_runtime_state_roundtrip_restores_victron_bias_learning_and_adaptive_tuning(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = f"{temp_dir}/state.json"
+            service = make_runtime_state_service(
+                runtime_state_path=path,
+                auto_energy_sources=(SimpleNamespace(source_id="victron"), SimpleNamespace(source_id="hybrid")),
+                auto_battery_discharge_balance_victron_bias_source_id="victron",
+                auto_battery_discharge_balance_victron_bias_service="com.victronenergy.settings",
+                auto_battery_discharge_balance_victron_bias_path="/Settings/CGwacs/AcPowerSetPoint",
+                auto_battery_discharge_balance_victron_bias_activation_mode="export_and_above_reserve_band",
+                auto_battery_discharge_balance_victron_bias_kp=0.23,
+                auto_battery_discharge_balance_victron_bias_ki=0.022,
+                auto_battery_discharge_balance_victron_bias_kd=0.01,
+                auto_battery_discharge_balance_victron_bias_deadband_watts=90.0,
+                auto_battery_discharge_balance_victron_bias_max_abs_watts=550.0,
+                auto_battery_discharge_balance_victron_bias_ramp_rate_watts_per_second=55.0,
+                auto_battery_discharge_balance_victron_bias_observation_window_seconds=30.0,
+                auto_battery_discharge_balance_victron_bias_rollback_enabled=True,
+                auto_battery_discharge_balance_victron_bias_rollback_min_stability_score=0.45,
+                _victron_ess_balance_learning_profiles={
+                    "more_export:export:day:above_reserve_band": {
+                        "key": "more_export:export:day:above_reserve_band",
+                        "action_direction": "more_export",
+                        "site_regime": "export",
+                        "direction": "export",
+                        "day_phase": "day",
+                        "reserve_phase": "above_reserve_band",
+                        "response_delay_seconds": 4.0,
+                        "delay_samples": 2,
+                        "estimated_gain": 2.5,
+                        "gain_samples": 2,
+                        "overshoot_count": 0,
+                        "settled_count": 3,
+                        "stability_score": 0.9,
+                        "safe_ramp_rate_watts_per_second": 60.0,
+                        "preferred_bias_limit_watts": 550.0,
+                    }
+                },
+                _victron_ess_balance_auto_apply_generation=2,
+                _victron_ess_balance_auto_apply_observe_until=1234.0,
+                _victron_ess_balance_auto_apply_last_applied_param="auto_battery_discharge_balance_victron_bias_deadband_watts",
+                _victron_ess_balance_auto_apply_last_applied_at=1200.0,
+                _victron_ess_balance_oscillation_lockout_until=1300.0,
+                _victron_ess_balance_oscillation_lockout_reason="direction_change_oscillation",
+                _victron_ess_balance_last_stable_tuning={
+                    "kp": 0.2,
+                    "ki": 0.02,
+                    "kd": 0.0,
+                    "deadband_watts": 100.0,
+                    "max_abs_watts": 500.0,
+                    "ramp_rate_watts_per_second": 50.0,
+                    "activation_mode": "always",
+                },
+                _victron_ess_balance_last_stable_at=1190.0,
+                _victron_ess_balance_last_stable_profile_key="more_export:export:day:above_reserve_band",
+            )
+            controller = ServiceStateController(service, self._normalize_mode)
+
+            controller.save_runtime_state()
+
+            with open(path, "r", encoding="utf-8") as handle:
+                saved = json.load(handle)
+
+            self.assertEqual(saved["victron_ess_balance_learning_state"]["schema_version"], 2)
+            self.assertEqual(
+                saved["victron_ess_balance_learning_state"]["topology_key"],
+                "victron-bias-learning/v2/source=victron/service=com.victronenergy.settings/path=/Settings/CGwacs/AcPowerSetPoint/energy=hybrid,victron",
+            )
+            self.assertIn(
+                "more_export:export:day:above_reserve_band",
+                saved["victron_ess_balance_learning_state"]["profiles"],
+            )
+            self.assertEqual(saved["victron_ess_balance_adaptive_tuning_state"]["kp"], 0.23)
+            self.assertEqual(saved["victron_ess_balance_adaptive_tuning_state"]["activation_mode"], "export_and_above_reserve_band")
+            self.assertEqual(saved["victron_ess_balance_adaptive_tuning_state"]["auto_apply_generation"], 2)
+            self.assertEqual(saved["victron_ess_balance_adaptive_tuning_state"]["auto_apply_observe_until"], 1234.0)
+            self.assertEqual(
+                saved["victron_ess_balance_adaptive_tuning_state"]["auto_apply_last_applied_param"],
+                "auto_battery_discharge_balance_victron_bias_deadband_watts",
+            )
+            self.assertEqual(saved["victron_ess_balance_adaptive_tuning_state"]["oscillation_lockout_until"], 1300.0)
+            self.assertEqual(
+                saved["victron_ess_balance_adaptive_tuning_state"]["last_stable_tuning"]["deadband_watts"],
+                100.0,
+            )
+
+            service._victron_ess_balance_learning_profiles = {}
+            service.auto_battery_discharge_balance_victron_bias_kp = 0.0
+            service.auto_battery_discharge_balance_victron_bias_ki = 0.0
+            service.auto_battery_discharge_balance_victron_bias_kd = 0.0
+            service.auto_battery_discharge_balance_victron_bias_deadband_watts = 0.0
+            service.auto_battery_discharge_balance_victron_bias_max_abs_watts = 0.0
+            service.auto_battery_discharge_balance_victron_bias_ramp_rate_watts_per_second = 0.0
+            service.auto_battery_discharge_balance_victron_bias_activation_mode = "always"
+            service._victron_ess_balance_auto_apply_generation = 0
+            service._victron_ess_balance_auto_apply_observe_until = None
+            service._victron_ess_balance_auto_apply_last_applied_param = ""
+            service._victron_ess_balance_auto_apply_last_applied_at = None
+            service._victron_ess_balance_oscillation_lockout_until = None
+            service._victron_ess_balance_oscillation_lockout_reason = ""
+            service._victron_ess_balance_last_stable_tuning = {}
+            service._victron_ess_balance_last_stable_at = None
+            service._victron_ess_balance_last_stable_profile_key = ""
+
+            controller.load_runtime_state()
+
+            self.assertIn("more_export:export:day:above_reserve_band", service._victron_ess_balance_learning_profiles)
+            self.assertEqual(service.auto_battery_discharge_balance_victron_bias_kp, 0.23)
+            self.assertEqual(service.auto_battery_discharge_balance_victron_bias_ki, 0.022)
+            self.assertEqual(service.auto_battery_discharge_balance_victron_bias_kd, 0.01)
+            self.assertEqual(service.auto_battery_discharge_balance_victron_bias_deadband_watts, 90.0)
+            self.assertEqual(service.auto_battery_discharge_balance_victron_bias_max_abs_watts, 550.0)
+            self.assertEqual(service.auto_battery_discharge_balance_victron_bias_ramp_rate_watts_per_second, 55.0)
+            self.assertEqual(service.auto_battery_discharge_balance_victron_bias_activation_mode, "export_and_above_reserve_band")
+            self.assertEqual(service._victron_ess_balance_auto_apply_generation, 2)
+            self.assertEqual(service._victron_ess_balance_auto_apply_observe_until, 1234.0)
+            self.assertEqual(
+                service._victron_ess_balance_auto_apply_last_applied_param,
+                "auto_battery_discharge_balance_victron_bias_deadband_watts",
+            )
+            self.assertEqual(service._victron_ess_balance_oscillation_lockout_until, 1300.0)
+            self.assertEqual(service._victron_ess_balance_oscillation_lockout_reason, "direction_change_oscillation")
+            self.assertEqual(service._victron_ess_balance_last_stable_tuning["deadband_watts"], 100.0)
+            self.assertEqual(service._victron_ess_balance_last_stable_profile_key, "more_export:export:day:above_reserve_band")
             self.assertEqual(service.learned_charge_power_sample_count, 0)
             self.assertEqual(service.learned_charge_power_signature_mismatch_sessions, 0)
 

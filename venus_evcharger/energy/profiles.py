@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 
@@ -17,6 +17,7 @@ class EnergySourceProfile:
     connector_type: str
     vendor_name: str = ""
     platform: str = ""
+    family_name: str = ""
     access_mode: str = ""
     firmware_class: str = ""
     service_prefix: str = ""
@@ -32,6 +33,40 @@ class EnergySourceProfile:
     read_support: str = "supported"
     write_support: str = "unsupported"
     probe_required: bool = False
+    idle_unreachable_policy: str = "strict"
+
+
+def _huawei_profile(
+    profile_name: str,
+    *,
+    platform: str,
+    access_mode: str,
+    firmware_class: str,
+    family_name: str = "",
+    default_host: str = "",
+    default_port_candidates: tuple[int, ...] = (),
+    default_unit_id_candidates: tuple[int, ...] = (),
+) -> EnergySourceProfile:
+    return EnergySourceProfile(
+        profile_name=profile_name,
+        role="hybrid-inverter",
+        connector_type="modbus",
+        vendor_name="Huawei",
+        platform=platform,
+        family_name=family_name or platform,
+        access_mode=access_mode,
+        firmware_class=firmware_class,
+        default_host=default_host,
+        default_port_candidates=default_port_candidates,
+        default_unit_id_candidates=default_unit_id_candidates,
+        read_support="supported",
+        write_support="experimental",
+        probe_required=True,
+    )
+
+
+def _profile_variant(base: EnergySourceProfile, profile_name: str, *, family_name: str) -> EnergySourceProfile:
+    return replace(base, profile_name=profile_name, family_name=family_name)
 
 
 _PROFILES = {
@@ -69,107 +104,178 @@ _PROFILES = {
         role="hybrid-inverter",
         connector_type="command_json",
     ),
-    "huawei_ma_native_ap": EnergySourceProfile(
-        profile_name="huawei_ma_native_ap",
-        role="hybrid-inverter",
-        connector_type="modbus",
-        vendor_name="Huawei",
+    "opendtu-pvinverter": EnergySourceProfile(
+        profile_name="opendtu-pvinverter",
+        role="inverter",
+        connector_type="opendtu_http",
+        vendor_name="OpenDTU",
+        platform="OpenDTU",
+        family_name="OpenDTU",
+        access_mode="http_json",
+        firmware_class="status_api",
+        read_support="supported",
+        write_support="unsupported",
+        probe_required=False,
+        idle_unreachable_policy="allow_plausible_idle",
+    ),
+    "huawei_ma_native_ap": _huawei_profile(
+        "huawei_ma_native_ap",
         platform="MA",
+        family_name="MA",
         access_mode="native_ap",
         firmware_class="local_ap_6607",
         default_host="192.168.200.1",
         default_port_candidates=(6607, 502),
         default_unit_id_candidates=(0, 1),
-        read_support="supported",
-        write_support="experimental",
-        probe_required=True,
     ),
-    "huawei_ma_native_lan": EnergySourceProfile(
-        profile_name="huawei_ma_native_lan",
-        role="hybrid-inverter",
-        connector_type="modbus",
-        vendor_name="Huawei",
+    "huawei_ma_native_lan": _huawei_profile(
+        "huawei_ma_native_lan",
         platform="MA",
+        family_name="MA",
         access_mode="native_lan",
         firmware_class="legacy_lan_open",
         default_port_candidates=(502, 6607),
         default_unit_id_candidates=(0, 1),
-        read_support="supported",
-        write_support="experimental",
-        probe_required=True,
     ),
-    "huawei_ma_sdongle": EnergySourceProfile(
-        profile_name="huawei_ma_sdongle",
-        role="hybrid-inverter",
-        connector_type="modbus",
-        vendor_name="Huawei",
+    "huawei_ma_sdongle": _huawei_profile(
+        "huawei_ma_sdongle",
         platform="MA",
+        family_name="MA",
         access_mode="sdongle",
         firmware_class="sdongle_third_party",
         default_port_candidates=(502, 6607),
         default_unit_id_candidates=(0, 1),
-        read_support="supported",
-        write_support="experimental",
-        probe_required=True,
     ),
-    "huawei_mb_native_ap": EnergySourceProfile(
-        profile_name="huawei_mb_native_ap",
-        role="hybrid-inverter",
-        connector_type="modbus",
-        vendor_name="Huawei",
-        platform="MB",
-        access_mode="native_ap",
-        firmware_class="local_ap_6607",
-        default_host="192.168.200.1",
-        default_port_candidates=(6607, 502),
-        default_unit_id_candidates=(0, 1),
-        read_support="supported",
-        write_support="experimental",
-        probe_required=True,
-    ),
-    "huawei_mb_native_lan": EnergySourceProfile(
-        profile_name="huawei_mb_native_lan",
-        role="hybrid-inverter",
-        connector_type="modbus",
-        vendor_name="Huawei",
-        platform="MB",
-        access_mode="native_lan",
-        firmware_class="legacy_lan_open",
-        default_port_candidates=(502, 6607),
-        default_unit_id_candidates=(0, 1),
-        read_support="supported",
-        write_support="experimental",
-        probe_required=True,
-    ),
-    "huawei_mb_sdongle": EnergySourceProfile(
-        profile_name="huawei_mb_sdongle",
-        role="hybrid-inverter",
-        connector_type="modbus",
-        vendor_name="Huawei",
-        platform="MB",
-        access_mode="sdongle",
-        firmware_class="sdongle_third_party",
-        default_port_candidates=(502, 6607),
-        default_unit_id_candidates=(0, 1),
-        read_support="supported",
-        write_support="experimental",
-        probe_required=True,
-    ),
-    "huawei_smartlogger_modbus_tcp": EnergySourceProfile(
-        profile_name="huawei_smartlogger_modbus_tcp",
-        role="hybrid-inverter",
-        connector_type="modbus",
-        vendor_name="Huawei",
-        platform="smartlogger",
+    "huawei_ma_smartlogger_modbus_tcp": _huawei_profile(
+        "huawei_ma_smartlogger_modbus_tcp",
+        platform="MA",
+        family_name="MA",
         access_mode="smartlogger",
         firmware_class="smartlogger_502",
         default_port_candidates=(502,),
         default_unit_id_candidates=(0, 1),
-        read_support="supported",
-        write_support="experimental",
-        probe_required=True,
+    ),
+    "huawei_mb_native_ap": _huawei_profile(
+        "huawei_mb_native_ap",
+        platform="MB",
+        family_name="MB",
+        access_mode="native_ap",
+        firmware_class="local_ap_6607",
+        default_host="192.168.200.1",
+        default_port_candidates=(6607, 502),
+        default_unit_id_candidates=(0, 1),
+    ),
+    "huawei_mb_native_lan": _huawei_profile(
+        "huawei_mb_native_lan",
+        platform="MB",
+        family_name="MB",
+        access_mode="native_lan",
+        firmware_class="legacy_lan_open",
+        default_port_candidates=(502, 6607),
+        default_unit_id_candidates=(0, 1),
+    ),
+    "huawei_mb_sdongle": _huawei_profile(
+        "huawei_mb_sdongle",
+        platform="MB",
+        family_name="MB",
+        access_mode="sdongle",
+        firmware_class="sdongle_third_party",
+        default_port_candidates=(502, 6607),
+        default_unit_id_candidates=(0, 1),
+    ),
+    "huawei_mb_smartlogger_modbus_tcp": _huawei_profile(
+        "huawei_mb_smartlogger_modbus_tcp",
+        platform="MB",
+        family_name="MB",
+        access_mode="smartlogger",
+        firmware_class="smartlogger_502",
+        default_port_candidates=(502,),
+        default_unit_id_candidates=(0, 1),
+    ),
+    "huawei_mb_unit1": _huawei_profile(
+        "huawei_mb_unit1",
+        platform="MB",
+        family_name="MB",
+        access_mode="unit_split",
+        firmware_class="mb_unit_split",
+        default_port_candidates=(502, 6607),
+        default_unit_id_candidates=(0, 1),
+    ),
+    "huawei_mb_unit2": _huawei_profile(
+        "huawei_mb_unit2",
+        platform="MB",
+        family_name="MB",
+        access_mode="unit_split",
+        firmware_class="mb_unit_split",
+        default_port_candidates=(502, 6607),
+        default_unit_id_candidates=(0, 1),
+    ),
+    "huawei_smartlogger_modbus_tcp": _huawei_profile(
+        "huawei_smartlogger_modbus_tcp",
+        platform="smartlogger",
+        family_name="generic",
+        access_mode="smartlogger",
+        firmware_class="smartlogger_502",
+        default_port_candidates=(502,),
+        default_unit_id_candidates=(0, 1),
     ),
 }
+
+for _family in ("L1", "LC0", "LB0", "M1"):
+    _family_key = _family.lower()
+    _PROFILES[f"huawei_{_family_key}_native_ap"] = _profile_variant(
+        _PROFILES["huawei_ma_native_ap"],
+        f"huawei_{_family_key}_native_ap",
+        family_name=_family,
+    )
+    _PROFILES[f"huawei_{_family_key}_native_lan"] = _profile_variant(
+        _PROFILES["huawei_ma_native_lan"],
+        f"huawei_{_family_key}_native_lan",
+        family_name=_family,
+    )
+    _PROFILES[f"huawei_{_family_key}_sdongle"] = _profile_variant(
+        _PROFILES["huawei_ma_sdongle"],
+        f"huawei_{_family_key}_sdongle",
+        family_name=_family,
+    )
+    _PROFILES[f"huawei_{_family_key}_smartlogger_modbus_tcp"] = _profile_variant(
+        _PROFILES["huawei_ma_smartlogger_modbus_tcp"],
+        f"huawei_{_family_key}_smartlogger_modbus_tcp",
+        family_name=_family,
+    )
+
+for _family in ("MAP0", "MB0"):
+    _family_key = _family.lower()
+    _PROFILES[f"huawei_{_family_key}_native_ap"] = _profile_variant(
+        _PROFILES["huawei_mb_native_ap"],
+        f"huawei_{_family_key}_native_ap",
+        family_name=_family,
+    )
+    _PROFILES[f"huawei_{_family_key}_native_lan"] = _profile_variant(
+        _PROFILES["huawei_mb_native_lan"],
+        f"huawei_{_family_key}_native_lan",
+        family_name=_family,
+    )
+    _PROFILES[f"huawei_{_family_key}_sdongle"] = _profile_variant(
+        _PROFILES["huawei_mb_sdongle"],
+        f"huawei_{_family_key}_sdongle",
+        family_name=_family,
+    )
+    _PROFILES[f"huawei_{_family_key}_smartlogger_modbus_tcp"] = _profile_variant(
+        _PROFILES["huawei_mb_smartlogger_modbus_tcp"],
+        f"huawei_{_family_key}_smartlogger_modbus_tcp",
+        family_name=_family,
+    )
+    _PROFILES[f"huawei_{_family_key}_unit1"] = _profile_variant(
+        _PROFILES["huawei_mb_unit1"],
+        f"huawei_{_family_key}_unit1",
+        family_name=_family,
+    )
+    _PROFILES[f"huawei_{_family_key}_unit2"] = _profile_variant(
+        _PROFILES["huawei_mb_unit2"],
+        f"huawei_{_family_key}_unit2",
+        family_name=_family,
+    )
 
 _ALIASES = {
     "battery": "dbus-battery",
@@ -179,24 +285,19 @@ _ALIASES = {
     "modbus": "modbus-hybrid",
     "command-json": "command-json-hybrid",
     "helper": "command-json-hybrid",
-    "huawei_l1_native_ap": "huawei_ma_native_ap",
-    "huawei_lc0_native_ap": "huawei_ma_native_ap",
-    "huawei_lb0_native_ap": "huawei_ma_native_ap",
-    "huawei_m1_native_ap": "huawei_ma_native_ap",
-    "huawei_l1_native_lan": "huawei_ma_native_lan",
-    "huawei_lc0_native_lan": "huawei_ma_native_lan",
-    "huawei_lb0_native_lan": "huawei_ma_native_lan",
-    "huawei_m1_native_lan": "huawei_ma_native_lan",
-    "huawei_l1_sdongle": "huawei_ma_sdongle",
-    "huawei_lc0_sdongle": "huawei_ma_sdongle",
-    "huawei_lb0_sdongle": "huawei_ma_sdongle",
-    "huawei_m1_sdongle": "huawei_ma_sdongle",
-    "huawei_map0_native_ap": "huawei_mb_native_ap",
-    "huawei_mb0_native_ap": "huawei_mb_native_ap",
-    "huawei_map0_native_lan": "huawei_mb_native_lan",
-    "huawei_mb0_native_lan": "huawei_mb_native_lan",
-    "huawei_map0_sdongle": "huawei_mb_sdongle",
-    "huawei_mb0_sdongle": "huawei_mb_sdongle",
+    "opendtu": "opendtu-pvinverter",
+    "opendtu-inverter": "opendtu-pvinverter",
+    "growatt-opendtu": "opendtu-pvinverter",
+    "huawei_sun5000_lb0_native_ap": "huawei_lb0_native_ap",
+    "huawei_sun5000_lb0_native_lan": "huawei_lb0_native_lan",
+    "huawei_sun5000_lb0_sdongle": "huawei_lb0_sdongle",
+    "huawei_sun5000_lb0_smartlogger_modbus_tcp": "huawei_lb0_smartlogger_modbus_tcp",
+    "huawei_sun5000_map0_native_ap": "huawei_map0_native_ap",
+    "huawei_sun5000_map0_native_lan": "huawei_map0_native_lan",
+    "huawei_sun5000_map0_sdongle": "huawei_map0_sdongle",
+    "huawei_sun5000_map0_smartlogger_modbus_tcp": "huawei_map0_smartlogger_modbus_tcp",
+    "huawei_sun5000_map0_unit1": "huawei_map0_unit1",
+    "huawei_sun5000_map0_unit2": "huawei_map0_unit2",
 }
 
 
@@ -242,6 +343,7 @@ def energy_source_profile_details(profile_name: object) -> Mapping[str, Any]:
         "profile_name": profile.profile_name,
         "vendor_name": profile.vendor_name,
         "platform": profile.platform,
+        "family_name": profile.family_name,
         "access_mode": profile.access_mode,
         "firmware_class": profile.firmware_class,
         "connector_type": profile.connector_type,
@@ -252,6 +354,7 @@ def energy_source_profile_details(profile_name: object) -> Mapping[str, Any]:
         "read_support": profile.read_support,
         "write_support": profile.write_support,
         "probe_required": profile.probe_required,
+        "idle_unreachable_policy": profile.idle_unreachable_policy,
     }
 
 
