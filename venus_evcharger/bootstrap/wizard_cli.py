@@ -15,6 +15,7 @@ from venus_evcharger.bootstrap.wizard_charger_presets import (
     relevant_charger_presets,
 )
 from venus_evcharger.bootstrap.wizard_cli_output import result_text
+from venus_evcharger.bootstrap.wizard_cli_parser import build_parser
 from venus_evcharger.bootstrap.wizard_guidance import (
     default_backend,
     prompt_role_hosts,
@@ -23,15 +24,35 @@ from venus_evcharger.bootstrap.wizard_guidance import (
     role_host_defaults,
     role_prompt_intro,
 )
-from venus_evcharger.bootstrap.wizard_import import ImportedWizardDefaults, load_imported_defaults
+from venus_evcharger.bootstrap.wizard_import import ImportedWizardDefaults
+from venus_evcharger.bootstrap.wizard_cli_imports import (
+    clone_import_path as _clone_import_path_impl,
+    empty_imported_defaults as _empty_imported_defaults_impl,
+    resolve_import_path as _resolve_import_path_impl,
+    resolve_imported_defaults,
+    resume_import_path as _resume_import_path_impl,
+)
 from venus_evcharger.bootstrap.wizard_models import (
     WizardAnswers,
     WizardChargerBackend,
     WizardPolicyMode,
     WizardProfile,
     WizardTransportKind,
-)
+    )
 from venus_evcharger.bootstrap.wizard_policy_guidance import policy_defaults, prompt_policy_defaults
+from venus_evcharger.bootstrap.wizard_cli_non_interactive import (
+    non_interactive_answers as _non_interactive_answers_impl,
+    non_interactive_backend as _non_interactive_backend_impl,
+    non_interactive_charger_preset as _non_interactive_charger_preset_impl,
+    non_interactive_device_instance as _non_interactive_device_instance_impl,
+    non_interactive_digest_auth as _non_interactive_digest_auth_impl,
+    non_interactive_phase as _non_interactive_phase_impl,
+    non_interactive_policy_mode as _non_interactive_policy_mode_impl,
+    non_interactive_profile as _non_interactive_profile_impl,
+    non_interactive_split_preset as _non_interactive_split_preset_impl,
+    non_interactive_string as _non_interactive_string_impl,
+    resolved_backend as _resolved_backend_impl,
+)
 from venus_evcharger.bootstrap.wizard_support import (
     NATIVE_CHARGER_VALUES,
     PHASE_SWITCH_CHARGER_VALUES,
@@ -55,37 +76,7 @@ __all__ = ["build_answers", "build_parser", "prompt_yes_no", "result_text"]
 
 
 def _empty_imported_defaults() -> ImportedWizardDefaults:
-    return ImportedWizardDefaults(
-        imported_from="",
-        profile=None,
-        host_input=None,
-        meter_host_input=None,
-        switch_host_input=None,
-        charger_host_input=None,
-        device_instance=None,
-        phase=None,
-        policy_mode=None,
-        digest_auth=None,
-        username=None,
-        password=None,
-        split_preset=None,
-        charger_backend=None,
-        charger_preset=None,
-        request_timeout_seconds=None,
-        switch_group_phase_layout=None,
-        auto_start_surplus_watts=None,
-        auto_stop_surplus_watts=None,
-        auto_min_soc=None,
-        auto_resume_soc=None,
-        scheduled_enabled_days=None,
-        scheduled_latest_end_time=None,
-        scheduled_night_current_amps=None,
-        transport_kind=None,
-        transport_host=None,
-        transport_port=None,
-        transport_device=None,
-        transport_unit_id=None,
-    )
+    return _empty_imported_defaults_impl()
 
 
 def _prompt_text(prompt: str, default: str) -> str:
@@ -138,34 +129,15 @@ def _resolved_choice_input(raw: str, choices: tuple[str, ...], default: str | No
 
 
 def _resume_import_path(namespace: argparse.Namespace) -> Path | None:
-    if not namespace.resume_last:
-        return None
-    candidate = Path(f"{namespace.config_path}.wizard-result.json")
-    if not candidate.exists():
-        raise ValueError(f"--resume-last requested but no prior wizard result exists: {candidate}")
-    return candidate
+    return _resume_import_path_impl(namespace)
 
 
 def _clone_import_path(namespace: argparse.Namespace) -> Path | None:
-    if not namespace.clone_current:
-        return None
-    candidate = Path(namespace.config_path)
-    if not candidate.exists():
-        raise ValueError(f"--clone-current requested but config does not exist: {candidate}")
-    return candidate
+    return _clone_import_path_impl(namespace)
 
 
 def _resolve_import_path(namespace: argparse.Namespace) -> Path | None:
-    if namespace.import_config:
-        return Path(namespace.import_config)
-    return _resume_import_path(namespace) or _clone_import_path(namespace)
-
-
-def resolve_imported_defaults(namespace: argparse.Namespace) -> ImportedWizardDefaults | None:
-    import_path = _resolve_import_path(namespace)
-    if import_path is None:
-        return None
-    return load_imported_defaults(import_path)
+    return _resolve_import_path_impl(namespace)
 
 
 def _interactive_profile(namespace: argparse.Namespace, imported: ImportedWizardDefaults) -> WizardProfile:
@@ -352,94 +324,23 @@ def _interactive_transport_inputs(
 
 
 def _non_interactive_profile(namespace: argparse.Namespace, imported_defaults: ImportedWizardDefaults) -> WizardProfile:
-    profile = cast(WizardProfile | None, namespace.profile or imported_defaults.profile)
-    if profile is None:
-        raise ValueError("--profile is required in --non-interactive mode unless --import-config/--clone-current provides one")
-    return profile
+    return _non_interactive_profile_impl(namespace, imported_defaults)
 
 
 def _non_interactive_policy_mode(namespace: argparse.Namespace, imported_defaults: ImportedWizardDefaults) -> WizardPolicyMode:
-    return cast(WizardPolicyMode, namespace.policy_mode or imported_defaults.policy_mode or "manual")
+    return _non_interactive_policy_mode_impl(namespace, imported_defaults)
 
 
 def _non_interactive_digest_auth(namespace: argparse.Namespace, imported_defaults: ImportedWizardDefaults) -> bool:
-    if namespace.digest_auth:
-        return True
-    if imported_defaults.digest_auth is not None:
-        return bool(imported_defaults.digest_auth)
-    return False
+    return _non_interactive_digest_auth_impl(namespace, imported_defaults)
 
 
 def _non_interactive_answers(namespace: argparse.Namespace, imported: ImportedWizardDefaults | None) -> WizardAnswers:
-    imported_defaults = imported or _empty_imported_defaults()
-    profile = _non_interactive_profile(namespace, imported_defaults)
-    shared_host = namespace.host or imported_defaults.host_input or "192.168.1.50"
-    split_preset = _non_interactive_split_preset(namespace, imported_defaults, profile)
-    backend = _non_interactive_backend(namespace, imported, profile, split_preset)
-    charger_preset = _non_interactive_charger_preset(namespace, imported_defaults, backend)
-    backend = _resolved_backend(split_preset, charger_preset, backend)
-    meter_host, switch_host, charger_host = role_host_defaults(namespace, imported_defaults, profile, split_preset, shared_host)
-    host_input = resolved_primary_host(namespace, imported_defaults, meter_host, switch_host, charger_host)
-    transport_kind, transport_host, transport_port, transport_device, transport_unit_id = non_interactive_transport_inputs(
-        namespace,
-        backend,
-        charger_preset,
-        host_input,
-        imported_defaults,
-    )
-    request_timeout_seconds, switch_group_phase_layout = preset_specific_defaults(
-        namespace,
-        imported_defaults,
-        backend=backend,
-        split_preset=split_preset,
-        charger_preset=charger_preset,
-    )
-    (
-        auto_start_surplus_watts,
-        auto_stop_surplus_watts,
-        auto_min_soc,
-        auto_resume_soc,
-        scheduled_enabled_days,
-        scheduled_latest_end_time,
-        scheduled_night_current_amps,
-    ) = policy_defaults(_non_interactive_policy_mode(namespace, imported_defaults), imported_defaults, namespace)
-    return WizardAnswers(
-        profile=profile,
-        host_input=host_input,
-        meter_host_input=meter_host,
-        switch_host_input=switch_host,
-        charger_host_input=charger_host,
-        device_instance=_non_interactive_device_instance(namespace, imported_defaults),
-        phase=_non_interactive_phase(namespace, imported_defaults),
-        policy_mode=_non_interactive_policy_mode(namespace, imported_defaults),
-        digest_auth=_non_interactive_digest_auth(namespace, imported_defaults),
-        username=_non_interactive_string(namespace.username, imported_defaults.username),
-        password=_non_interactive_string(namespace.password, imported_defaults.password),
-        split_preset=split_preset,
-        charger_backend=backend,
-        charger_preset=charger_preset,
-        request_timeout_seconds=request_timeout_seconds,
-        switch_group_supported_phase_selections=switch_group_phase_layout,
-        auto_start_surplus_watts=auto_start_surplus_watts,
-        auto_stop_surplus_watts=auto_stop_surplus_watts,
-        auto_min_soc=auto_min_soc,
-        auto_resume_soc=auto_resume_soc,
-        scheduled_enabled_days=scheduled_enabled_days,
-        scheduled_latest_end_time=scheduled_latest_end_time,
-        scheduled_night_current_amps=scheduled_night_current_amps,
-        transport_kind=transport_kind,
-        transport_host=transport_host,
-        transport_port=transport_port,
-        transport_device=transport_device,
-        transport_unit_id=transport_unit_id,
-    )
+    return _non_interactive_answers_impl(namespace, imported or _empty_imported_defaults())
 
 
 def _non_interactive_split_preset(namespace: argparse.Namespace, imported_defaults: ImportedWizardDefaults, profile: WizardProfile) -> str | None:
-    split_preset = namespace.split_preset or imported_defaults.split_preset
-    if profile == "split-topology":
-        return split_preset or "template-stack"
-    return split_preset
+    return _non_interactive_split_preset_impl(namespace, imported_defaults, profile)
 
 
 def _non_interactive_backend(
@@ -448,7 +349,7 @@ def _non_interactive_backend(
     profile: WizardProfile,
     split_preset: str | None,
 ) -> WizardChargerBackend | None:
-    return cast(WizardChargerBackend | None, namespace.charger_backend or default_backend(profile, imported))
+    return _non_interactive_backend_impl(namespace, imported, profile, split_preset)
 
 
 def _resolved_backend(
@@ -456,9 +357,7 @@ def _resolved_backend(
     charger_preset: str | None,
     backend: WizardChargerBackend | None,
 ) -> WizardChargerBackend | None:
-    from venus_evcharger.bootstrap.wizard_guidance import apply_split_preset_backend
-
-    return apply_split_preset_backend(split_preset, backend, charger_preset)
+    return _resolved_backend_impl(split_preset, charger_preset, backend)
 
 
 def _interactive_charger_preset(
@@ -500,12 +399,7 @@ def _non_interactive_charger_preset(
     imported_defaults: ImportedWizardDefaults,
     backend: WizardChargerBackend | None,
 ) -> str | None:
-    charger_preset = namespace.charger_preset or imported_defaults.charger_preset
-    if charger_preset is None:
-        return None
-    if charger_preset not in relevant_charger_presets(apply_charger_preset_backend(charger_preset, backend)):
-        raise ValueError(f"--charger-preset {charger_preset} is not supported for backend {backend or 'none'}")
-    return charger_preset
+    return _non_interactive_charger_preset_impl(namespace, imported_defaults, backend)
 
 
 def _prompt_optional_choice(
@@ -519,69 +413,18 @@ def _prompt_optional_choice(
 
 
 def _non_interactive_device_instance(namespace: argparse.Namespace, imported_defaults: ImportedWizardDefaults) -> int:
-    return int(namespace.device_instance if namespace.device_instance is not None else (imported_defaults.device_instance or 60))
+    return _non_interactive_device_instance_impl(namespace, imported_defaults)
 
 
 def _non_interactive_phase(namespace: argparse.Namespace, imported_defaults: ImportedWizardDefaults) -> str:
-    return namespace.phase or imported_defaults.phase or "L1"
+    return _non_interactive_phase_impl(namespace, imported_defaults)
 
 
 def _non_interactive_string(namespace_value: str | None, imported_value: str | None) -> str:
-    return namespace_value or imported_value or ""
+    return _non_interactive_string_impl(namespace_value, imported_value)
 
 
 def build_answers(namespace: argparse.Namespace) -> tuple[WizardAnswers, ImportedWizardDefaults | None]:
     imported = resolve_imported_defaults(namespace)
     answers = _non_interactive_answers(namespace, imported) if namespace.non_interactive else _interactive_answers(namespace, imported)
     return answers, imported
-
-
-def build_parser(default_config_path: str, default_template_path: str) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Optional setup wizard for the Venus EV charger config.")
-    parser.add_argument("--config-path", default=default_config_path)
-    parser.add_argument("--template-path", default=default_template_path)
-    parser.add_argument("--profile", choices=PROFILE_VALUES)
-    parser.add_argument("--split-preset", choices=SPLIT_PRESET_VALUES)
-    parser.add_argument("--charger-backend", choices=NATIVE_CHARGER_VALUES)
-    parser.add_argument("--charger-preset", choices=CHARGER_PRESET_VALUES)
-    parser.add_argument("--host")
-    parser.add_argument("--meter-host")
-    parser.add_argument("--switch-host")
-    parser.add_argument("--charger-host")
-    parser.add_argument("--device-instance", type=int)
-    parser.add_argument("--phase", choices=("L1", "L2", "L3", "3P", "1P"))
-    parser.add_argument("--policy-mode", choices=POLICY_VALUES)
-    parser.add_argument("--transport", choices=TRANSPORT_VALUES)
-    parser.add_argument("--transport-host")
-    parser.add_argument("--transport-port", type=int)
-    parser.add_argument("--transport-device")
-    parser.add_argument("--transport-unit-id", type=int)
-    parser.add_argument("--digest-auth", action="store_true")
-    parser.add_argument("--username")
-    parser.add_argument("--password")
-    parser.add_argument("--import-config")
-    parser.add_argument("--resume-last", action="store_true")
-    parser.add_argument("--clone-current", action="store_true")
-    parser.add_argument("--yes", action="store_true")
-    parser.add_argument("--force", action="store_true")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--json", action="store_true")
-    parser.add_argument("--live-check", action="store_true")
-    parser.add_argument("--probe-role", dest="probe_roles", action="append", choices=("meter", "switch", "charger"))
-    parser.add_argument("--request-timeout-seconds", type=float)
-    parser.add_argument("--switch-group-phase-layout", choices=SWITCH_GROUP_PHASE_LAYOUT_VALUES)
-    parser.add_argument("--auto-start-surplus-watts", type=float)
-    parser.add_argument("--auto-stop-surplus-watts", type=float)
-    parser.add_argument("--auto-min-soc", type=float)
-    parser.add_argument("--auto-resume-soc", type=float)
-    parser.add_argument("--scheduled-enabled-days")
-    parser.add_argument("--scheduled-latest-end-time")
-    parser.add_argument("--scheduled-night-current-amps", type=float)
-    parser.add_argument("--energy-recommendation-prefix", action="append")
-    parser.add_argument("--huawei-recommendation-prefix", action="append")
-    parser.add_argument("--energy-default-usable-capacity-wh", type=float)
-    parser.add_argument("--huawei-usable-capacity-wh", type=float)
-    parser.add_argument("--energy-usable-capacity-wh", action="append")
-    parser.add_argument("--apply-energy-merge", action="store_true")
-    parser.add_argument("--non-interactive", action="store_true")
-    return parser
