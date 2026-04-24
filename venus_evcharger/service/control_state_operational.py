@@ -69,8 +69,8 @@ def _state_api_operational_state(
     auto_state: object,
     auto_state_code: object,
     fault_reason: str,
-    fault_active: bool,
-    software_update_fields: tuple[str, int, bool, bool],
+    fault_active: int,
+    software_update_fields: tuple[str, int, int, int],
     learning_summary: dict[str, Any],
 ) -> dict[str, Any]:
     (
@@ -101,11 +101,11 @@ def _state_api_operational_core_state(
     auto_state: object,
     auto_state_code: object,
     fault_reason: str,
-    fault_active: bool,
+    fault_active: int,
     software_update_state: str,
     software_update_state_code: int,
-    software_update_available: bool,
-    software_update_no_update_active: bool,
+    software_update_available: int,
+    software_update_no_update_active: int,
 ) -> dict[str, Any]:
     return {
         "mode": getattr(owner, "virtual_mode", 0),

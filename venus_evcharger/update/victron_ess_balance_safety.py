@@ -241,7 +241,7 @@ class _UpdateCycleVictronEssBalanceSafetyMixin:
             if not isinstance(entry, dict):
                 continue
             entry_at = _UpdateCycleVictronEssBalanceApplyMixin._optional_float(entry.get("at"))
-            if entry_at is None or float(cast(float, entry_at)) < cutoff:
+            if entry_at is None or float(entry_at) < cutoff:
                 continue
             kept.append(dict(entry))
         return kept

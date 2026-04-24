@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 from venus_evcharger.energy import derive_energy_forecast, summarize_energy_learning_profiles
 from venus_evcharger.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
@@ -63,8 +63,8 @@ class _AutoDecisionBatteryBalanceMixin(_ComposableControllerMixin):
         learning_summary: Mapping[str, Any],
     ) -> tuple[float, float, float, float]:
         if sources:
-            return self._source_activity_penalties(sources, profiles)
-        return self._cluster_activity_penalties(cluster, learning_summary)
+            return cast(tuple[float, float, float, float], self._source_activity_penalties(sources, profiles))
+        return cast(tuple[float, float, float, float], self._cluster_activity_penalties(cluster, learning_summary))
 
     def _combined_battery_scaled_penalties(
         self,
@@ -82,12 +82,15 @@ class _AutoDecisionBatteryBalanceMixin(_ComposableControllerMixin):
         direction: str,
         behavior: Mapping[str, float | None],
     ) -> float:
-        return self._battery_penalty_multiplier(
-            direction=direction,
-            response_delay_seconds=behavior["response_delay_seconds"],
-            support_bias=behavior["support_bias"],
-            import_support_bias=behavior["import_support_bias"],
-            export_bias=behavior["export_bias"],
+        return cast(
+            float,
+            self._battery_penalty_multiplier(
+                direction=direction,
+                response_delay_seconds=behavior["response_delay_seconds"],
+                support_bias=behavior["support_bias"],
+                import_support_bias=behavior["import_support_bias"],
+                export_bias=behavior["export_bias"],
+            ),
         )
 
     def _combined_battery_discharge_balance_context(

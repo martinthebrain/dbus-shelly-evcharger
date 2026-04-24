@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import cast
+from typing import Any, cast
 
 from venus_evcharger.core.shared import (
     configured_grid_paths,
@@ -14,6 +14,8 @@ from venus_evcharger.core.shared import (
     grid_values_complete_enough,
 )
 from venus_evcharger.energy import (
+    EnergyClusterSnapshot,
+    EnergyLearningProfile,
     EnergySourceDefinition,
     EnergySourceSnapshot,
     aggregate_energy_sources,
@@ -48,8 +50,9 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
     def _primary_energy_soc_path(self) -> str:
         return str(getattr(self.service, "auto_battery_soc_path", "/Soc") or "/Soc")
 
-    def _primary_energy_capacity_wh(self) -> object:
-        return getattr(self.service, "auto_battery_capacity_wh", None)
+    def _primary_energy_capacity_wh(self) -> float | None:
+        value = getattr(self.service, "auto_battery_capacity_wh", None)
+        return float(value) if isinstance(value, (int, float)) else None
 
     def _primary_energy_battery_power_path(self) -> str:
         return str(getattr(self.service, "auto_battery_power_path", "") or "")
@@ -84,7 +87,7 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
     def _primary_energy_source(self) -> EnergySourceDefinition:
         sources = self._configured_primary_energy_sources()
         if sources:
-            return cast(EnergySourceDefinition, sources[0])
+            return sources[0]
         return self._default_primary_energy_source()
 
     def _battery_service_has_soc(self, service_name: str) -> bool:
@@ -284,41 +287,42 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
     def _battery_snapshot_cluster(
         self,
         now: float,
-    ) -> tuple[object, tuple[EnergySourceDefinition, ...], list[EnergySourceSnapshot]]:
+    ) -> tuple[EnergyClusterSnapshot, tuple[EnergySourceDefinition, ...], list[EnergySourceSnapshot]]:
         sources = self._battery_snapshot_sources()
         source_snapshots = [read_energy_source_snapshot(self, source, now) for source in sources]
         return aggregate_energy_sources(source_snapshots), sources, source_snapshots
 
-    def _battery_snapshot_effective_soc(self, cluster: object) -> float | None:
+    def _battery_snapshot_effective_soc(self, cluster: EnergyClusterSnapshot) -> float | None:
         primary_soc = cluster.sources[0].soc if cluster.sources else None
         return cluster.effective_soc if bool(getattr(self.service, "auto_use_combined_battery_soc", True)) else primary_soc
 
     @staticmethod
-    def _battery_snapshot_validate_soc(effective_soc: float | None, cluster: object) -> None:
+    def _battery_snapshot_validate_soc(effective_soc: float | None, cluster: EnergyClusterSnapshot) -> None:
         if effective_soc is None and not any(source.soc is not None for source in cluster.sources):
             raise TypeError("Battery SOC is not numeric")
 
-    def _battery_snapshot_cache_owner(self) -> object:
+    def _battery_snapshot_cache_owner(self) -> Any:
         svc = self.service
         return getattr(svc, "_service", svc)
 
     def _battery_snapshot_learning_bundle(
         self,
-        cache_owner: object,
-        cluster: object,
+        cache_owner: Any,
+        cluster: EnergyClusterSnapshot,
         now: float,
     ) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
-        cache_owner._last_energy_learning_profiles = update_energy_learning_profiles(
+        learning_profiles = update_energy_learning_profiles(
             getattr(cache_owner, "_last_energy_learning_profiles", {}),
             cluster.sources,
             now,
         )
+        cache_owner._last_energy_learning_profiles = learning_profiles
         learning_summary = summarize_energy_learning_profiles(
-            getattr(cache_owner, "_last_energy_learning_profiles", {})
+            learning_profiles
         )
         discharge_balance = derive_discharge_balance_metrics(
             cluster.sources,
-            getattr(cache_owner, "_last_energy_learning_profiles", {}),
+            learning_profiles,
         )
         forecast = derive_energy_forecast(
             {
@@ -338,7 +342,7 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
 
     @staticmethod
     def _battery_snapshot_discharge_control(
-        cluster: object,
+        cluster: EnergyClusterSnapshot,
         sources: tuple[EnergySourceDefinition, ...],
     ) -> dict[str, object]:
         return cast(
@@ -348,7 +352,7 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
 
     @staticmethod
     def _battery_snapshot_source_payloads(
-        cluster: object,
+        cluster: EnergyClusterSnapshot,
         discharge_balance: dict[str, object],
         discharge_control: dict[str, object],
     ) -> list[dict[str, object]]:
@@ -363,9 +367,9 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
 
     def _battery_snapshot_payload(
         self,
-        cache_owner: object,
+        cache_owner: Any,
         effective_soc: float | None,
-        cluster: object,
+        cluster: EnergyClusterSnapshot,
         forecast: dict[str, object],
         discharge_balance: dict[str, object],
         discharge_control: dict[str, object],
@@ -412,14 +416,17 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
             "battery_sources": source_payloads,
             "battery_learning_profiles": {
                 source_id: profile.as_dict()
-                for source_id, profile in getattr(cache_owner, "_last_energy_learning_profiles", {}).items()
+                for source_id, profile in cast(
+                    dict[str, EnergyLearningProfile],
+                    getattr(cache_owner, "_last_energy_learning_profiles", {}),
+                ).items()
             },
         }
 
     @staticmethod
     def _empty_battery_snapshot_payload(failure: float | None) -> dict[str, object]:
         return {
-            "battery_soc": cast(float | None, failure),
+            "battery_soc": failure,
             "battery_combined_soc": None,
             "battery_combined_usable_capacity_wh": None,
             "battery_combined_charge_power_w": None,

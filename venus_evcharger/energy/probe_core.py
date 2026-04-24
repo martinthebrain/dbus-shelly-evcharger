@@ -116,7 +116,7 @@ def _probe_candidates(
         for candidate_port in port_candidates:
             for candidate_unit_id in unit_id_candidates:
                 candidates.append(
-                    replace(base_transport, host=host, port=candidate_port, unit_id=int(candidate_unit_id))
+                    replace(base_transport, host=host, port=candidate_port, unit_id=candidate_unit_id)
                 )
     return tuple(candidates)
 
@@ -153,14 +153,14 @@ def _probe_default_hosts(
 def _probe_default_ports(
     base_transport: ModbusTransportSettings,
     port_candidates: list[int],
-) -> list[int | None]:
+) -> list[int]:
     return port_candidates or ([base_transport.port] if base_transport.port is not None else [])
 
 
 def _probe_default_unit_ids(
     base_transport: ModbusTransportSettings,
     unit_id_candidates: list[int],
-) -> list[int | None]:
+) -> list[int]:
     return unit_id_candidates or [base_transport.unit_id]
 
 

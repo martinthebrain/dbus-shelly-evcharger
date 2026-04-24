@@ -241,13 +241,12 @@ class _UpdateCycleVictronEssBalanceAdaptiveMixin:
         metrics: dict[str, Any],
         now: float,
     ) -> str:
-        for reason_resolver in (
-            lambda: self._victron_ess_balance_auto_apply_suspend_reason(svc, now),
-            lambda: self._victron_ess_balance_auto_apply_rollback_reason(svc, metrics, now),
-            lambda: self._victron_ess_balance_auto_apply_observation_reason(svc, metrics, now),
-            lambda: self._victron_ess_balance_auto_apply_readiness(svc, metrics),
+        for reason in (
+            self._victron_ess_balance_auto_apply_suspend_reason(svc, now),
+            self._victron_ess_balance_auto_apply_rollback_reason(svc, metrics, now),
+            self._victron_ess_balance_auto_apply_observation_reason(svc, metrics, now),
+            self._victron_ess_balance_auto_apply_readiness(svc, metrics),
         ):
-            reason = reason_resolver()
             if reason:
                 return reason
         return ""

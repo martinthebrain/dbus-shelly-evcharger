@@ -14,6 +14,7 @@ from venus_evcharger.bootstrap.wizard_models import (
     WizardChargerBackend,
     WizardPolicyMode,
     WizardProfile,
+    WizardTransportKind,
 )
 from venus_evcharger.bootstrap.wizard_policy_guidance import policy_defaults
 from venus_evcharger.bootstrap.wizard_support import host_from_input
@@ -109,7 +110,7 @@ def _non_interactive_transport_answers(
     charger_preset: str | None,
     host_input: str,
     split_preset: str | None,
-) -> tuple[str, str, int, str, int, float, str]:
+) -> tuple[WizardTransportKind, str, int, str, int, float | None, str]:
     transport_kind, transport_host, transport_port, transport_device, transport_unit_id = (
         non_interactive_transport_inputs(
             namespace,
@@ -140,7 +141,16 @@ def _non_interactive_transport_answers(
 def _non_interactive_policy_answers(
     namespace: argparse.Namespace,
     imported_defaults: ImportedWizardDefaults,
-) -> tuple[WizardPolicyMode, int, int, float, float, str, int]:
+) -> tuple[
+    WizardPolicyMode,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    str | None,
+    str | None,
+    float | None,
+]:
     policy_mode = non_interactive_policy_mode(namespace, imported_defaults)
     (
         auto_start_surplus_watts,
@@ -166,12 +176,12 @@ def _non_interactive_policy_answers(
 def _effective_transport_answers(
     backend: WizardChargerBackend | None,
     host_input: str,
-    transport_kind: str,
+    transport_kind: WizardTransportKind,
     transport_host: str,
     transport_port: int,
     transport_device: str,
     transport_unit_id: int,
-) -> tuple[str, str, int, str, int]:
+) -> tuple[WizardTransportKind, str, int, str, int]:
     if backend_requires_transport(backend):
         return (
             transport_kind,

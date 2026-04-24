@@ -377,7 +377,11 @@ def _victron_ess_balance_runtime_string(svc: Any, attr_name: str) -> str:
 
 
 def _victron_ess_balance_runtime_non_negative_int(value: object) -> int:
-    return max(0, int(value or 0))
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return max(0, int(value))
+    return 0
 
 
 def _victron_ess_balance_runtime_attr_text(

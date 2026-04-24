@@ -177,11 +177,11 @@ def _opendtu_filtered_raw_inverters(
     raw_inverters: list[object],
     serial_filter: tuple[str, ...],
 ) -> tuple[dict[str, object], ...]:
-    return tuple(
-        raw_inverter
-        for raw_inverter in raw_inverters
-        if _opendtu_filtered_raw_inverter(raw_inverter, serial_filter)
-    )
+    filtered: list[dict[str, object]] = []
+    for raw_inverter in raw_inverters:
+        if isinstance(raw_inverter, dict) and _opendtu_filtered_raw_inverter(raw_inverter, serial_filter):
+            filtered.append(raw_inverter)
+    return tuple(filtered)
 
 
 def _opendtu_filtered_raw_inverter(

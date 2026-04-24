@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import configparser
 from dataclasses import replace
-from typing import Mapping, cast
+from typing import Mapping, MutableMapping, cast
 
 from venus_evcharger.backend.modbus_client import ModbusClient
 from venus_evcharger.backend.modbus_transport import create_modbus_transport
@@ -137,11 +138,10 @@ def _invalid_huawei_validation_payload(
         ),
     }
 
-
 def _huawei_candidate_transport(
     config_path: str,
     detected: Mapping[str, object],
-) -> tuple[ModbusTransportSettings, object]:
+) -> tuple[ModbusTransportSettings, configparser.ConfigParser]:
     parser = load_template_config(config_path)
     transport = _config_transport_section(parser)
     _apply_detected_probe_target(transport, detected)
@@ -149,24 +149,37 @@ def _huawei_candidate_transport(
     return _detected_candidate_transport(base_transport, detected), parser
 
 
-def _apply_detected_probe_target(transport: Mapping[str, object], detected: Mapping[str, object]) -> None:
+def _apply_detected_probe_target(transport: MutableMapping[str, str], detected: Mapping[str, object]) -> None:
     transport["Host"] = str(detected.get("host", "") or "")
-    if detected.get("port") is not None:
-        transport["Port"] = str(int(detected["port"]))
-    if detected.get("unit_id") is not None:
-        transport["UnitId"] = str(int(detected["unit_id"]))
+    detected_port = _optional_detected_int(detected.get("port"))
+    if detected_port is not None:
+        transport["Port"] = str(detected_port)
+    detected_unit_id = _optional_detected_int(detected.get("unit_id"))
+    if detected_unit_id is not None:
+        transport["UnitId"] = str(detected_unit_id)
 
 
 def _detected_candidate_transport(
     base_transport: ModbusTransportSettings,
     detected: Mapping[str, object],
 ) -> ModbusTransportSettings:
+    detected_port = _optional_detected_int(detected.get("port"))
+    detected_unit_id = _optional_detected_int(detected.get("unit_id"))
     return replace(
         base_transport,
         host=str(detected.get("host", "") or base_transport.host),
-        port=int(detected.get("port", base_transport.port)),
-        unit_id=int(detected.get("unit_id", base_transport.unit_id)),
+        port=detected_port if detected_port is not None else base_transport.port,
+        unit_id=detected_unit_id if detected_unit_id is not None else base_transport.unit_id,
     )
+
+
+def _optional_detected_int(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def _required_huawei_fields_ok(field_results: list[dict[str, object]]) -> bool:

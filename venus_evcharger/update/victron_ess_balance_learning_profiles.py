@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypedDict
 
 
 class _UpdateCycleVictronEssBalanceLearningProfilesMixin:
@@ -120,6 +120,14 @@ class _UpdateCycleVictronEssBalanceLearningProfilesMixin:
             return "reserve_band"
         return "above_reserve_band"
 
+    class _LearningProfilePhaseInputs(TypedDict):
+        grid_interaction_w: float | None
+        expected_export_w: float
+        expected_import_w: float
+        pv_input_power_w: float
+        combined_charge_headroom_w: float | None
+        combined_discharge_headroom_w: float | None
+
     @staticmethod
     def _victron_ess_balance_battery_limit_phase(
         site_regime: str,
@@ -190,7 +198,7 @@ class _UpdateCycleVictronEssBalanceLearningProfilesMixin:
     def _victron_ess_balance_learning_profile_phase_inputs(
         self,
         cluster: dict[str, Any],
-    ) -> dict[str, float | None]:
+    ) -> _LearningProfilePhaseInputs:
         return {
             "grid_interaction_w": self._optional_float(cluster.get("battery_combined_grid_interaction_w")),
             "expected_export_w": self._optional_float(cluster.get("expected_near_term_export_w")) or 0.0,

@@ -114,8 +114,9 @@ class _AutoInputHelperSourceDbusMixin:
     def _primary_energy_soc_path(self: Any) -> str:
         return str(getattr(self, "auto_battery_soc_path", "/Soc") or "/Soc")
 
-    def _primary_energy_capacity_wh(self: Any) -> Any:
-        return getattr(self, "auto_battery_capacity_wh", None)
+    def _primary_energy_capacity_wh(self: Any) -> float | None:
+        value = getattr(self, "auto_battery_capacity_wh", None)
+        return float(value) if isinstance(value, (int, float)) else None
 
     def _primary_energy_battery_power_path(self: Any) -> str:
         return str(getattr(self, "auto_battery_power_path", "") or "")
@@ -148,10 +149,10 @@ class _AutoInputHelperSourceDbusMixin:
         )
 
     def _primary_energy_source(self: Any) -> EnergySourceDefinition:
-        sources = self._configured_primary_energy_sources()
+        sources = cast(tuple[EnergySourceDefinition, ...], self._configured_primary_energy_sources())
         if sources:
-            return cast(EnergySourceDefinition, sources[0])
-        return self._default_primary_energy_source()
+            return sources[0]
+        return cast(EnergySourceDefinition, self._default_primary_energy_source())
 
     def _battery_service_has_soc(self: Any, service_name: str) -> bool:
         try:
@@ -266,13 +267,13 @@ class _AutoInputHelperSourceDbusMixin:
         now = time.time()
         if source.source_id == self._primary_energy_source().source_id:
             return cast(str, self._resolve_auto_battery_service())
-        configured_service = self._configured_energy_source_service(source, now)
+        configured_service = cast(str | None, self._configured_energy_source_service(source, now))
         if configured_service is not None:
             return configured_service
-        cached_service = self._cached_energy_service(source.source_id, now)
+        cached_service = cast(str | None, self._cached_energy_service(source.source_id, now))
         if cached_service is not None:
-            return cast(str, cached_service)
-        return self._discovered_energy_source_service(source, now)
+            return cached_service
+        return cast(str, self._discovered_energy_source_service(source, now))
 
     def _read_optional_energy_value(self: Any, service_name: str, path: str) -> float | None:
         if not path:
@@ -371,7 +372,9 @@ class _AutoInputHelperSourceDbusMixin:
             operating_mode,
         ) = fields
         validated_soc = self._validated_energy_source_soc(source, service_name, soc_value)
-        return self._dbus_energy_source_snapshot_payload(
+        return cast(
+            EnergySourceSnapshot,
+            self._dbus_energy_source_snapshot_payload(
             source,
             service_name,
             validated_soc,
@@ -381,4 +384,5 @@ class _AutoInputHelperSourceDbusMixin:
             grid_interaction,
             operating_mode,
             now,
+            ),
         )

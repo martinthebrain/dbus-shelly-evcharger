@@ -91,7 +91,10 @@ def _effective_soc(combined_soc: float | None, sources: tuple[EnergySourceSnapsh
     fallback_sources = _online_soc_sources(sources)
     if len(fallback_sources) != 1:
         return None
-    return float(fallback_sources[0].soc)
+    fallback_soc = fallback_sources[0].soc
+    if fallback_soc is None:
+        return None
+    return float(fallback_soc)
 
 
 def _online_soc_sources(
