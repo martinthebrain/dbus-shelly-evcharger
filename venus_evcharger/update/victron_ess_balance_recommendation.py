@@ -9,7 +9,380 @@ from typing import Any
 
 
 class _UpdateCycleVictronEssBalanceRecommendationMixin:
+    @staticmethod
+    def _victron_ess_balance_has_insufficient_telemetry(
+        observations: dict[str, Any],
+        confidence: float,
+    ) -> bool:
+        return (
+            observations["response_delay_seconds"] is None
+            or observations["estimated_gain"] is None
+            or confidence < 0.35
+        )
+
+    @staticmethod
+    def _victron_ess_balance_has_overshoot_risk(observations: dict[str, Any]) -> bool:
+        stability_score = observations["stability_score"]
+        return int(observations["overshoot_count"] or 0) > 0 or (
+            stability_score is not None and stability_score < 0.55
+        )
+
+    @staticmethod
+    def _victron_ess_balance_has_slow_response(observations: dict[str, Any]) -> bool:
+        return (
+            float(observations["response_delay_seconds"]) > 8.0
+            or float(observations["estimated_gain"]) < 0.75
+        )
+
+    @staticmethod
+    def _victron_ess_balance_can_relax_conservatism(observations: dict[str, Any]) -> bool:
+        stability_score = observations["stability_score"]
+        if stability_score is None or stability_score < 0.8:
+            return False
+        if not _UpdateCycleVictronEssBalanceRecommendationMixin._victron_ess_balance_has_clean_settling(observations):
+            return False
+        return _UpdateCycleVictronEssBalanceRecommendationMixin._victron_ess_balance_observations_within_relaxed_bounds(
+            observations
+        )
+
+    @staticmethod
+    def _victron_ess_balance_has_clean_settling(observations: dict[str, Any]) -> bool:
+        return (
+            int(observations["settled_count"] or 0) >= 2
+            and int(observations["overshoot_count"] or 0) == 0
+        )
+
+    @staticmethod
+    def _victron_ess_balance_observations_within_relaxed_bounds(observations: dict[str, Any]) -> bool:
+        return (
+            float(observations["response_delay_seconds"]) <= 5.0
+            and float(observations["estimated_gain"]) >= 0.75
+        )
+
+    @staticmethod
+    def _victron_ess_balance_reason_adjustment(reason: str) -> dict[str, float]:
+        presets: dict[str, dict[str, float]] = {
+            "overshoot_risk": {
+                "kp_factor": 0.8,
+                "ki_factor": 0.5,
+                "kd_floor": 0.02,
+                "deadband_factor": 1.25,
+                "deadband_default": 125.0,
+                "max_abs_factor": 0.8,
+                "max_abs_default": 350.0,
+                "ramp_factor": 0.7,
+                "ramp_default": 25.0,
+            },
+            "slow_response": {
+                "kp_factor": 0.9,
+                "ki_factor": 0.6,
+                "kd_floor": 0.01,
+                "deadband_factor": 1.1,
+                "deadband_default": 110.0,
+                "max_abs_factor": 0.9,
+                "max_abs_default": 425.0,
+                "ramp_factor": 0.8,
+                "ramp_default": 35.0,
+            },
+            "can_relax_conservatism": {
+                "kp_factor": 1.15,
+                "ki_factor": 1.1,
+                "kd_factor": 0.8,
+                "kd_default": 0.0,
+                "deadband_factor": 0.9,
+                "deadband_default": 80.0,
+                "max_abs_factor": 1.1,
+                "max_abs_default": 550.0,
+                "ramp_factor": 1.1,
+                "ramp_default": 60.0,
+            },
+        }
+        return presets.get(reason, {})
+
+    @staticmethod
+    def _victron_ess_balance_disabled_recommendation_metrics() -> dict[str, Any]:
+        return {
+            "battery_discharge_balance_victron_bias_recommended_kp": None,
+            "battery_discharge_balance_victron_bias_recommended_ki": None,
+            "battery_discharge_balance_victron_bias_recommended_kd": None,
+            "battery_discharge_balance_victron_bias_recommended_deadband_watts": None,
+            "battery_discharge_balance_victron_bias_recommended_max_abs_watts": None,
+            "battery_discharge_balance_victron_bias_recommended_ramp_rate_watts_per_second": None,
+            "battery_discharge_balance_victron_bias_recommended_activation_mode": "",
+            "battery_discharge_balance_victron_bias_recommendation_confidence": None,
+            "battery_discharge_balance_victron_bias_recommendation_regime_consistency_score": None,
+            "battery_discharge_balance_victron_bias_recommendation_response_variance_score": None,
+            "battery_discharge_balance_victron_bias_recommendation_reproducibility_score": None,
+            "battery_discharge_balance_victron_bias_recommendation_reason": "disabled",
+            "battery_discharge_balance_victron_bias_recommendation_profile_key": "",
+            "battery_discharge_balance_victron_bias_recommendation_ini_snippet": "",
+            "battery_discharge_balance_victron_bias_recommendation_hint": "",
+        }
+
+    @staticmethod
+    def _victron_ess_balance_current_tuning_values(svc: Any) -> dict[str, float]:
+        return {
+            "kp": _UpdateCycleVictronEssBalanceRecommendationMixin._victron_ess_balance_non_negative_attr(
+                svc,
+                "auto_battery_discharge_balance_victron_bias_kp",
+            ),
+            "ki": _UpdateCycleVictronEssBalanceRecommendationMixin._victron_ess_balance_non_negative_attr(
+                svc,
+                "auto_battery_discharge_balance_victron_bias_ki",
+            ),
+            "kd": _UpdateCycleVictronEssBalanceRecommendationMixin._victron_ess_balance_non_negative_attr(
+                svc,
+                "auto_battery_discharge_balance_victron_bias_kd",
+            ),
+            "deadband": _UpdateCycleVictronEssBalanceRecommendationMixin._victron_ess_balance_non_negative_attr(
+                svc,
+                "auto_battery_discharge_balance_victron_bias_deadband_watts",
+            ),
+            "max_abs": _UpdateCycleVictronEssBalanceRecommendationMixin._victron_ess_balance_non_negative_attr(
+                svc,
+                "auto_battery_discharge_balance_victron_bias_max_abs_watts",
+            ),
+            "ramp": _UpdateCycleVictronEssBalanceRecommendationMixin._victron_ess_balance_non_negative_attr(
+                svc,
+                "auto_battery_discharge_balance_victron_bias_ramp_rate_watts_per_second",
+            ),
+        }
+
+    @staticmethod
+    def _victron_ess_balance_non_negative_attr(svc: Any, attr_name: str) -> float:
+        return max(0.0, float(getattr(svc, attr_name, 0.0) or 0.0))
+
+    def _victron_ess_balance_recommendation_source(
+        self,
+        svc: Any,
+    ) -> tuple[str, dict[str, Any], bool]:
+        active_profile_key = str(getattr(svc, "_victron_ess_balance_active_learning_profile_key", "") or "").strip()
+        active_profile = self._victron_ess_balance_learning_profile_state(svc, active_profile_key)
+        use_profile = self._victron_ess_balance_profile_sample_count(active_profile) > 0
+        return active_profile_key, active_profile, use_profile
+
+    def _victron_ess_balance_recommendation_observations(
+        self,
+        svc: Any,
+        active_profile: dict[str, Any],
+        use_profile: bool,
+    ) -> dict[str, Any]:
+        return {
+            "response_delay_seconds": self._optional_float(
+                self._victron_ess_balance_observation_value(
+                    svc,
+                    active_profile,
+                    use_profile,
+                    "response_delay_seconds",
+                    "_victron_ess_balance_telemetry_response_delay_seconds",
+                )
+            ),
+            "estimated_gain": self._optional_float(
+                self._victron_ess_balance_observation_value(
+                    svc,
+                    active_profile,
+                    use_profile,
+                    "estimated_gain",
+                    "_victron_ess_balance_telemetry_estimated_gain",
+                )
+            ),
+            "stability_score": self._optional_float(
+                self._victron_ess_balance_observation_value(
+                    svc,
+                    active_profile,
+                    use_profile,
+                    "stability_score",
+                    "_victron_ess_balance_telemetry_stability_score",
+                )
+            ),
+            "overshoot_count": self._victron_ess_balance_observation_count(
+                svc,
+                active_profile,
+                use_profile,
+                "overshoot_count",
+                "_victron_ess_balance_telemetry_overshoot_count",
+            ),
+            "settled_count": self._victron_ess_balance_observation_count(
+                svc,
+                active_profile,
+                use_profile,
+                "settled_count",
+                "_victron_ess_balance_telemetry_settled_count",
+            ),
+            "delay_samples": self._victron_ess_balance_observation_count(
+                svc,
+                active_profile,
+                use_profile,
+                "delay_samples",
+                "_victron_ess_balance_telemetry_delay_samples",
+            ),
+            "gain_samples": self._victron_ess_balance_observation_count(
+                svc,
+                active_profile,
+                use_profile,
+                "gain_samples",
+                "_victron_ess_balance_telemetry_gain_samples",
+            ),
+            "regime_consistency_score": self._optional_float(
+                active_profile.get("regime_consistency_score") if use_profile else None
+            ),
+            "response_variance_score": self._optional_float(
+                active_profile.get("response_variance_score") if use_profile else None
+            ),
+            "reproducibility_score": self._optional_float(
+                active_profile.get("reproducibility_score") if use_profile else None
+            ),
+        }
+
+    @staticmethod
+    def _victron_ess_balance_observation_value(
+        svc: Any,
+        active_profile: dict[str, Any],
+        use_profile: bool,
+        profile_key: str,
+        service_attr: str,
+    ) -> Any:
+        return active_profile.get(profile_key) if use_profile else getattr(svc, service_attr, None)
+
+    @classmethod
+    def _victron_ess_balance_observation_count(
+        cls,
+        svc: Any,
+        active_profile: dict[str, Any],
+        use_profile: bool,
+        profile_key: str,
+        service_attr: str,
+    ) -> int:
+        return max(
+            0,
+            int(cls._victron_ess_balance_observation_value(svc, active_profile, use_profile, profile_key, service_attr) or 0),
+        )
+
+    def _victron_ess_balance_recommendation_reason(
+        self,
+        observations: dict[str, Any],
+        confidence: float,
+    ) -> str:
+        if self._victron_ess_balance_has_insufficient_telemetry(observations, confidence):
+            return "insufficient_telemetry"
+        if self._victron_ess_balance_has_overshoot_risk(observations):
+            return "overshoot_risk"
+        if self._victron_ess_balance_has_slow_response(observations):
+            return "slow_response"
+        if self._victron_ess_balance_can_relax_conservatism(observations):
+            return "can_relax_conservatism"
+        return "telemetry_nominal"
+
+    @staticmethod
+    def _victron_ess_balance_adjusted_tuning(current: dict[str, float], reason: str) -> dict[str, float]:
+        adjusted = dict(current)
+        preset = _UpdateCycleVictronEssBalanceRecommendationMixin._victron_ess_balance_reason_adjustment(reason)
+        if preset:
+            adjusted["kp"] = current["kp"] * float(preset["kp_factor"])
+            adjusted["ki"] = current["ki"] * float(preset["ki_factor"])
+            adjusted["kd"] = _UpdateCycleVictronEssBalanceRecommendationMixin._victron_ess_balance_adjusted_kd(
+                current["kd"],
+                preset,
+            )
+            adjusted["deadband"] = _UpdateCycleVictronEssBalanceRecommendationMixin._victron_ess_balance_scaled_or_default(
+                current["deadband"], preset, "deadband_factor", "deadband_default"
+            )
+            adjusted["max_abs"] = _UpdateCycleVictronEssBalanceRecommendationMixin._victron_ess_balance_scaled_or_default(
+                current["max_abs"], preset, "max_abs_factor", "max_abs_default"
+            )
+            adjusted["ramp"] = _UpdateCycleVictronEssBalanceRecommendationMixin._victron_ess_balance_scaled_or_default(
+                current["ramp"], preset, "ramp_factor", "ramp_default"
+            )
+        adjusted["deadband"] = max(0.0, float(adjusted["deadband"]))
+        adjusted["max_abs"] = max(0.0, float(adjusted["max_abs"]))
+        adjusted["ramp"] = max(0.0, float(adjusted["ramp"]))
+        return adjusted
+
+    @staticmethod
+    def _victron_ess_balance_adjusted_kd(current_kd: float, preset: dict[str, float]) -> float:
+        if "kd_floor" in preset:
+            return max(current_kd, float(preset["kd_floor"]))
+        if current_kd > 0.0:
+            return current_kd * float(preset.get("kd_factor", 1.0))
+        return float(preset.get("kd_default", 0.0))
+
+    @staticmethod
+    def _victron_ess_balance_scaled_or_default(
+        current_value: float,
+        preset: dict[str, float],
+        factor_key: str,
+        default_key: str,
+    ) -> float:
+        if current_value > 0.0:
+            return current_value * float(preset[factor_key])
+        return float(preset[default_key])
+
+    def _victron_ess_balance_recommendation_payload(
+        self,
+        svc: Any,
+        active_profile_key: str,
+        use_profile: bool,
+        active_profile: dict[str, Any],
+        observations: dict[str, Any],
+        confidence: float,
+    ) -> dict[str, Any]:
+        current = self._victron_ess_balance_current_tuning_values(svc)
+        reason = self._victron_ess_balance_recommendation_reason(observations, confidence)
+        adjusted = self._victron_ess_balance_adjusted_tuning(current, reason)
+        activation_mode = self._victron_ess_balance_recommended_activation_mode(active_profile if use_profile else {}, svc)
+        ini_snippet = self._victron_ess_balance_recommendation_ini_snippet(
+            adjusted["kp"],
+            adjusted["ki"],
+            adjusted["kd"],
+            adjusted["deadband"],
+            adjusted["max_abs"],
+            adjusted["ramp"],
+            activation_mode,
+        )
+        return {
+            "battery_discharge_balance_victron_bias_recommended_kp": round(float(adjusted["kp"]), 4),
+            "battery_discharge_balance_victron_bias_recommended_ki": round(float(adjusted["ki"]), 4),
+            "battery_discharge_balance_victron_bias_recommended_kd": round(float(adjusted["kd"]), 4),
+            "battery_discharge_balance_victron_bias_recommended_deadband_watts": round(
+                float(adjusted["deadband"]), 4
+            ),
+            "battery_discharge_balance_victron_bias_recommended_max_abs_watts": round(float(adjusted["max_abs"]), 4),
+            "battery_discharge_balance_victron_bias_recommended_ramp_rate_watts_per_second": round(
+                float(adjusted["ramp"]), 4
+            ),
+            "battery_discharge_balance_victron_bias_recommended_activation_mode": activation_mode,
+            "battery_discharge_balance_victron_bias_recommendation_confidence": round(float(confidence), 4),
+            "battery_discharge_balance_victron_bias_recommendation_regime_consistency_score": observations[
+                "regime_consistency_score"
+            ],
+            "battery_discharge_balance_victron_bias_recommendation_response_variance_score": observations[
+                "response_variance_score"
+            ],
+            "battery_discharge_balance_victron_bias_recommendation_reproducibility_score": observations[
+                "reproducibility_score"
+            ],
+            "battery_discharge_balance_victron_bias_recommendation_reason": reason,
+            "battery_discharge_balance_victron_bias_recommendation_profile_key": active_profile_key if use_profile else "",
+            "battery_discharge_balance_victron_bias_recommendation_ini_snippet": ini_snippet,
+            "battery_discharge_balance_victron_bias_recommendation_hint": self._victron_ess_balance_recommendation_hint(
+                reason,
+                confidence,
+            ),
+        }
+
     def _populate_victron_ess_balance_telemetry_metrics(self, svc: Any, metrics: dict[str, Any]) -> None:
+        observed_at = self._optional_float(getattr(svc, "_victron_ess_balance_telemetry_last_observed_at", None)) or 0.0
+        self._populate_victron_ess_balance_recommendation_telemetry_metrics(svc, metrics, observed_at)
+        active_profile_key = str(getattr(svc, "_victron_ess_balance_active_learning_profile_key", "") or "").strip()
+        self._merge_victron_ess_balance_learning_profile_metrics(svc, metrics, active_profile_key)
+        metrics.update(self._victron_ess_balance_recommendation_metrics(svc))
+
+    def _populate_victron_ess_balance_recommendation_telemetry_metrics(
+        self,
+        svc: Any,
+        metrics: dict[str, Any],
+        observed_at: float,
+    ) -> None:
         metrics["battery_discharge_balance_victron_bias_response_delay_seconds"] = self._optional_float(
             getattr(svc, "_victron_ess_balance_telemetry_response_delay_seconds", None)
         )
@@ -23,10 +396,7 @@ class _UpdateCycleVictronEssBalanceRecommendationMixin:
             getattr(svc, "_victron_ess_balance_telemetry_overshoot_count", 0) or 0
         )
         metrics["battery_discharge_balance_victron_bias_overshoot_cooldown_active"] = int(
-            self._victron_ess_balance_overshoot_cooldown_active(
-                svc,
-                self._optional_float(getattr(svc, "_victron_ess_balance_telemetry_last_observed_at", None)) or 0.0,
-            )
+            self._victron_ess_balance_overshoot_cooldown_active(svc, observed_at)
         )
         metrics["battery_discharge_balance_victron_bias_overshoot_cooldown_reason"] = str(
             getattr(svc, "_victron_ess_balance_overshoot_cooldown_reason", "") or ""
@@ -43,205 +413,29 @@ class _UpdateCycleVictronEssBalanceRecommendationMixin:
         metrics["battery_discharge_balance_victron_bias_stability_score"] = self._optional_float(
             getattr(svc, "_victron_ess_balance_telemetry_stability_score", None)
         )
-        self._populate_victron_ess_balance_runtime_safety_metrics(
-            svc,
-            self._optional_float(getattr(svc, "_victron_ess_balance_telemetry_last_observed_at", None)) or 0.0,
-            metrics,
-        )
-        active_profile_key = str(getattr(svc, "_victron_ess_balance_active_learning_profile_key", "") or "").strip()
-        self._merge_victron_ess_balance_learning_profile_metrics(svc, metrics, active_profile_key)
-        metrics.update(self._victron_ess_balance_recommendation_metrics(svc))
+        self._populate_victron_ess_balance_runtime_safety_metrics(svc, observed_at, metrics)
 
     def _victron_ess_balance_recommendation_metrics(self, svc: Any) -> dict[str, Any]:
-        enabled = bool(getattr(svc, "auto_battery_discharge_balance_victron_bias_enabled", False))
-        if not enabled:
-            return {
-                "battery_discharge_balance_victron_bias_recommended_kp": None,
-                "battery_discharge_balance_victron_bias_recommended_ki": None,
-                "battery_discharge_balance_victron_bias_recommended_kd": None,
-                "battery_discharge_balance_victron_bias_recommended_deadband_watts": None,
-                "battery_discharge_balance_victron_bias_recommended_max_abs_watts": None,
-                "battery_discharge_balance_victron_bias_recommended_ramp_rate_watts_per_second": None,
-                "battery_discharge_balance_victron_bias_recommended_activation_mode": "",
-                "battery_discharge_balance_victron_bias_recommendation_confidence": None,
-                "battery_discharge_balance_victron_bias_recommendation_regime_consistency_score": None,
-                "battery_discharge_balance_victron_bias_recommendation_response_variance_score": None,
-                "battery_discharge_balance_victron_bias_recommendation_reproducibility_score": None,
-                "battery_discharge_balance_victron_bias_recommendation_reason": "disabled",
-                "battery_discharge_balance_victron_bias_recommendation_profile_key": "",
-                "battery_discharge_balance_victron_bias_recommendation_ini_snippet": "",
-                "battery_discharge_balance_victron_bias_recommendation_hint": "",
-            }
-        current_kp = max(
-            0.0,
-            float(getattr(svc, "auto_battery_discharge_balance_victron_bias_kp", 0.0) or 0.0),
-        )
-        current_ki = max(
-            0.0,
-            float(getattr(svc, "auto_battery_discharge_balance_victron_bias_ki", 0.0) or 0.0),
-        )
-        current_kd = max(
-            0.0,
-            float(getattr(svc, "auto_battery_discharge_balance_victron_bias_kd", 0.0) or 0.0),
-        )
-        current_deadband = max(
-            0.0,
-            float(getattr(svc, "auto_battery_discharge_balance_victron_bias_deadband_watts", 0.0) or 0.0),
-        )
-        current_max_abs = max(
-            0.0,
-            float(getattr(svc, "auto_battery_discharge_balance_victron_bias_max_abs_watts", 0.0) or 0.0),
-        )
-        current_ramp = max(
-            0.0,
-            float(
-                getattr(svc, "auto_battery_discharge_balance_victron_bias_ramp_rate_watts_per_second", 0.0) or 0.0
-            ),
-        )
-        active_profile_key = str(getattr(svc, "_victron_ess_balance_active_learning_profile_key", "") or "").strip()
-        active_profile = self._victron_ess_balance_learning_profile_state(svc, active_profile_key)
-        use_profile = self._victron_ess_balance_profile_sample_count(active_profile) > 0
-        response_delay_seconds = self._optional_float(
-            active_profile.get("response_delay_seconds")
-            if use_profile
-            else getattr(svc, "_victron_ess_balance_telemetry_response_delay_seconds", None)
-        )
-        estimated_gain = self._optional_float(
-            active_profile.get("estimated_gain")
-            if use_profile
-            else getattr(svc, "_victron_ess_balance_telemetry_estimated_gain", None)
-        )
-        stability_score = self._optional_float(
-            active_profile.get("stability_score")
-            if use_profile
-            else getattr(svc, "_victron_ess_balance_telemetry_stability_score", None)
-        )
-        overshoot_count = max(
-            0,
-            int(
-                active_profile.get("overshoot_count", 0)
-                if use_profile
-                else getattr(svc, "_victron_ess_balance_telemetry_overshoot_count", 0) or 0
-            ),
-        )
-        settled_count = max(
-            0,
-            int(
-                active_profile.get("settled_count", 0)
-                if use_profile
-                else getattr(svc, "_victron_ess_balance_telemetry_settled_count", 0) or 0
-            ),
-        )
-        delay_samples = max(
-            0,
-            int(
-                active_profile.get("delay_samples", 0)
-                if use_profile
-                else getattr(svc, "_victron_ess_balance_telemetry_delay_samples", 0) or 0
-            ),
-        )
-        gain_samples = max(
-            0,
-            int(
-                active_profile.get("gain_samples", 0)
-                if use_profile
-                else getattr(svc, "_victron_ess_balance_telemetry_gain_samples", 0) or 0
-            ),
-        )
-        regime_consistency_score = self._optional_float(
-            active_profile.get("regime_consistency_score") if use_profile else None
-        )
-        response_variance_score = self._optional_float(
-            active_profile.get("response_variance_score") if use_profile else None
-        )
-        reproducibility_score = self._optional_float(
-            active_profile.get("reproducibility_score") if use_profile else None
-        )
+        if not bool(getattr(svc, "auto_battery_discharge_balance_victron_bias_enabled", False)):
+            return self._victron_ess_balance_disabled_recommendation_metrics()
+        active_profile_key, active_profile, use_profile = self._victron_ess_balance_recommendation_source(svc)
+        observations = self._victron_ess_balance_recommendation_observations(svc, active_profile, use_profile)
         confidence = self._victron_ess_balance_recommendation_confidence(
-            delay_samples,
-            gain_samples,
-            stability_score,
-            regime_consistency_score,
-            response_variance_score,
-            reproducibility_score,
+            observations["delay_samples"],
+            observations["gain_samples"],
+            observations["stability_score"],
+            observations["regime_consistency_score"],
+            observations["response_variance_score"],
+            observations["reproducibility_score"],
         )
-        recommended_kp = current_kp
-        recommended_ki = current_ki
-        recommended_kd = current_kd
-        recommended_deadband = current_deadband
-        recommended_max_abs = current_max_abs
-        recommended_ramp = current_ramp
-        recommended_activation_mode = self._victron_ess_balance_recommended_activation_mode(
-            active_profile if use_profile else {},
+        return self._victron_ess_balance_recommendation_payload(
             svc,
+            active_profile_key,
+            use_profile,
+            active_profile,
+            observations,
+            confidence,
         )
-        reason = "insufficient_telemetry"
-        if response_delay_seconds is None or estimated_gain is None or confidence < 0.35:
-            reason = "insufficient_telemetry"
-        elif overshoot_count > 0 or (stability_score is not None and stability_score < 0.55):
-            recommended_kp = current_kp * 0.8
-            recommended_ki = current_ki * 0.5
-            recommended_kd = max(current_kd, 0.02)
-            recommended_deadband = current_deadband * 1.25 if current_deadband > 0.0 else 125.0
-            recommended_max_abs = current_max_abs * 0.8 if current_max_abs > 0.0 else 350.0
-            recommended_ramp = current_ramp * 0.7 if current_ramp > 0.0 else 25.0
-            reason = "overshoot_risk"
-        elif response_delay_seconds > 8.0 or estimated_gain < 0.75:
-            recommended_kp = current_kp * 0.9
-            recommended_ki = current_ki * 0.6
-            recommended_kd = max(current_kd, 0.01)
-            recommended_deadband = current_deadband * 1.1 if current_deadband > 0.0 else 110.0
-            recommended_max_abs = current_max_abs * 0.9 if current_max_abs > 0.0 else 425.0
-            recommended_ramp = current_ramp * 0.8 if current_ramp > 0.0 else 35.0
-            reason = "slow_response"
-        elif (
-            stability_score is not None
-            and stability_score >= 0.8
-            and settled_count >= 2
-            and overshoot_count == 0
-            and response_delay_seconds <= 5.0
-            and estimated_gain >= 0.75
-        ):
-            recommended_kp = current_kp * 1.15
-            recommended_ki = current_ki * 1.1
-            recommended_kd = current_kd * 0.8 if current_kd > 0.0 else 0.0
-            recommended_deadband = current_deadband * 0.9 if current_deadband > 0.0 else 80.0
-            recommended_max_abs = current_max_abs * 1.1 if current_max_abs > 0.0 else 550.0
-            recommended_ramp = current_ramp * 1.1 if current_ramp > 0.0 else 60.0
-            reason = "can_relax_conservatism"
-        else:
-            reason = "telemetry_nominal"
-        recommended_deadband = max(0.0, float(recommended_deadband))
-        recommended_max_abs = max(0.0, float(recommended_max_abs))
-        ini_snippet = self._victron_ess_balance_recommendation_ini_snippet(
-            recommended_kp,
-            recommended_ki,
-            recommended_kd,
-            recommended_deadband,
-            recommended_max_abs,
-            recommended_ramp,
-            recommended_activation_mode,
-        )
-        hint = self._victron_ess_balance_recommendation_hint(reason, confidence)
-        return {
-            "battery_discharge_balance_victron_bias_recommended_kp": round(float(recommended_kp), 4),
-            "battery_discharge_balance_victron_bias_recommended_ki": round(float(recommended_ki), 4),
-            "battery_discharge_balance_victron_bias_recommended_kd": round(float(recommended_kd), 4),
-            "battery_discharge_balance_victron_bias_recommended_deadband_watts": round(float(recommended_deadband), 4),
-            "battery_discharge_balance_victron_bias_recommended_max_abs_watts": round(float(recommended_max_abs), 4),
-            "battery_discharge_balance_victron_bias_recommended_ramp_rate_watts_per_second": round(
-                float(recommended_ramp), 4
-            ),
-            "battery_discharge_balance_victron_bias_recommended_activation_mode": recommended_activation_mode,
-            "battery_discharge_balance_victron_bias_recommendation_confidence": round(float(confidence), 4),
-            "battery_discharge_balance_victron_bias_recommendation_regime_consistency_score": regime_consistency_score,
-            "battery_discharge_balance_victron_bias_recommendation_response_variance_score": response_variance_score,
-            "battery_discharge_balance_victron_bias_recommendation_reproducibility_score": reproducibility_score,
-            "battery_discharge_balance_victron_bias_recommendation_reason": reason,
-            "battery_discharge_balance_victron_bias_recommendation_profile_key": active_profile_key if use_profile else "",
-            "battery_discharge_balance_victron_bias_recommendation_ini_snippet": ini_snippet,
-            "battery_discharge_balance_victron_bias_recommendation_hint": hint,
-        }
 
     @staticmethod
     def _victron_ess_balance_recommendation_confidence(
@@ -342,9 +536,13 @@ class _UpdateCycleVictronEssBalanceRecommendationMixin:
         site_regime = str(active_profile.get("site_regime", "") or "")
         current_mode = self._victron_ess_balance_activation_mode(svc)
         if site_regime == "export":
-            if reserve_phase == "above_reserve_band":
-                return "export_and_above_reserve_band"
-            return "export_only"
+            return self._victron_ess_balance_export_activation_mode(reserve_phase)
         if reserve_phase == "above_reserve_band":
             return "above_reserve_band"
         return current_mode
+
+    @staticmethod
+    def _victron_ess_balance_export_activation_mode(reserve_phase: str) -> str:
+        if reserve_phase == "above_reserve_band":
+            return "export_and_above_reserve_band"
+        return "export_only"

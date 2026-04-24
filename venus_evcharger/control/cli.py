@@ -329,61 +329,115 @@ def _run_doctor(namespace: argparse.Namespace) -> int:
     checks.append(_doctor_check("health", health_response))
 
     read_token = _token_or_global(namespace, namespace.read_token)
+    _append_doctor_read_checks(namespace, read_token, checks, skipped)
+
+    control_token = _token_or_global(namespace, namespace.control_token)
+    _append_doctor_safe_write_checks(namespace, read_token, control_token, checks, skipped)
+
+    failed = [check for check in checks if not bool(check["ok"])]
+    payload = _doctor_payload(checks, skipped, failed)
+    _write_json(payload, compact=namespace.compact)
+    return EXIT_OK if not failed else EXIT_REQUEST_FAILED
+
+
+def _append_doctor_read_checks(
+    namespace: argparse.Namespace,
+    read_token: str,
+    checks: list[dict[str, Any]],
+    skipped: list[str],
+) -> None:
     if not read_token:
         skipped.append("authenticated read checks skipped: no read token provided")
-    else:
-        read_client = _client_for_token(namespace, read_token)
-        checks.append(_doctor_check("capabilities", read_client.capabilities()))
-        checks.append(_doctor_check("state.summary", read_client.state("summary")))
-        checks.append(_doctor_check("state.health", read_client.state("health")))
-        checks.append(
+        return
+    read_client = _client_for_token(namespace, read_token)
+    checks.extend(
+        [
+            _doctor_check("capabilities", read_client.capabilities()),
+            _doctor_check("state.summary", read_client.state("summary")),
+            _doctor_check("state.health", read_client.state("health")),
             _doctor_event_check(
                 "events.once",
                 read_client.events(kinds=("command",), once=True, limit=10, timeout=2.0, heartbeat=0.5),
-            )
+            ),
+        ]
+    )
+
+
+def _append_doctor_safe_write_checks(
+    namespace: argparse.Namespace,
+    read_token: str,
+    control_token: str,
+    checks: list[dict[str, Any]],
+    skipped: list[str],
+) -> None:
+    if not namespace.safe_write:
+        return
+    if not control_token:
+        skipped.append("safe write skipped: no control token provided")
+        return
+    control_client = _client_for_token(namespace, control_token)
+    operational_response = control_client.state("operational")
+    checks.append(_doctor_check("state.operational", operational_response))
+    checks.append(
+        _doctor_safe_write_check(
+            namespace,
+            read_token,
+            control_token,
+            operational_response,
         )
+    )
 
-    control_token = _token_or_global(namespace, namespace.control_token)
-    if namespace.safe_write:
-        if not control_token:
-            skipped.append("safe write skipped: no control token provided")
-        else:
-            control_client = _client_for_token(namespace, control_token)
-            operational_response = control_client.state("operational")
-            checks.append(_doctor_check("state.operational", operational_response))
-            operational_payload = _response_payload(operational_response)
-            mode_value = operational_payload.get("state", {}).get("mode", 0)
-            safe_namespace_values = dict(vars(namespace))
-            safe_namespace_values.update(
-                {
-                    "name": "set-mode",
-                    "value": str(mode_value),
-                    "path": "",
-                    "detail": "doctor-safe-write",
-                    "command_id": "doctor-safe-write",
-                    "idempotency_key": "doctor-safe-write",
-                    "read_token": read_token,
-                    "state_endpoint": "health",
-                }
-            )
-            safe_namespace = argparse.Namespace(**safe_namespace_values)
-            exit_code, safe_payload = _safe_write_result(
-                safe_namespace,
-                token=control_token,
-                state_endpoint="health",
-                payload=_safe_write_payload(safe_namespace),
-            )
-            checks.append(
-                {
-                    "name": "safe-write.set-mode",
-                    "ok": exit_code == EXIT_OK,
-                    "status": 200 if exit_code == EXIT_OK else 409,
-                    "kind": safe_payload.get("kind", "safe-write"),
-                }
-            )
 
-    failed = [check for check in checks if not bool(check["ok"])]
-    payload = {
+def _doctor_safe_write_check(
+    namespace: argparse.Namespace,
+    read_token: str,
+    control_token: str,
+    operational_response: Any,
+) -> dict[str, Any]:
+    safe_namespace = _doctor_safe_write_namespace(namespace, read_token, operational_response)
+    exit_code, safe_payload = _safe_write_result(
+        safe_namespace,
+        token=control_token,
+        state_endpoint="health",
+        payload=_safe_write_payload(safe_namespace),
+    )
+    return {
+        "name": "safe-write.set-mode",
+        "ok": exit_code == EXIT_OK,
+        "status": 200 if exit_code == EXIT_OK else 409,
+        "kind": safe_payload.get("kind", "safe-write"),
+    }
+
+
+def _doctor_safe_write_namespace(
+    namespace: argparse.Namespace,
+    read_token: str,
+    operational_response: Any,
+) -> argparse.Namespace:
+    operational_payload = _response_payload(operational_response)
+    mode_value = operational_payload.get("state", {}).get("mode", 0)
+    safe_namespace_values = dict(vars(namespace))
+    safe_namespace_values.update(
+        {
+            "name": "set-mode",
+            "value": str(mode_value),
+            "path": "",
+            "detail": "doctor-safe-write",
+            "command_id": "doctor-safe-write",
+            "idempotency_key": "doctor-safe-write",
+            "read_token": read_token,
+            "state_endpoint": "health",
+        }
+    )
+    return argparse.Namespace(**safe_namespace_values)
+
+
+def _doctor_payload(
+    checks: list[dict[str, Any]],
+    skipped: list[str],
+    failed: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
         "ok": not failed,
         "kind": "doctor",
         "checks": checks,
@@ -394,8 +448,6 @@ def _run_doctor(namespace: argparse.Namespace) -> int:
             "skipped": len(skipped),
         },
     }
-    _write_json(payload, compact=namespace.compact)
-    return EXIT_OK if not failed else EXIT_REQUEST_FAILED
 
 
 def _write_event_response(response: Any, *, compact: bool) -> int:

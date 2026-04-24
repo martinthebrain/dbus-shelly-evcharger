@@ -44,16 +44,10 @@ def _build_command_json_energy_source_snapshot(
     settings: CommandJsonEnergySourceSettings,
     payload: dict[str, object],
 ) -> EnergySourceSnapshot:
-    soc_value = _optional_float_path(payload, settings.soc_path)
-    if soc_value is not None and not 0.0 <= soc_value <= 100.0:
-        soc_value = None
-    usable_capacity_wh = _optional_float_path(payload, settings.usable_capacity_wh_path)
-    if usable_capacity_wh is None:
-        usable_capacity_wh = source.usable_capacity_wh
-    elif usable_capacity_wh <= 0.0:
-        usable_capacity_wh = None
-    online = _optional_bool_path(payload, settings.online_path)
-    confidence = _optional_confidence_path(payload, settings.confidence_path)
+    soc_value = _command_soc_value(payload, settings)
+    usable_capacity_wh = _command_usable_capacity_wh(payload, settings, source)
+    online = _command_online(payload, settings)
+    confidence = _command_confidence(payload, settings)
     return EnergySourceSnapshot(
         source_id=source.source_id,
         role=source.role,
@@ -77,6 +71,55 @@ def _command_source_name(source: EnergySourceDefinition, settings: CommandJsonEn
     return settings.command[0] if settings.command else (source.config_path or source.source_id)
 
 
+def _command_soc_value(
+    payload: dict[str, object],
+    settings: CommandJsonEnergySourceSettings,
+) -> float | None:
+    soc_value = _optional_float_path(payload, settings.soc_path)
+    if soc_value is not None and not 0.0 <= soc_value <= 100.0:
+        return None
+    return soc_value
+
+
+def _command_usable_capacity_wh(
+    payload: dict[str, object],
+    settings: CommandJsonEnergySourceSettings,
+    source: EnergySourceDefinition,
+) -> float | None:
+    usable_capacity_wh = _optional_float_path(payload, settings.usable_capacity_wh_path)
+    if usable_capacity_wh is None:
+        return source.usable_capacity_wh
+    if usable_capacity_wh <= 0.0:
+        return None
+    return usable_capacity_wh
+
+
+def _command_online(
+    payload: dict[str, object],
+    settings: CommandJsonEnergySourceSettings,
+) -> bool:
+    online = _optional_bool_path(payload, settings.online_path)
+    return True if online is None else bool(online)
+
+
+def _command_confidence(
+    payload: dict[str, object],
+    settings: CommandJsonEnergySourceSettings,
+) -> float:
+    confidence = _optional_confidence_path(payload, settings.confidence_path)
+    return 1.0 if confidence is None else confidence
+
+
+def _command_timeout_seconds(runtime: Any, adapter: Any, command: Any) -> float:
+    default_timeout = float(getattr(runtime, "shelly_request_timeout_seconds", 2.0) or 2.0)
+    timeout_seconds = finite_float_or_none(
+        command.get("TimeoutSeconds", adapter.get("RequestTimeoutSeconds", str(default_timeout)))
+    )
+    if timeout_seconds is None or timeout_seconds <= 0.0:
+        return default_timeout
+    return float(timeout_seconds)
+
+
 def _command_json_energy_source_settings(runtime: Any, source: EnergySourceDefinition) -> CommandJsonEnergySourceSettings:
     cache = cast(dict[str, CommandJsonEnergySourceSettings], _cache_map(runtime, "_energy_command_settings_cache"))
     cache_key = str(source.config_path).strip()
@@ -89,13 +132,9 @@ def _command_json_energy_source_settings(runtime: Any, source: EnergySourceDefin
     adapter = config_section(parser, "Adapter")
     command = config_section(parser, "Command")
     response = config_section(parser, "Response")
-    default_timeout = float(getattr(runtime, "shelly_request_timeout_seconds", 2.0) or 2.0)
-    timeout_seconds = finite_float_or_none(
-        command.get("TimeoutSeconds", adapter.get("RequestTimeoutSeconds", str(default_timeout)))
-    )
     settings = CommandJsonEnergySourceSettings(
         command=_command_args(command),
-        timeout_seconds=default_timeout if timeout_seconds is None or timeout_seconds <= 0.0 else float(timeout_seconds),
+        timeout_seconds=_command_timeout_seconds(runtime, adapter, command),
         soc_path=_optional_path(response.get("SocPath", "")),
         usable_capacity_wh_path=_optional_path(response.get("UsableCapacityWhPath", "")),
         battery_power_path=_optional_path(response.get("BatteryPowerPath", "")),
@@ -124,15 +163,25 @@ def _validate_command_json_energy_source_settings(
 ) -> None:
     if not settings.command:
         raise ValueError(f"Energy source '{source.source_id}' requires [Command] Args")
-    if (
-        settings.soc_path is None
-        and settings.usable_capacity_wh_path is None
-        and settings.battery_power_path is None
-        and settings.ac_power_path is None
-        and settings.pv_input_power_path is None
-        and settings.grid_interaction_path is None
-        and source.usable_capacity_wh is None
-    ):
-        raise ValueError(
-            f"Energy source '{source.source_id}' requires at least one Response path or UsableCapacityWh"
-        )
+    if _command_has_readable_response(settings, source):
+        return
+    raise ValueError(
+        f"Energy source '{source.source_id}' requires at least one Response path or UsableCapacityWh"
+    )
+
+
+def _command_has_readable_response(
+    settings: CommandJsonEnergySourceSettings,
+    source: EnergySourceDefinition,
+) -> bool:
+    readable_paths = (
+        settings.soc_path,
+        settings.usable_capacity_wh_path,
+        settings.battery_power_path,
+        settings.ac_power_path,
+        settings.pv_input_power_path,
+        settings.grid_interaction_path,
+    )
+    if any(path is not None for path in readable_paths):
+        return True
+    return source.usable_capacity_wh is not None

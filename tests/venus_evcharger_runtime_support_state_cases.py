@@ -57,6 +57,23 @@ class TestRuntimeSupportControllerState(RuntimeSupportTestCaseBase):
         with patch("os.path.isfile", return_value=True), patch("builtins.open", side_effect=OSError("no version")):
             self.assertEqual(controller._read_local_version("/tmp/repo"), "")
 
+    def test_get_system_bus_reuses_cached_bus_until_generation_changes(self) -> None:
+        partial_service = SimpleNamespace()
+        controller = RuntimeSupportController(partial_service, self._age_zero, self._health_zero)
+        partial_service._ensure_system_bus_state = controller.ensure_system_bus_state
+
+        with patch.object(controller, "create_system_bus", side_effect=["bus-a", "bus-b"]) as create_bus:
+            first_bus = controller.get_system_bus()
+            second_bus = controller.get_system_bus()
+            self.assertEqual(first_bus, "bus-a")
+            self.assertEqual(second_bus, "bus-a")
+
+            partial_service._system_bus_generation = 1
+            third_bus = controller.get_system_bus()
+            self.assertEqual(third_bus, "bus-b")
+
+        self.assertEqual(create_bus.call_count, 2)
+
     def test_runtime_audit_helpers_cover_remaining_scalar_edges(self) -> None:
         service = SimpleNamespace(_last_charger_state_phase_selection=0, _time_now=lambda: "bad", _phase_switch_lockout_selection=None, _phase_switch_lockout_until=200.0, _contactor_fault_counts=[], _contactor_fault_active_reason="")
         self.assertEqual(_RuntimeSupportAuditMixin._observed_phase_for_audit(service), "0")

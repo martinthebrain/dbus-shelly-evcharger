@@ -52,21 +52,11 @@ class TemplateHttpEnergySourceSettings:
 def _template_http_energy_source_snapshot(owner: Any, source: EnergySourceDefinition, now: float) -> EnergySourceSnapshot:
     runtime = _runtime_owner(owner)
     settings = _template_http_energy_source_settings(runtime, source)
-    payload = TemplateHttpBackendBase(
-        runtime,
-        settings.timeout_seconds,
-        auth_settings=settings.auth_settings,
-    )._perform_request(settings.request_method, settings.request_url)
-    soc_value = _optional_float_path(payload, settings.soc_path)
-    if soc_value is not None and not 0.0 <= soc_value <= 100.0:
-        soc_value = None
-    usable_capacity_wh = _optional_float_path(payload, settings.usable_capacity_wh_path)
-    if usable_capacity_wh is None:
-        usable_capacity_wh = source.usable_capacity_wh
-    elif usable_capacity_wh <= 0.0:
-        usable_capacity_wh = None
-    online = _optional_bool_path(payload, settings.online_path)
-    confidence = _optional_confidence_path(payload, settings.confidence_path)
+    payload = _template_http_payload(runtime, settings)
+    soc_value = _template_soc_value(payload, settings)
+    usable_capacity_wh = _template_usable_capacity_wh(payload, settings, source)
+    online = _template_online(payload, settings)
+    confidence = _template_confidence(payload, settings)
     return EnergySourceSnapshot(
         source_id=source.source_id,
         role=source.role,
@@ -92,6 +82,52 @@ def _template_source_name(source: EnergySourceDefinition, settings: TemplateHttp
     return source.config_path or source.source_id
 
 
+def _template_http_payload(runtime: Any, settings: TemplateHttpEnergySourceSettings) -> Any:
+    return TemplateHttpBackendBase(
+        runtime,
+        settings.timeout_seconds,
+        auth_settings=settings.auth_settings,
+    )._perform_request(settings.request_method, settings.request_url)
+
+
+def _template_soc_value(payload: Any, settings: TemplateHttpEnergySourceSettings) -> float | None:
+    soc_value = _optional_float_path(payload, settings.soc_path)
+    if soc_value is not None and not 0.0 <= soc_value <= 100.0:
+        return None
+    return soc_value
+
+
+def _template_usable_capacity_wh(
+    payload: Any,
+    settings: TemplateHttpEnergySourceSettings,
+    source: EnergySourceDefinition,
+) -> float | None:
+    usable_capacity_wh = _optional_float_path(payload, settings.usable_capacity_wh_path)
+    if usable_capacity_wh is None:
+        return source.usable_capacity_wh
+    if usable_capacity_wh <= 0.0:
+        return None
+    return usable_capacity_wh
+
+
+def _template_online(payload: Any, settings: TemplateHttpEnergySourceSettings) -> bool:
+    online = _optional_bool_path(payload, settings.online_path)
+    return True if online is None else bool(online)
+
+
+def _template_confidence(payload: Any, settings: TemplateHttpEnergySourceSettings) -> float:
+    confidence = _optional_confidence_path(payload, settings.confidence_path)
+    return 1.0 if confidence is None else confidence
+
+
+def _template_timeout_seconds(runtime: Any, adapter: Any) -> float:
+    default_timeout = float(getattr(runtime, "shelly_request_timeout_seconds", 2.0) or 2.0)
+    timeout = finite_float_or_none(adapter.get("RequestTimeoutSeconds", str(default_timeout)))
+    if timeout is None or timeout <= 0.0:
+        return default_timeout
+    return float(timeout)
+
+
 def _template_http_energy_source_settings(runtime: Any, source: EnergySourceDefinition) -> TemplateHttpEnergySourceSettings:
     cache = cast(
         dict[str, TemplateHttpEnergySourceSettings],
@@ -108,12 +144,10 @@ def _template_http_energy_source_settings(runtime: Any, source: EnergySourceDefi
     request = config_section(parser, "EnergyRequest")
     response = config_section(parser, "EnergyResponse")
     base_url = str(adapter.get("BaseUrl", "")).strip()
-    default_timeout = float(getattr(runtime, "shelly_request_timeout_seconds", 2.0) or 2.0)
-    timeout = finite_float_or_none(adapter.get("RequestTimeoutSeconds", str(default_timeout)))
     settings = TemplateHttpEnergySourceSettings(
         base_url=base_url,
         auth_settings=load_template_auth_settings(adapter),
-        timeout_seconds=default_timeout if timeout is None or timeout <= 0.0 else float(timeout),
+        timeout_seconds=_template_timeout_seconds(runtime, adapter),
         request_method=normalize_http_method(request.get("Method", "GET"), "GET"),
         request_url=resolved_url(base_url, request.get("Url", "")),
         soc_path=_optional_path(response.get("SocPath", "")),
@@ -137,16 +171,25 @@ def _validate_template_http_energy_source_settings(
 ) -> None:
     if not settings.request_url:
         raise ValueError(f"Energy source '{source.source_id}' requires [EnergyRequest] Url")
-    if (
-        settings.soc_path is None
-        and settings.battery_power_path is None
-        and settings.ac_power_path is None
-        and settings.pv_input_power_path is None
-        and settings.grid_interaction_path is None
-        and settings.usable_capacity_wh_path is None
-        and source.usable_capacity_wh is None
-    ):
-        raise ValueError(
-            f"Energy source '{source.source_id}' requires at least one readable EnergyResponse path or UsableCapacityWh"
-        )
+    if _template_has_readable_response(settings, source):
+        return
+    raise ValueError(
+        f"Energy source '{source.source_id}' requires at least one readable EnergyResponse path or UsableCapacityWh"
+    )
 
+
+def _template_has_readable_response(
+    settings: TemplateHttpEnergySourceSettings,
+    source: EnergySourceDefinition,
+) -> bool:
+    readable_paths = (
+        settings.soc_path,
+        settings.battery_power_path,
+        settings.ac_power_path,
+        settings.pv_input_power_path,
+        settings.grid_interaction_path,
+        settings.usable_capacity_wh_path,
+    )
+    if any(path is not None for path in readable_paths):
+        return True
+    return source.usable_capacity_wh is not None

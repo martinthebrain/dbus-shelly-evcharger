@@ -9,6 +9,17 @@ from venus_evcharger.ports import WriteControllerPort
 
 
 class TestWallboxPortsWrite(unittest.TestCase):
+    @staticmethod
+    def _service_source_text() -> str:
+        root = Path(__file__).resolve().parents[1]
+        source_files = [root / "venus_evcharger_service.py"]
+        source_files.extend(
+            path
+            for path in sorted((root / "venus_evcharger").rglob("*.py"))
+            if path.is_file()
+        )
+        return "\n".join(path.read_text(encoding="utf-8") for path in source_files)
+
     def test_base_ports_raise_for_unknown_attrs_and_missing_controller_bindings(self) -> None:
         service = SimpleNamespace(virtual_mode=0, virtual_autostart=1, virtual_startstop=0, virtual_enable=1, virtual_set_current=16.0, min_current=6.0, max_current=16.0, auto_start_condition_since=None, auto_stop_condition_since=None, manual_override_until=0.0, auto_manual_override_seconds=300.0, _auto_mode_cutover_pending=False, _ignore_min_offtime_once=False)
         write_port = WriteControllerPort(service)
@@ -27,7 +38,7 @@ class TestWallboxPortsWrite(unittest.TestCase):
                 self.assertIn(f"def {method_name}(", source_text)
 
     def test_port_declared_attrs_are_referenced_in_service_code(self) -> None:
-        source_text = "\n".join(Path(file_name).read_text(encoding="utf-8") for file_name in ("venus_evcharger_service.py", "venus_evcharger/auto/workflow.py", "venus_evcharger/auto/policy.py", "venus_evcharger/auto/logic_samples.py", "venus_evcharger/auto/logic_gates.py", "venus_evcharger/auto/logic_decisions.py", "venus_evcharger/bootstrap/controller.py", "venus_evcharger/bootstrap/config.py", "venus_evcharger/bootstrap/runtime.py", "venus_evcharger/bootstrap/paths.py", "venus_evcharger/runtime/support.py", "venus_evcharger/runtime/setup.py", "venus_evcharger/runtime/audit.py", "venus_evcharger/runtime/health.py", "venus_evcharger/service/auto.py", "venus_evcharger/service/factory.py", "venus_evcharger/service/runtime.py", "venus_evcharger/service/state_publish.py", "venus_evcharger/service/update.py", "venus_evcharger/inputs/dbus.py", "venus_evcharger/inputs/pv.py", "venus_evcharger/inputs/storage.py", "venus_evcharger/inputs/supervisor.py", "venus_evcharger/controllers/state.py", "venus_evcharger/update/controller.py", "venus_evcharger/update/state.py", "venus_evcharger/update/relay.py", "venus_evcharger/update/learning_support.py", "venus_evcharger/update/learning.py"))
+        source_text = self._service_source_text()
         from venus_evcharger.ports import AutoDecisionPort, DbusInputPort, UpdateCyclePort
         declared_attrs: set[str] = set()
         for port_class in (WriteControllerPort, DbusInputPort, UpdateCyclePort, AutoDecisionPort):

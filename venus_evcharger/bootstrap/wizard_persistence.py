@@ -73,10 +73,7 @@ def _suggested_energy_source_lines(payload: dict[str, object]) -> list[str]:
     sources = payload.get("suggested_energy_sources")
     if not isinstance(sources, list) or not sources:
         return []
-    source_ids = []
-    for item in sources:
-        if isinstance(item, dict):
-            source_ids.append(str(item.get("source_id", "unknown")))
+    source_ids = _suggested_energy_source_ids(sources)
     return [f"suggested_energy_sources: {', '.join(source_ids)}"] if source_ids else []
 
 
@@ -84,13 +81,35 @@ def _suggested_energy_merge_lines(payload: dict[str, object]) -> list[str]:
     merge = payload.get("suggested_energy_merge")
     if not isinstance(merge, dict):
         return []
-    merged_source_ids = merge.get("merged_source_ids")
-    if not isinstance(merged_source_ids, list) or not merged_source_ids:
+    merged_source_ids = _merged_source_ids(merge)
+    if not merged_source_ids:
         return []
     lines = [f"suggested_energy_merge: {','.join(str(item) for item in merged_source_ids)}"]
-    if "applied_to_config" in merge:
-        lines.append(f"suggested_energy_merge_applied: {bool(merge.get('applied_to_config'))}")
+    applied_line = _suggested_energy_merge_applied_line(merge)
+    if applied_line is not None:
+        lines.append(applied_line)
     return lines
+
+
+def _suggested_energy_source_ids(sources: list[object]) -> list[str]:
+    source_ids: list[str] = []
+    for item in sources:
+        if isinstance(item, dict):
+            source_ids.append(str(item.get("source_id", "unknown")))
+    return source_ids
+
+
+def _merged_source_ids(merge: dict[str, object]) -> list[object]:
+    merged_source_ids = merge.get("merged_source_ids")
+    if isinstance(merged_source_ids, list):
+        return merged_source_ids
+    return []
+
+
+def _suggested_energy_merge_applied_line(merge: dict[str, object]) -> str | None:
+    if "applied_to_config" not in merge:
+        return None
+    return f"suggested_energy_merge_applied: {bool(merge.get('applied_to_config'))}"
 
 
 def _topology_summary_text(payload: dict[str, object]) -> str:

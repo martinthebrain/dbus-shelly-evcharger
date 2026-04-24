@@ -101,6 +101,88 @@ def non_interactive_string(namespace_value: str | None, imported_value: str | No
     return namespace_value or imported_value or ""
 
 
+def _non_interactive_transport_answers(
+    namespace: argparse.Namespace,
+    imported_defaults: ImportedWizardDefaults,
+    *,
+    backend: WizardChargerBackend | None,
+    charger_preset: str | None,
+    host_input: str,
+    split_preset: str | None,
+) -> tuple[str, str, int, str, int, float, str]:
+    transport_kind, transport_host, transport_port, transport_device, transport_unit_id = (
+        non_interactive_transport_inputs(
+            namespace,
+            backend,
+            charger_preset,
+            host_input,
+            imported_defaults,
+        )
+    )
+    request_timeout_seconds, switch_group_phase_layout = preset_specific_defaults(
+        namespace,
+        imported_defaults,
+        backend=backend,
+        split_preset=split_preset,
+        charger_preset=charger_preset,
+    )
+    return (
+        transport_kind,
+        transport_host,
+        transport_port,
+        transport_device,
+        transport_unit_id,
+        request_timeout_seconds,
+        switch_group_phase_layout,
+    )
+
+
+def _non_interactive_policy_answers(
+    namespace: argparse.Namespace,
+    imported_defaults: ImportedWizardDefaults,
+) -> tuple[WizardPolicyMode, int, int, float, float, str, int]:
+    policy_mode = non_interactive_policy_mode(namespace, imported_defaults)
+    (
+        auto_start_surplus_watts,
+        auto_stop_surplus_watts,
+        auto_min_soc,
+        auto_resume_soc,
+        scheduled_enabled_days,
+        scheduled_latest_end_time,
+        scheduled_night_current_amps,
+    ) = policy_defaults(policy_mode, imported_defaults, namespace)
+    return (
+        policy_mode,
+        auto_start_surplus_watts,
+        auto_stop_surplus_watts,
+        auto_min_soc,
+        auto_resume_soc,
+        scheduled_enabled_days,
+        scheduled_latest_end_time,
+        scheduled_night_current_amps,
+    )
+
+
+def _effective_transport_answers(
+    backend: WizardChargerBackend | None,
+    host_input: str,
+    transport_kind: str,
+    transport_host: str,
+    transport_port: int,
+    transport_device: str,
+    transport_unit_id: int,
+) -> tuple[str, str, int, str, int]:
+    if backend_requires_transport(backend):
+        return (
+            transport_kind,
+            transport_host,
+            transport_port,
+            transport_device,
+            transport_unit_id,
+        )
+    return ("serial_rtu", host_from_input(host_input), 502, "/dev/ttyUSB0", 1)
+
+
 def non_interactive_answers(
     namespace: argparse.Namespace,
     imported_defaults: ImportedWizardDefaults,
@@ -113,21 +195,24 @@ def non_interactive_answers(
     backend = resolved_backend(split_preset, charger_preset, backend)
     meter_host, switch_host, charger_host = role_host_defaults(namespace, imported_defaults, profile, split_preset, shared_host)
     host_input = resolved_primary_host(namespace, imported_defaults, meter_host, switch_host, charger_host)
-    transport_kind, transport_host, transport_port, transport_device, transport_unit_id = non_interactive_transport_inputs(
-        namespace,
-        backend,
-        charger_preset,
-        host_input,
-        imported_defaults,
-    )
-    request_timeout_seconds, switch_group_phase_layout = preset_specific_defaults(
+    (
+        transport_kind,
+        transport_host,
+        transport_port,
+        transport_device,
+        transport_unit_id,
+        request_timeout_seconds,
+        switch_group_phase_layout,
+    ) = _non_interactive_transport_answers(
         namespace,
         imported_defaults,
         backend=backend,
-        split_preset=split_preset,
         charger_preset=charger_preset,
+        host_input=host_input,
+        split_preset=split_preset,
     )
     (
+        policy_mode,
         auto_start_surplus_watts,
         auto_stop_surplus_watts,
         auto_min_soc,
@@ -135,7 +220,18 @@ def non_interactive_answers(
         scheduled_enabled_days,
         scheduled_latest_end_time,
         scheduled_night_current_amps,
-    ) = policy_defaults(non_interactive_policy_mode(namespace, imported_defaults), imported_defaults, namespace)
+    ) = _non_interactive_policy_answers(namespace, imported_defaults)
+    transport_kind, transport_host, transport_port, transport_device, transport_unit_id = (
+        _effective_transport_answers(
+            backend,
+            host_input,
+            transport_kind,
+            transport_host,
+            transport_port,
+            transport_device,
+            transport_unit_id,
+        )
+    )
     return WizardAnswers(
         profile=profile,
         host_input=host_input,
@@ -144,7 +240,7 @@ def non_interactive_answers(
         charger_host_input=charger_host,
         device_instance=non_interactive_device_instance(namespace, imported_defaults),
         phase=non_interactive_phase(namespace, imported_defaults),
-        policy_mode=non_interactive_policy_mode(namespace, imported_defaults),
+        policy_mode=policy_mode,
         digest_auth=non_interactive_digest_auth(namespace, imported_defaults),
         username=non_interactive_string(namespace.username, imported_defaults.username),
         password=non_interactive_string(namespace.password, imported_defaults.password),
@@ -160,9 +256,9 @@ def non_interactive_answers(
         scheduled_enabled_days=scheduled_enabled_days,
         scheduled_latest_end_time=scheduled_latest_end_time,
         scheduled_night_current_amps=scheduled_night_current_amps,
-        transport_kind=transport_kind if backend_requires_transport(backend) else "serial_rtu",
-        transport_host=transport_host if backend_requires_transport(backend) else host_from_input(host_input),
-        transport_port=transport_port if backend_requires_transport(backend) else 502,
-        transport_device=transport_device if backend_requires_transport(backend) else "/dev/ttyUSB0",
-        transport_unit_id=transport_unit_id if backend_requires_transport(backend) else 1,
+        transport_kind=transport_kind,
+        transport_host=transport_host,
+        transport_port=transport_port,
+        transport_device=transport_device,
+        transport_unit_id=transport_unit_id,
     )

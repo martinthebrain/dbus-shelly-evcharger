@@ -13,6 +13,114 @@ from venus_evcharger.core.contracts import finite_float_or_none
 
 
 class _StateRuntimeSnapshotMixin:
+    @staticmethod
+    def _victron_ess_balance_runtime_profile_sample_count(profile: dict[str, object]) -> int:
+        explicit_sample_count = profile.get("sample_count")
+        if explicit_sample_count is not None:
+            return _victron_ess_balance_runtime_non_negative_int(explicit_sample_count)
+        return max(
+            _victron_ess_balance_runtime_non_negative_int(profile.get("delay_samples")),
+            _victron_ess_balance_runtime_non_negative_int(profile.get("gain_samples")),
+            _victron_ess_balance_runtime_non_negative_int(profile.get("settled_count"))
+            + _victron_ess_balance_runtime_non_negative_int(profile.get("overshoot_count")),
+        )
+
+    @staticmethod
+    def _victron_ess_balance_runtime_profile_metric(
+        profile: dict[str, object],
+        key: str,
+        fallback_key: str | None = None,
+    ) -> float | None:
+        if fallback_key is None:
+            return finite_float_or_none(profile.get(key))
+        return finite_float_or_none(profile.get(key, profile.get(fallback_key)))
+
+    @classmethod
+    def _victron_ess_balance_runtime_adaptive_scalar_payload(cls, svc: Any) -> dict[str, object]:
+        payload = cls._victron_ess_balance_runtime_tuning_payload(svc)
+        payload.update(cls._victron_ess_balance_runtime_auto_apply_payload(svc))
+        payload.update(cls._victron_ess_balance_runtime_safety_payload(svc))
+        return payload
+
+    @staticmethod
+    def _victron_ess_balance_runtime_tuning_payload(svc: Any) -> dict[str, object]:
+        return {
+            "kp": finite_float_or_none(getattr(svc, "auto_battery_discharge_balance_victron_bias_kp", None)),
+            "ki": finite_float_or_none(getattr(svc, "auto_battery_discharge_balance_victron_bias_ki", None)),
+            "kd": finite_float_or_none(getattr(svc, "auto_battery_discharge_balance_victron_bias_kd", None)),
+            "deadband_watts": finite_float_or_none(
+                getattr(svc, "auto_battery_discharge_balance_victron_bias_deadband_watts", None)
+            ),
+            "max_abs_watts": finite_float_or_none(
+                getattr(svc, "auto_battery_discharge_balance_victron_bias_max_abs_watts", None)
+            ),
+            "ramp_rate_watts_per_second": finite_float_or_none(
+                getattr(svc, "auto_battery_discharge_balance_victron_bias_ramp_rate_watts_per_second", None)
+            ),
+            "activation_mode": _victron_ess_balance_runtime_attr_text(
+                svc,
+                "auto_battery_discharge_balance_victron_bias_activation_mode",
+                fallback="always",
+                normalize_lower=True,
+            ),
+        }
+
+    @staticmethod
+    def _victron_ess_balance_runtime_auto_apply_payload(svc: Any) -> dict[str, object]:
+        return {
+            "auto_apply_generation": _victron_ess_balance_runtime_non_negative_int(
+                getattr(svc, "_victron_ess_balance_auto_apply_generation", 0)
+            ),
+            "auto_apply_observe_until": finite_float_or_none(
+                getattr(svc, "_victron_ess_balance_auto_apply_observe_until", None)
+            ),
+            "auto_apply_last_applied_param": _victron_ess_balance_runtime_attr_text(
+                svc,
+                "_victron_ess_balance_auto_apply_last_applied_param",
+            ),
+            "auto_apply_last_applied_at": finite_float_or_none(
+                getattr(svc, "_victron_ess_balance_auto_apply_last_applied_at", None)
+            ),
+            "auto_apply_suspend_until": finite_float_or_none(
+                getattr(svc, "_victron_ess_balance_auto_apply_suspend_until", None)
+            ),
+            "auto_apply_suspend_reason": _victron_ess_balance_runtime_attr_text(
+                svc,
+                "_victron_ess_balance_auto_apply_suspend_reason",
+            ),
+        }
+
+    @staticmethod
+    def _victron_ess_balance_runtime_safety_payload(svc: Any) -> dict[str, object]:
+        return {
+            "oscillation_lockout_until": finite_float_or_none(
+                getattr(svc, "_victron_ess_balance_oscillation_lockout_until", None)
+            ),
+            "oscillation_lockout_reason": _victron_ess_balance_runtime_attr_text(
+                svc,
+                "_victron_ess_balance_oscillation_lockout_reason",
+            ),
+            "overshoot_cooldown_until": finite_float_or_none(
+                getattr(svc, "_victron_ess_balance_overshoot_cooldown_until", None)
+            ),
+            "overshoot_cooldown_reason": _victron_ess_balance_runtime_attr_text(
+                svc,
+                "_victron_ess_balance_overshoot_cooldown_reason",
+            ),
+            "last_stable_tuning": dict(getattr(svc, "_victron_ess_balance_last_stable_tuning", {}) or {}),
+            "last_stable_at": finite_float_or_none(getattr(svc, "_victron_ess_balance_last_stable_at", None)),
+            "last_stable_profile_key": _victron_ess_balance_runtime_attr_text(
+                svc,
+                "_victron_ess_balance_last_stable_profile_key",
+            ),
+            "conservative_tuning": dict(getattr(svc, "_victron_ess_balance_conservative_tuning", {}) or {}),
+            "safe_state_active": bool(getattr(svc, "_victron_ess_balance_safe_state_active", False)),
+            "safe_state_reason": _victron_ess_balance_runtime_attr_text(
+                svc,
+                "_victron_ess_balance_safe_state_reason",
+            ),
+        }
+
     def _base_runtime_state(self, svc: Any) -> dict[str, object]:
         return {
             "mode": int(svc.virtual_mode),
@@ -175,13 +283,13 @@ class _StateRuntimeSnapshotMixin:
 
     @staticmethod
     def _victron_ess_balance_runtime_topology_key(svc: Any, source_id: str) -> str:
-        energy_ids: list[str] = []
-        for definition in tuple(getattr(svc, "auto_energy_sources", ()) or ()):
-            normalized_id = str(getattr(definition, "source_id", "") or "").strip()
-            if normalized_id:
-                energy_ids.append(normalized_id)
-        service_name = str(getattr(svc, "auto_battery_discharge_balance_victron_bias_service", "") or "").strip()
-        path = str(getattr(svc, "auto_battery_discharge_balance_victron_bias_path", "") or "").strip()
+        energy_ids = _victron_ess_balance_energy_ids(svc)
+        service_name = _victron_ess_balance_runtime_string(
+            svc, "auto_battery_discharge_balance_victron_bias_service"
+        )
+        path = _victron_ess_balance_runtime_string(
+            svc, "auto_battery_discharge_balance_victron_bias_path"
+        )
         return (
             "victron-bias-learning/v2"
             f"/source={str(source_id or '').strip()}"
@@ -193,49 +301,12 @@ class _StateRuntimeSnapshotMixin:
     @staticmethod
     def _victron_ess_balance_runtime_profile_snapshot(profile_key: str, raw_profile: object) -> dict[str, object]:
         profile = raw_profile if isinstance(raw_profile, dict) else {}
-        return {
-            "key": str(profile.get("key", profile_key) or profile_key),
-            "action_direction": str(profile.get("action_direction", "") or ""),
-            "site_regime": str(profile.get("site_regime", "") or ""),
-            "direction": str(profile.get("direction", "") or ""),
-            "day_phase": str(profile.get("day_phase", "") or ""),
-            "reserve_phase": str(profile.get("reserve_phase", "") or ""),
-            "ev_phase": str(profile.get("ev_phase", "") or ""),
-            "pv_phase": str(profile.get("pv_phase", "") or ""),
-            "battery_limit_phase": str(profile.get("battery_limit_phase", "") or ""),
-            "sample_count": max(
-                0,
-                int(
-                    profile.get(
-                        "sample_count",
-                        max(
-                            int(profile.get("delay_samples", 0) or 0),
-                            int(profile.get("gain_samples", 0) or 0),
-                            int(profile.get("settled_count", 0) or 0) + int(profile.get("overshoot_count", 0) or 0),
-                        ),
-                    )
-                    or 0
-                ),
-            ),
-            "delay_samples": max(0, int(profile.get("delay_samples", 0) or 0)),
-            "gain_samples": max(0, int(profile.get("gain_samples", 0) or 0)),
-            "response_delay_seconds": finite_float_or_none(profile.get("response_delay_seconds")),
-            "estimated_gain": finite_float_or_none(profile.get("estimated_gain")),
-            "response_delay_mad_seconds": finite_float_or_none(profile.get("response_delay_mad_seconds")),
-            "gain_mad": finite_float_or_none(profile.get("gain_mad")),
-            "overshoot_count": max(0, int(profile.get("overshoot_count", 0) or 0)),
-            "settled_count": max(0, int(profile.get("settled_count", 0) or 0)),
-            "stability_score": finite_float_or_none(profile.get("stability_score")),
-            "typical_response_delay_seconds": finite_float_or_none(
-                profile.get("typical_response_delay_seconds", profile.get("response_delay_seconds"))
-            ),
-            "effective_gain": finite_float_or_none(profile.get("effective_gain", profile.get("estimated_gain"))),
-            "regime_consistency_score": finite_float_or_none(profile.get("regime_consistency_score")),
-            "response_variance_score": finite_float_or_none(profile.get("response_variance_score")),
-            "reproducibility_score": finite_float_or_none(profile.get("reproducibility_score")),
-            "safe_ramp_rate_watts_per_second": finite_float_or_none(profile.get("safe_ramp_rate_watts_per_second")),
-            "preferred_bias_limit_watts": finite_float_or_none(profile.get("preferred_bias_limit_watts")),
-        }
+        payload = _victron_ess_balance_runtime_profile_identity(profile_key, profile)
+        payload.update(_victron_ess_balance_runtime_profile_counts(profile))
+        payload.update(_victron_ess_balance_runtime_profile_response_metrics(profile))
+        payload.update(_victron_ess_balance_runtime_profile_learning_metrics(profile))
+        payload.update(_victron_ess_balance_runtime_profile_limit_metrics(profile))
+        return payload
 
     @classmethod
     def _victron_ess_balance_runtime_learning_state(cls, svc: Any) -> dict[str, object]:
@@ -262,55 +333,7 @@ class _StateRuntimeSnapshotMixin:
             "schema_version": 2,
             "topology_key": cls._victron_ess_balance_runtime_topology_key(svc, source_id),
             "source_id": source_id,
-            "kp": finite_float_or_none(getattr(svc, "auto_battery_discharge_balance_victron_bias_kp", None)),
-            "ki": finite_float_or_none(getattr(svc, "auto_battery_discharge_balance_victron_bias_ki", None)),
-            "kd": finite_float_or_none(getattr(svc, "auto_battery_discharge_balance_victron_bias_kd", None)),
-            "deadband_watts": finite_float_or_none(
-                getattr(svc, "auto_battery_discharge_balance_victron_bias_deadband_watts", None)
-            ),
-            "max_abs_watts": finite_float_or_none(
-                getattr(svc, "auto_battery_discharge_balance_victron_bias_max_abs_watts", None)
-            ),
-            "ramp_rate_watts_per_second": finite_float_or_none(
-                getattr(svc, "auto_battery_discharge_balance_victron_bias_ramp_rate_watts_per_second", None)
-            ),
-            "activation_mode": str(
-                getattr(svc, "auto_battery_discharge_balance_victron_bias_activation_mode", "always") or "always"
-            ).strip().lower(),
-            "auto_apply_generation": max(0, int(getattr(svc, "_victron_ess_balance_auto_apply_generation", 0) or 0)),
-            "auto_apply_observe_until": finite_float_or_none(
-                getattr(svc, "_victron_ess_balance_auto_apply_observe_until", None)
-            ),
-            "auto_apply_last_applied_param": str(
-                getattr(svc, "_victron_ess_balance_auto_apply_last_applied_param", "") or ""
-            ),
-            "auto_apply_last_applied_at": finite_float_or_none(
-                getattr(svc, "_victron_ess_balance_auto_apply_last_applied_at", None)
-            ),
-            "oscillation_lockout_until": finite_float_or_none(
-                getattr(svc, "_victron_ess_balance_oscillation_lockout_until", None)
-            ),
-            "oscillation_lockout_reason": str(
-                getattr(svc, "_victron_ess_balance_oscillation_lockout_reason", "") or ""
-            ),
-            "overshoot_cooldown_until": finite_float_or_none(
-                getattr(svc, "_victron_ess_balance_overshoot_cooldown_until", None)
-            ),
-            "overshoot_cooldown_reason": str(
-                getattr(svc, "_victron_ess_balance_overshoot_cooldown_reason", "") or ""
-            ),
-            "last_stable_tuning": dict(getattr(svc, "_victron_ess_balance_last_stable_tuning", {}) or {}),
-            "last_stable_at": finite_float_or_none(getattr(svc, "_victron_ess_balance_last_stable_at", None)),
-            "last_stable_profile_key": str(getattr(svc, "_victron_ess_balance_last_stable_profile_key", "") or ""),
-            "conservative_tuning": dict(getattr(svc, "_victron_ess_balance_conservative_tuning", {}) or {}),
-            "auto_apply_suspend_until": finite_float_or_none(
-                getattr(svc, "_victron_ess_balance_auto_apply_suspend_until", None)
-            ),
-            "auto_apply_suspend_reason": str(
-                getattr(svc, "_victron_ess_balance_auto_apply_suspend_reason", "") or ""
-            ),
-            "safe_state_active": bool(getattr(svc, "_victron_ess_balance_safe_state_active", False)),
-            "safe_state_reason": str(getattr(svc, "_victron_ess_balance_safe_state_reason", "") or ""),
+            **cls._victron_ess_balance_runtime_adaptive_scalar_payload(svc),
         }
 
     def current_runtime_state(self) -> dict[str, object]:
@@ -338,3 +361,132 @@ class _StateRuntimeSnapshotMixin:
             logging.warning("Unable to read runtime state from %s: %s", path, error)
             return None
         return loaded_state
+
+
+def _victron_ess_balance_energy_ids(svc: Any) -> list[str]:
+    energy_ids: list[str] = []
+    for definition in tuple(getattr(svc, "auto_energy_sources", ()) or ()):
+        normalized_id = str(getattr(definition, "source_id", "") or "").strip()
+        if normalized_id:
+            energy_ids.append(normalized_id)
+    return energy_ids
+
+
+def _victron_ess_balance_runtime_string(svc: Any, attr_name: str) -> str:
+    return str(getattr(svc, attr_name, "") or "").strip()
+
+
+def _victron_ess_balance_runtime_non_negative_int(value: object) -> int:
+    return max(0, int(value or 0))
+
+
+def _victron_ess_balance_runtime_attr_text(
+    svc: Any,
+    attr_name: str,
+    *,
+    fallback: str = "",
+    normalize_lower: bool = False,
+) -> str:
+    value = str(getattr(svc, attr_name, fallback) or fallback).strip()
+    return value.lower() if normalize_lower else value
+
+
+def _victron_ess_balance_runtime_profile_text(
+    profile: dict[str, object],
+    key: str,
+    *,
+    fallback: str = "",
+) -> str:
+    return str(profile.get(key, fallback) or fallback)
+
+
+def _victron_ess_balance_runtime_profile_identity(
+    profile_key: str,
+    profile: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "key": _victron_ess_balance_runtime_profile_text(profile, "key", fallback=profile_key),
+        "action_direction": _victron_ess_balance_runtime_profile_text(profile, "action_direction"),
+        "site_regime": _victron_ess_balance_runtime_profile_text(profile, "site_regime"),
+        "direction": _victron_ess_balance_runtime_profile_text(profile, "direction"),
+        "day_phase": _victron_ess_balance_runtime_profile_text(profile, "day_phase"),
+        "reserve_phase": _victron_ess_balance_runtime_profile_text(profile, "reserve_phase"),
+        "ev_phase": _victron_ess_balance_runtime_profile_text(profile, "ev_phase"),
+        "pv_phase": _victron_ess_balance_runtime_profile_text(profile, "pv_phase"),
+        "battery_limit_phase": _victron_ess_balance_runtime_profile_text(profile, "battery_limit_phase"),
+    }
+
+
+def _victron_ess_balance_runtime_profile_counts(profile: dict[str, object]) -> dict[str, object]:
+    return {
+        "sample_count": _StateRuntimeSnapshotMixin._victron_ess_balance_runtime_profile_sample_count(profile),
+        "delay_samples": _victron_ess_balance_runtime_non_negative_int(profile.get("delay_samples")),
+        "gain_samples": _victron_ess_balance_runtime_non_negative_int(profile.get("gain_samples")),
+        "overshoot_count": _victron_ess_balance_runtime_non_negative_int(profile.get("overshoot_count")),
+        "settled_count": _victron_ess_balance_runtime_non_negative_int(profile.get("settled_count")),
+    }
+
+
+def _victron_ess_balance_runtime_profile_response_metrics(profile: dict[str, object]) -> dict[str, object]:
+    return {
+        "response_delay_seconds": _StateRuntimeSnapshotMixin._victron_ess_balance_runtime_profile_metric(
+            profile,
+            "response_delay_seconds",
+        ),
+        "estimated_gain": _StateRuntimeSnapshotMixin._victron_ess_balance_runtime_profile_metric(
+            profile,
+            "estimated_gain",
+        ),
+        "response_delay_mad_seconds": _StateRuntimeSnapshotMixin._victron_ess_balance_runtime_profile_metric(
+            profile,
+            "response_delay_mad_seconds",
+        ),
+        "gain_mad": _StateRuntimeSnapshotMixin._victron_ess_balance_runtime_profile_metric(
+            profile,
+            "gain_mad",
+        ),
+        "stability_score": _StateRuntimeSnapshotMixin._victron_ess_balance_runtime_profile_metric(
+            profile,
+            "stability_score",
+        ),
+    }
+
+
+def _victron_ess_balance_runtime_profile_learning_metrics(profile: dict[str, object]) -> dict[str, object]:
+    return {
+        "typical_response_delay_seconds": _StateRuntimeSnapshotMixin._victron_ess_balance_runtime_profile_metric(
+            profile,
+            "typical_response_delay_seconds",
+            "response_delay_seconds",
+        ),
+        "effective_gain": _StateRuntimeSnapshotMixin._victron_ess_balance_runtime_profile_metric(
+            profile,
+            "effective_gain",
+            "estimated_gain",
+        ),
+        "regime_consistency_score": _StateRuntimeSnapshotMixin._victron_ess_balance_runtime_profile_metric(
+            profile,
+            "regime_consistency_score",
+        ),
+        "response_variance_score": _StateRuntimeSnapshotMixin._victron_ess_balance_runtime_profile_metric(
+            profile,
+            "response_variance_score",
+        ),
+        "reproducibility_score": _StateRuntimeSnapshotMixin._victron_ess_balance_runtime_profile_metric(
+            profile,
+            "reproducibility_score",
+        ),
+    }
+
+
+def _victron_ess_balance_runtime_profile_limit_metrics(profile: dict[str, object]) -> dict[str, object]:
+    return {
+        "safe_ramp_rate_watts_per_second": _StateRuntimeSnapshotMixin._victron_ess_balance_runtime_profile_metric(
+            profile,
+            "safe_ramp_rate_watts_per_second",
+        ),
+        "preferred_bias_limit_watts": _StateRuntimeSnapshotMixin._victron_ess_balance_runtime_profile_metric(
+            profile,
+            "preferred_bias_limit_watts",
+        ),
+    }

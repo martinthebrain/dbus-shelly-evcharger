@@ -138,91 +138,135 @@ class _UpdateCycleInputCacheMixin:
         if not auto_mode_active:
             svc._auto_cached_inputs_used = False
             return None, None, None
-        pv_power, pv_cached = self.resolve_cached_input_value(
+        pv_power, pv_cached = self._resolve_auto_input_metric(
             svc,
-            worker_snapshot.get("pv_power"),
-            worker_snapshot.get("pv_captured_at", worker_snapshot.get("captured_at")),
-            "_last_pv_value",
-            "_last_pv_at",
+            worker_snapshot,
             now,
-            max_age_seconds=self._auto_input_source_max_age_seconds(
-                svc,
-                "auto_pv_poll_interval_seconds",
-            ),
+            value_key="pv_power",
+            captured_at_key="pv_captured_at",
+            last_value_attr="_last_pv_value",
+            last_at_attr="_last_pv_at",
+            poll_interval_attr="auto_pv_poll_interval_seconds",
         )
-        grid_power, grid_cached = self.resolve_cached_input_value(
+        grid_power, grid_cached = self._resolve_auto_input_metric(
             svc,
-            worker_snapshot.get("grid_power"),
-            worker_snapshot.get("grid_captured_at", worker_snapshot.get("captured_at")),
-            "_last_grid_value",
-            "_last_grid_at",
+            worker_snapshot,
             now,
-            max_age_seconds=self._auto_input_source_max_age_seconds(
-                svc,
-                "auto_grid_poll_interval_seconds",
-            ),
+            value_key="grid_power",
+            captured_at_key="grid_captured_at",
+            last_value_attr="_last_grid_value",
+            last_at_attr="_last_grid_at",
+            poll_interval_attr="auto_grid_poll_interval_seconds",
         )
-        battery_soc, battery_cached = self.resolve_cached_input_value(
+        battery_soc, battery_cached = self._resolve_auto_input_metric(
             svc,
-            worker_snapshot.get("battery_soc"),
-            worker_snapshot.get("battery_captured_at", worker_snapshot.get("captured_at")),
-            "_last_battery_soc_value",
-            "_last_battery_soc_at",
+            worker_snapshot,
             now,
-            max_age_seconds=self._auto_input_source_max_age_seconds(
-                svc,
-                "auto_battery_poll_interval_seconds",
-            ),
+            value_key="battery_soc",
+            captured_at_key="battery_captured_at",
+            last_value_attr="_last_battery_soc_value",
+            last_at_attr="_last_battery_soc_at",
+            poll_interval_attr="auto_battery_poll_interval_seconds",
         )
-        combined_charge_power, _ = self.resolve_cached_input_value(
+        combined_charge_power = self._resolve_battery_cluster_metric(
             svc,
-            worker_snapshot.get("battery_combined_charge_power_w"),
-            worker_snapshot.get("battery_captured_at", worker_snapshot.get("captured_at")),
-            "_last_combined_battery_charge_power_w",
-            "_last_combined_battery_charge_power_at",
+            worker_snapshot,
             now,
-            max_age_seconds=self._auto_input_source_max_age_seconds(
-                svc,
-                "auto_battery_poll_interval_seconds",
-            ),
+            value_key="battery_combined_charge_power_w",
+            last_value_attr="_last_combined_battery_charge_power_w",
+            last_at_attr="_last_combined_battery_charge_power_at",
         )
-        combined_discharge_power, _ = self.resolve_cached_input_value(
+        combined_discharge_power = self._resolve_battery_cluster_metric(
             svc,
-            worker_snapshot.get("battery_combined_discharge_power_w"),
-            worker_snapshot.get("battery_captured_at", worker_snapshot.get("captured_at")),
-            "_last_combined_battery_discharge_power_w",
-            "_last_combined_battery_discharge_power_at",
+            worker_snapshot,
             now,
-            max_age_seconds=self._auto_input_source_max_age_seconds(
-                svc,
-                "auto_battery_poll_interval_seconds",
-            ),
+            value_key="battery_combined_discharge_power_w",
+            last_value_attr="_last_combined_battery_discharge_power_w",
+            last_at_attr="_last_combined_battery_discharge_power_at",
         )
-        combined_net_power, _ = self.resolve_cached_input_value(
+        combined_net_power = self._resolve_battery_cluster_metric(
             svc,
-            worker_snapshot.get("battery_combined_net_power_w"),
-            worker_snapshot.get("battery_captured_at", worker_snapshot.get("captured_at")),
-            "_last_combined_battery_net_power_w",
-            "_last_combined_battery_net_power_at",
+            worker_snapshot,
             now,
-            max_age_seconds=self._auto_input_source_max_age_seconds(
-                svc,
-                "auto_battery_poll_interval_seconds",
-            ),
+            value_key="battery_combined_net_power_w",
+            last_value_attr="_last_combined_battery_net_power_w",
+            last_at_attr="_last_combined_battery_net_power_at",
         )
-        combined_ac_power, _ = self.resolve_cached_input_value(
+        combined_ac_power = self._resolve_battery_cluster_metric(
             svc,
-            worker_snapshot.get("battery_combined_ac_power_w"),
-            worker_snapshot.get("battery_captured_at", worker_snapshot.get("captured_at")),
-            "_last_combined_battery_ac_power_w",
-            "_last_combined_battery_ac_power_at",
+            worker_snapshot,
             now,
-            max_age_seconds=self._auto_input_source_max_age_seconds(
-                svc,
-                "auto_battery_poll_interval_seconds",
-            ),
+            value_key="battery_combined_ac_power_w",
+            last_value_attr="_last_combined_battery_ac_power_w",
+            last_at_attr="_last_combined_battery_ac_power_at",
         )
-        cache_owner._last_energy_cluster = {
+        cache_owner._last_energy_cluster = self._energy_cluster_snapshot(
+            worker_snapshot,
+            combined_charge_power=combined_charge_power,
+            combined_discharge_power=combined_discharge_power,
+            combined_net_power=combined_net_power,
+            combined_ac_power=combined_ac_power,
+        )
+        self._store_learning_profiles(cache_owner, worker_snapshot)
+        svc._auto_cached_inputs_used = pv_cached or grid_cached or battery_cached
+        if svc._auto_cached_inputs_used:
+            svc._error_state["cache_hits"] += 1
+        return pv_power, battery_soc, grid_power
+
+    def _resolve_auto_input_metric(
+        self,
+        svc: Any,
+        worker_snapshot: dict[str, Any],
+        now: float,
+        *,
+        value_key: str,
+        captured_at_key: str,
+        last_value_attr: str,
+        last_at_attr: str,
+        poll_interval_attr: str,
+    ) -> tuple[Any, bool]:
+        return self.resolve_cached_input_value(
+            svc,
+            worker_snapshot.get(value_key),
+            worker_snapshot.get(captured_at_key, worker_snapshot.get("captured_at")),
+            last_value_attr,
+            last_at_attr,
+            now,
+            max_age_seconds=self._auto_input_source_max_age_seconds(svc, poll_interval_attr),
+        )
+
+    def _resolve_battery_cluster_metric(
+        self,
+        svc: Any,
+        worker_snapshot: dict[str, Any],
+        now: float,
+        *,
+        value_key: str,
+        last_value_attr: str,
+        last_at_attr: str,
+    ) -> Any:
+        value, _ = self._resolve_auto_input_metric(
+            svc,
+            worker_snapshot,
+            now,
+            value_key=value_key,
+            captured_at_key="battery_captured_at",
+            last_value_attr=last_value_attr,
+            last_at_attr=last_at_attr,
+            poll_interval_attr="auto_battery_poll_interval_seconds",
+        )
+        return value
+
+    @staticmethod
+    def _energy_cluster_snapshot(
+        worker_snapshot: dict[str, Any],
+        *,
+        combined_charge_power: Any,
+        combined_discharge_power: Any,
+        combined_net_power: Any,
+        combined_ac_power: Any,
+    ) -> dict[str, Any]:
+        return {
             "battery_combined_soc": worker_snapshot.get("battery_combined_soc"),
             "battery_combined_usable_capacity_wh": worker_snapshot.get("battery_combined_usable_capacity_wh"),
             "battery_combined_charge_power_w": combined_charge_power,
@@ -240,10 +284,9 @@ class _UpdateCycleInputCacheMixin:
             "battery_inverter_source_count": worker_snapshot.get("battery_inverter_source_count", 0),
             "battery_sources": list(worker_snapshot.get("battery_sources", []) or []),
         }
+
+    @staticmethod
+    def _store_learning_profiles(cache_owner: Any, worker_snapshot: dict[str, Any]) -> None:
         raw_learning_profiles = worker_snapshot.get("battery_learning_profiles", {})
         if isinstance(raw_learning_profiles, dict):
             cache_owner._last_energy_learning_profiles = dict(raw_learning_profiles)
-        svc._auto_cached_inputs_used = pv_cached or grid_cached or battery_cached
-        if svc._auto_cached_inputs_used:
-            svc._error_state["cache_hits"] += 1
-        return pv_power, battery_soc, grid_power

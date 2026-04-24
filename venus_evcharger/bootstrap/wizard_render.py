@@ -81,40 +81,32 @@ def upsert_default_assignments(text: str, assignments: dict[str, str]) -> str:
     inserted = False
     in_default_section = False
 
-    def maybe_insert_before_section(line: str) -> None:
-        nonlocal inserted
-        if inserted or not in_default_section or not line.startswith("[") or not line.endswith("]"):
-            return
-        rendered.extend(f"{key}={value}" for key, value in remaining.items())
-        remaining.clear()
-        inserted = True
-
     for line in lines:
         if line == "[DEFAULT]":
             in_default_section = True
             rendered.append(line)
             continue
-        maybe_insert_before_section(line)
-        matched_key = next((key for key in remaining if line.startswith(f"{key}=")), None)
+        rendered, inserted = _maybe_insert_default_assignments(
+            line,
+            rendered,
+            remaining,
+            inserted=inserted,
+            in_default_section=in_default_section,
+        )
+        matched_key = _matching_default_assignment_key(line, remaining)
         if matched_key is None:
             rendered.append(line)
             continue
-        rendered.append(f"{matched_key}={remaining.pop(matched_key)}")
-    if remaining:
-        if rendered and rendered[-1].strip():
-            rendered.append("")
-        rendered.extend(f"{key}={value}" for key, value in remaining.items())
+        rendered.append(_render_default_assignment_line(matched_key, remaining))
+    rendered.extend(_remaining_default_assignment_lines(rendered, remaining))
     return "\n".join(rendered) + "\n"
 
 
 def remove_section(text: str, section_name: str) -> str:
-    def is_header(line: str) -> bool:
-        return line.startswith("[") and line.endswith("]")
-
     result: list[str] = []
     in_section = False
     for line in text.splitlines():
-        if is_header(line):
+        if _is_section_header(line):
             in_section = line == f"[{section_name}]"
             if in_section:
                 continue
@@ -122,6 +114,47 @@ def remove_section(text: str, section_name: str) -> str:
             continue
         result.append(line)
     return "\n".join(result).rstrip() + "\n"
+
+
+def _maybe_insert_default_assignments(
+    line: str,
+    rendered: list[str],
+    remaining: dict[str, str],
+    *,
+    inserted: bool,
+    in_default_section: bool,
+) -> tuple[list[str], bool]:
+    if inserted or not in_default_section or not _is_section_header(line):
+        return rendered, inserted
+    rendered.extend(_render_remaining_default_assignments(remaining))
+    remaining.clear()
+    return rendered, True
+
+
+def _matching_default_assignment_key(line: str, remaining: dict[str, str]) -> str | None:
+    return next((key for key in remaining if line.startswith(f"{key}=")), None)
+
+
+def _render_default_assignment_line(key: str, remaining: dict[str, str]) -> str:
+    return f"{key}={remaining.pop(key)}"
+
+
+def _remaining_default_assignment_lines(rendered: list[str], remaining: dict[str, str]) -> list[str]:
+    if not remaining:
+        return []
+    lines: list[str] = []
+    if rendered and rendered[-1].strip():
+        lines.append("")
+    lines.extend(_render_remaining_default_assignments(remaining))
+    return lines
+
+
+def _render_remaining_default_assignments(remaining: dict[str, str]) -> list[str]:
+    return [f"{key}={value}" for key, value in remaining.items()]
+
+
+def _is_section_header(line: str) -> bool:
+    return line.startswith("[") and line.endswith("]")
 
 
 def append_backends(text: str, lines: list[str]) -> str:

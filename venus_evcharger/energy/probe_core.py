@@ -56,15 +56,18 @@ def _field_settings(parser: configparser.ConfigParser, section_name: str) -> dic
     if not parser.has_section(section_name):
         return None
     section = parser[section_name]
-    address_text = str(section.get("Address", "")).strip()
-    if not address_text:
+    address = _probe_int_value(section.get("Address", ""))
+    if address is None:
         return None
+    register_type = _normalized_probe_text(section.get("RegisterType", "holding"), "holding")
+    data_type = _normalized_probe_text(section.get("DataType", "uint16"), "uint16")
+    word_order = _normalized_probe_text(section.get("WordOrder", "big"), "big")
     return {
         "section": section_name,
-        "register_type": str(section.get("RegisterType", "holding")).strip().lower() or "holding",
-        "address": int(address_text),
-        "data_type": str(section.get("DataType", "uint16")).strip().lower() or "uint16",
-        "word_order": str(section.get("WordOrder", "big")).strip().lower() or "big",
+        "register_type": register_type,
+        "address": address,
+        "data_type": data_type,
+        "word_order": word_order,
         "scale": float(str(section.get("Scale", "1")).strip() or "1"),
     }
 
@@ -98,42 +101,102 @@ def _probe_candidates(
     base_transport: ModbusTransportSettings,
     probe_plan: Mapping[str, Any],
 ) -> tuple[ModbusTransportSettings, ...]:
-    host_candidates = _text_candidates(probe_plan.get("host"))
-    if not host_candidates:
-        host_candidates = [base_transport.host] if base_transport.host else []
-    port_candidates = _int_candidates(probe_plan.get("port_candidates"), base_transport.port)
-    unit_id_candidates = _int_candidates(probe_plan.get("unit_id_candidates"), base_transport.unit_id)
-    if not host_candidates and base_transport.transport_kind != "serial_rtu":
-        raise ValueError("Energy probe requires a host candidate for TCP/UDP Modbus detection")
+    host_candidates = _probe_host_candidates(base_transport, probe_plan)
+    port_candidates = _probe_default_ports(
+        base_transport,
+        _int_candidates(probe_plan.get("port_candidates"), base_transport.port),
+    )
+    unit_id_candidates = _probe_default_unit_ids(
+        base_transport,
+        _int_candidates(probe_plan.get("unit_id_candidates"), base_transport.unit_id),
+    )
+    _validate_probe_host_candidates(base_transport, host_candidates)
     candidates: list[ModbusTransportSettings] = []
-    default_hosts = host_candidates or ([base_transport.host] if base_transport.host else [])
-    default_ports = port_candidates or ([base_transport.port] if base_transport.port is not None else [])
-    for host in default_hosts:
-        for candidate_port in default_ports:
-            for candidate_unit_id in unit_id_candidates or [base_transport.unit_id]:
-                candidates.append(replace(base_transport, host=host, port=candidate_port, unit_id=int(candidate_unit_id)))
+    for host in _probe_default_hosts(base_transport, host_candidates):
+        for candidate_port in port_candidates:
+            for candidate_unit_id in unit_id_candidates:
+                candidates.append(
+                    replace(base_transport, host=host, port=candidate_port, unit_id=int(candidate_unit_id))
+                )
     return tuple(candidates)
 
 
 def _text_candidates(value: object) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, (list, tuple)):
-        return [str(item).strip() for item in value if str(item).strip()]
-    text = str(value).strip()
-    return [text] if text else []
+    raw_values = value if isinstance(value, (list, tuple)) else [value]
+    return [text for item in raw_values if (text := _optional_probe_text(item))]
 
 
 def _int_candidates(value: object, fallback: int | None) -> list[int]:
-    candidates: list[int] = []
-    raw_values = value if isinstance(value, (list, tuple)) else [value]
-    for item in raw_values:
-        if item is None or isinstance(item, bool):
-            continue
-        try:
-            candidates.append(int(str(item).strip()))
-        except (TypeError, ValueError):
-            continue
+    candidates = [candidate for candidate in _probe_int_values(value) if candidate is not None]
     if not candidates and fallback is not None:
         candidates.append(int(fallback))
     return candidates
+
+
+def _probe_host_candidates(
+    base_transport: ModbusTransportSettings,
+    probe_plan: Mapping[str, Any],
+) -> list[str]:
+    host_candidates = _text_candidates(probe_plan.get("host"))
+    if host_candidates:
+        return host_candidates
+    return [base_transport.host] if base_transport.host else []
+
+
+def _probe_default_hosts(
+    base_transport: ModbusTransportSettings,
+    host_candidates: list[str],
+) -> list[str]:
+    return host_candidates or ([base_transport.host] if base_transport.host else [])
+
+
+def _probe_default_ports(
+    base_transport: ModbusTransportSettings,
+    port_candidates: list[int],
+) -> list[int | None]:
+    return port_candidates or ([base_transport.port] if base_transport.port is not None else [])
+
+
+def _probe_default_unit_ids(
+    base_transport: ModbusTransportSettings,
+    unit_id_candidates: list[int],
+) -> list[int | None]:
+    return unit_id_candidates or [base_transport.unit_id]
+
+
+def _validate_probe_host_candidates(
+    base_transport: ModbusTransportSettings,
+    host_candidates: list[str],
+) -> None:
+    if host_candidates or base_transport.transport_kind == "serial_rtu":
+        return
+    raise ValueError("Energy probe requires a host candidate for TCP/UDP Modbus detection")
+
+
+def _probe_int_values(value: object) -> list[int | None]:
+    raw_values = value if isinstance(value, (list, tuple)) else [value]
+    return [_probe_int_value(item) for item in raw_values]
+
+
+def _probe_int_value(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_probe_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _normalized_probe_text(value: object, fallback: str) -> str:
+    text = _optional_probe_text(value)
+    return text.lower() if text else fallback

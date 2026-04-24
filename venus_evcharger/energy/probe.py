@@ -37,39 +37,26 @@ def detect_modbus_energy_source(
     """Actively test one Modbus energy config against candidate endpoints."""
     parser = load_template_config(config_path)
     transport = _config_transport_section(parser)
-    probe_plan = dict(
-        energy_source_profile_probe_plan(
-            profile_name,
-            configured_host=host or transport.get("Host", ""),
-            configured_port=port if port is not None else transport.get("Port", ""),
-            configured_unit_id=unit_id if unit_id is not None else transport.get("UnitId", transport.get("SlaveId", "")),
-        )
+    probe_plan = _probe_plan(
+        profile_name,
+        transport,
+        host=host,
+        port=port,
+        unit_id=unit_id,
     )
     default_host = str(probe_plan.get("host", "")).strip()
     if default_host and not transport.get("Host", "").strip():
         transport["Host"] = default_host
     base_transport = load_modbus_transport_settings(parser, _probe_service())
     field = _probe_field(parser, _field_settings)
-    attempts: list[dict[str, object]] = []
-    for candidate in _probe_candidates(base_transport, probe_plan):
-        attempts.append(_attempt_probe(candidate, field))
-        if attempts[-1]["ok"]:
-            return {
-                "config_path": config_path,
-                "profile_name": str(profile_name).strip().lower(),
-                "profile_details": dict(energy_source_profile_details(profile_name)),
-                "probe_plan": dict(probe_plan),
-                "probe_field": dict(field),
-                "detected": dict(attempts[-1]),
-                "attempts": attempts,
-            }
+    attempts, detected = _probe_attempts(base_transport, probe_plan, field)
     return {
         "config_path": config_path,
         "profile_name": str(profile_name).strip().lower(),
         "profile_details": dict(energy_source_profile_details(profile_name)),
         "probe_plan": dict(probe_plan),
         "probe_field": dict(field),
-        "detected": None,
+        "detected": detected,
         "attempts": attempts,
     }
 
@@ -85,51 +72,126 @@ def validate_huawei_energy_source(
 ) -> dict[str, object]:
     """Validate one Huawei-backed energy config against a reachable endpoint."""
     normalized_profile = str(profile_name).strip().lower()
-    detection = detect_modbus_energy_source(
+    detection = _huawei_detection(
         config_path,
-        profile_name=normalized_profile,
+        normalized_profile,
         host=host,
         port=port,
         unit_id=unit_id,
     )
     detected = detection.get("detected")
     if not isinstance(detected, Mapping):
-        return {
-            **detection,
-            "validation_ok": False,
-            "field_results": [],
-            "required_fields_ok": False,
-            "meter_block_detected": False,
-            "recommendation": _huawei_recommendation(
-                normalized_profile,
-                detection=detection,
-                required_fields_ok=False,
-                meter_block_detected=False,
-                source_id=source_id,
-            ),
-        }
+        return _invalid_huawei_validation_payload(
+            normalized_profile,
+            detection,
+            source_id,
+        )
+    candidate_transport, parser = _huawei_candidate_transport(config_path, detected)
+    field_results = _validate_fields(candidate_transport, parser, normalized_profile, _field_settings, _attempt_probe)
+    required_fields_ok = _required_huawei_fields_ok(field_results)
+    meter_block_detected = _huawei_meter_block_detected(field_results)
+    return _huawei_validation_payload(
+        normalized_profile,
+        detection,
+        field_results=field_results,
+        required_fields_ok=required_fields_ok,
+        meter_block_detected=meter_block_detected,
+        source_id=source_id,
+    )
+
+
+def _huawei_detection(
+    config_path: str,
+    normalized_profile: str,
+    *,
+    host: str,
+    port: int | None,
+    unit_id: int | None,
+) -> dict[str, object]:
+    return detect_modbus_energy_source(
+        config_path,
+        profile_name=normalized_profile,
+        host=host,
+        port=port,
+        unit_id=unit_id,
+    )
+
+
+def _invalid_huawei_validation_payload(
+    normalized_profile: str,
+    detection: Mapping[str, object],
+    source_id: str,
+) -> dict[str, object]:
+    return {
+        **detection,
+        "validation_ok": False,
+        "field_results": [],
+        "required_fields_ok": False,
+        "meter_block_detected": False,
+        "recommendation": _huawei_recommendation(
+            normalized_profile,
+            detection=detection,
+            required_fields_ok=False,
+            meter_block_detected=False,
+            source_id=source_id,
+        ),
+    }
+
+
+def _huawei_candidate_transport(
+    config_path: str,
+    detected: Mapping[str, object],
+) -> tuple[ModbusTransportSettings, object]:
     parser = load_template_config(config_path)
     transport = _config_transport_section(parser)
+    _apply_detected_probe_target(transport, detected)
+    base_transport = load_modbus_transport_settings(parser, _probe_service())
+    return _detected_candidate_transport(base_transport, detected), parser
+
+
+def _apply_detected_probe_target(transport: Mapping[str, object], detected: Mapping[str, object]) -> None:
     transport["Host"] = str(detected.get("host", "") or "")
     if detected.get("port") is not None:
         transport["Port"] = str(int(detected["port"]))
     if detected.get("unit_id") is not None:
         transport["UnitId"] = str(int(detected["unit_id"]))
-    base_transport = load_modbus_transport_settings(parser, _probe_service())
-    candidate_transport = replace(
+
+
+def _detected_candidate_transport(
+    base_transport: ModbusTransportSettings,
+    detected: Mapping[str, object],
+) -> ModbusTransportSettings:
+    return replace(
         base_transport,
         host=str(detected.get("host", "") or base_transport.host),
         port=int(detected.get("port", base_transport.port)),
         unit_id=int(detected.get("unit_id", base_transport.unit_id)),
     )
-    field_results = _validate_fields(candidate_transport, parser, normalized_profile, _field_settings, _attempt_probe)
+
+
+def _required_huawei_fields_ok(field_results: list[dict[str, object]]) -> bool:
     required_results = [result for result in field_results if bool(result.get("required"))]
-    required_fields_ok = all(bool(result.get("ok")) for result in required_results)
-    meter_block_detected = any(
-        bool(result.get("ok"))
-        for result in field_results
-        if str(result.get("section", "")).startswith("HuaweiMeter") or str(result.get("section", "")) == "MeterStatusRead"
-    )
+    return all(bool(result.get("ok")) for result in required_results)
+
+
+def _huawei_meter_block_detected(field_results: list[dict[str, object]]) -> bool:
+    return any(bool(result.get("ok")) for result in field_results if _is_huawei_meter_result(result))
+
+
+def _is_huawei_meter_result(result: Mapping[str, object]) -> bool:
+    section = str(result.get("section", ""))
+    return section.startswith("HuaweiMeter") or section == "MeterStatusRead"
+
+
+def _huawei_validation_payload(
+    normalized_profile: str,
+    detection: Mapping[str, object],
+    *,
+    field_results: list[dict[str, object]],
+    required_fields_ok: bool,
+    meter_block_detected: bool,
+    source_id: str,
+) -> dict[str, object]:
     return {
         **detection,
         "validation_ok": required_fields_ok,
@@ -179,6 +241,38 @@ def _attempt_probe(
         }
 
 
+def _probe_plan(
+    profile_name: str,
+    transport: Mapping[str, object],
+    *,
+    host: str,
+    port: int | None,
+    unit_id: int | None,
+) -> dict[str, object]:
+    return dict(
+        energy_source_profile_probe_plan(
+            profile_name,
+            configured_host=host or transport.get("Host", ""),
+            configured_port=port if port is not None else transport.get("Port", ""),
+            configured_unit_id=unit_id if unit_id is not None else transport.get("UnitId", transport.get("SlaveId", "")),
+        )
+    )
+
+
+def _probe_attempts(
+    base_transport: ModbusTransportSettings,
+    probe_plan: Mapping[str, object],
+    field: dict[str, object],
+) -> tuple[list[dict[str, object]], dict[str, object] | None]:
+    attempts: list[dict[str, object]] = []
+    for candidate in _probe_candidates(base_transport, probe_plan):
+        attempt = _attempt_probe(candidate, field)
+        attempts.append(attempt)
+        if attempt["ok"]:
+            return attempts, dict(attempt)
+    return attempts, None
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the energy probe CLI."""
     parser = argparse.ArgumentParser(description="Probe external energy-source connector configs")
@@ -200,23 +294,31 @@ def main(argv: list[str] | None = None) -> int:
 
 def _command_payload(args: argparse.Namespace) -> dict[str, object]:
     if args.command == "detect-modbus-energy":
-        return detect_modbus_energy_source(
-            args.config_path,
-            profile_name=str(args.profile or ""),
-            host=str(args.host or ""),
-            port=args.port,
-            unit_id=args.unit_id,
-        )
+        return _detect_command_payload(args)
     if args.command == "validate-huawei-energy":
-        return validate_huawei_energy_source(
-            args.config_path,
-            profile_name=str(args.profile or ""),
-            host=str(args.host or ""),
-            port=args.port,
-            unit_id=args.unit_id,
-            source_id=str(args.source_id or "huawei"),
-        )
+        return _validate_huawei_command_payload(args)
     raise ValueError(f"Unsupported energy probe command '{args.command}'")
+
+
+def _detect_command_payload(args: argparse.Namespace) -> dict[str, object]:
+    return detect_modbus_energy_source(
+        args.config_path,
+        profile_name=str(args.profile or ""),
+        host=str(args.host or ""),
+        port=args.port,
+        unit_id=args.unit_id,
+    )
+
+
+def _validate_huawei_command_payload(args: argparse.Namespace) -> dict[str, object]:
+    return validate_huawei_energy_source(
+        args.config_path,
+        profile_name=str(args.profile or ""),
+        host=str(args.host or ""),
+        port=args.port,
+        unit_id=args.unit_id,
+        source_id=str(args.source_id or "huawei"),
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

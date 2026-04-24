@@ -24,60 +24,86 @@ from .sources_pv_grid import _AutoInputHelperSourcePvGridMixin
 
 
 class _AutoInputHelperSourceMixin(_AutoInputHelperSourceDbusMixin, _AutoInputHelperSourcePvGridMixin):
+    def _battery_snapshot_sources(self: Any) -> tuple[EnergySourceDefinition, ...]:
+        return tuple(getattr(self, "auto_energy_sources", ()) or (self._primary_energy_source(),))
+
+    def _battery_snapshot_cluster(self: Any, now: float) -> tuple[Any, tuple[EnergySourceDefinition, ...]]:
+        sources = self._battery_snapshot_sources()
+        source_snapshots = tuple(
+            read_energy_source_snapshot(self, cast(EnergySourceDefinition, source), now)
+            for source in sources
+        )
+        return aggregate_energy_sources(source_snapshots), sources
+
+    def _battery_snapshot_effective_soc(self: Any, cluster: Any) -> float | None:
+        primary_soc = cluster.sources[0].soc if cluster.sources else None
+        return cluster.effective_soc if bool(getattr(self, "auto_use_combined_battery_soc", True)) else primary_soc
+
+    def _battery_snapshot_learning_bundle(self: Any, cluster: Any, now: float) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+        self._energy_learning_profiles = update_energy_learning_profiles(
+            getattr(self, "_energy_learning_profiles", {}),
+            cluster.sources,
+            now,
+        )
+        learning_summary = summarize_energy_learning_profiles(getattr(self, "_energy_learning_profiles", {}))
+        discharge_balance = derive_discharge_balance_metrics(
+            cluster.sources,
+            getattr(self, "_energy_learning_profiles", {}),
+        )
+        forecast = derive_energy_forecast(
+            {
+                "battery_combined_charge_power_w": cluster.combined_charge_power_w,
+                "battery_combined_discharge_power_w": cluster.combined_discharge_power_w,
+                "battery_combined_charge_limit_power_w": cluster.combined_charge_limit_power_w,
+                "battery_combined_discharge_limit_power_w": cluster.combined_discharge_limit_power_w,
+                "battery_combined_grid_interaction_w": cluster.combined_grid_interaction_w,
+            },
+            learning_summary,
+        )
+        return (
+            cast(dict[str, object], learning_summary),
+            cast(dict[str, object], discharge_balance),
+            cast(dict[str, object], forecast),
+        )
+
+    @staticmethod
+    def _battery_snapshot_source_payloads(
+        cluster: Any,
+        discharge_balance: dict[str, object],
+        discharge_control: dict[str, object],
+    ) -> list[dict[str, object]]:
+        source_payloads = [source.as_dict() for source in cluster.sources]
+        source_balance = cast(dict[str, dict[str, object]], discharge_balance.get("sources", {}))
+        source_control = cast(dict[str, dict[str, object]], discharge_control.get("sources", {}))
+        for source_payload in source_payloads:
+            source_id = str(source_payload.get("source_id", ""))
+            source_payload.update(source_balance.get(source_id, {}))
+            source_payload.update(source_control.get(source_id, {}))
+        return source_payloads
+
     def _get_battery_snapshot(self: Any) -> dict[str, object]:
         """Read combined battery data from one or more energy sources."""
         if not self._source_retry_ready("battery"):
             return {"battery_soc": None}
         try:
             now = self._battery_snapshot_now()
-            sources = tuple(getattr(self, "auto_energy_sources", ()) or (self._primary_energy_source(),))
-            source_snapshots = tuple(
-                read_energy_source_snapshot(self, cast(EnergySourceDefinition, source), now)
-                for source in sources
-            )
-            cluster = aggregate_energy_sources(source_snapshots)
-            primary_soc = cluster.sources[0].soc if cluster.sources else None
-            effective_soc = cluster.effective_soc if bool(getattr(self, "auto_use_combined_battery_soc", True)) else primary_soc
-            self._energy_learning_profiles = update_energy_learning_profiles(
-                getattr(self, "_energy_learning_profiles", {}),
-                cluster.sources,
-                now,
-            )
-            learning_summary = summarize_energy_learning_profiles(getattr(self, "_energy_learning_profiles", {}))
-            discharge_balance = derive_discharge_balance_metrics(
-                cluster.sources,
-                getattr(self, "_energy_learning_profiles", {}),
-            )
+            cluster, sources = self._battery_snapshot_cluster(now)
+            effective_soc = self._battery_snapshot_effective_soc(cluster)
+            learning_summary, discharge_balance, forecast = self._battery_snapshot_learning_bundle(cluster, now)
             discharge_control = derive_discharge_control_metrics(
                 cluster.sources,
                 {source.source_id: source for source in sources},
             )
-            forecast = derive_energy_forecast(
-                {
-                    "battery_combined_charge_power_w": cluster.combined_charge_power_w,
-                    "battery_combined_discharge_power_w": cluster.combined_discharge_power_w,
-                    "battery_combined_charge_limit_power_w": cluster.combined_charge_limit_power_w,
-                    "battery_combined_discharge_limit_power_w": cluster.combined_discharge_limit_power_w,
-                    "battery_combined_grid_interaction_w": cluster.combined_grid_interaction_w,
-                },
-                learning_summary,
-            )
-            source_payloads = [source.as_dict() for source in cluster.sources]
-            source_balance = cast(dict[str, dict[str, object]], discharge_balance.get("sources", {}))
-            source_control = cast(dict[str, dict[str, object]], discharge_control.get("sources", {}))
-            for source_payload in source_payloads:
-                source_id = str(source_payload.get("source_id", ""))
-                source_payload.update(source_balance.get(source_id, {}))
-                source_payload.update(source_control.get(source_id, {}))
+            source_payloads = self._battery_snapshot_source_payloads(cluster, discharge_balance, discharge_control)
             return cast(
                 dict[str, object],
                 self._battery_snapshot_payload(
-                effective_soc,
-                cluster,
-                forecast,
-                discharge_balance,
-                discharge_control,
-                source_payloads,
+                    effective_soc,
+                    cluster,
+                    forecast,
+                    discharge_balance,
+                    discharge_control,
+                    source_payloads,
                 ),
             )
         except Exception:

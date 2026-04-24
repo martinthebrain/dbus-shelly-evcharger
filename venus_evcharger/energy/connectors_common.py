@@ -51,6 +51,13 @@ def _optional_bool_path(payload: dict[str, object], path: str | None) -> bool | 
     if path is None:
         return None
     value = json_path_value(payload, path)
+    normalized = _normalized_optional_bool_value(value)
+    if normalized is not None:
+        return normalized
+    return bool(normalize_binary_flag(value))
+
+
+def _normalized_optional_bool_value(value: object) -> bool | None:
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
@@ -59,7 +66,7 @@ def _optional_bool_path(payload: dict[str, object], path: str | None) -> bool | 
         text = value.strip().lower()
         if text in {"true", "false", "yes", "no", "on", "off", "enabled", "disabled"}:
             return bool(normalize_binary_flag(text))
-    return bool(normalize_binary_flag(value))
+    return None
 
 
 def _optional_confidence_path(payload: dict[str, object], path: str | None) -> float | None:

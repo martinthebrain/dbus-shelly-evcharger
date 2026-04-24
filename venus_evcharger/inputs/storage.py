@@ -28,23 +28,64 @@ from venus_evcharger.core.split_mixins import ComposableControllerMixin as _Comp
 
 
 class _DbusInputStorageMixin(_ComposableControllerMixin):
+    def _configured_primary_energy_sources(self) -> tuple[EnergySourceDefinition, ...]:
+        return tuple(getattr(self.service, "auto_energy_sources", ()) or ())
+
+    @staticmethod
+    def _primary_energy_source_id() -> str:
+        return "primary_battery"
+
+    @staticmethod
+    def _primary_energy_source_role() -> str:
+        return "battery"
+
+    def _primary_energy_service_name(self) -> str:
+        return str(getattr(self.service, "auto_battery_service", "") or "")
+
+    def _primary_energy_service_prefix(self) -> str:
+        return str(getattr(self.service, "auto_battery_service_prefix", "") or "")
+
+    def _primary_energy_soc_path(self) -> str:
+        return str(getattr(self.service, "auto_battery_soc_path", "/Soc") or "/Soc")
+
+    def _primary_energy_capacity_wh(self) -> object:
+        return getattr(self.service, "auto_battery_capacity_wh", None)
+
+    def _primary_energy_battery_power_path(self) -> str:
+        return str(getattr(self.service, "auto_battery_power_path", "") or "")
+
+    def _primary_energy_ac_power_path(self) -> str:
+        return str(getattr(self.service, "auto_battery_ac_power_path", "") or "")
+
+    def _primary_energy_pv_power_path(self) -> str:
+        return str(getattr(self.service, "auto_battery_pv_power_path", "") or "")
+
+    def _primary_energy_grid_interaction_path(self) -> str:
+        return str(getattr(self.service, "auto_battery_grid_interaction_path", "") or "")
+
+    def _primary_energy_operating_mode_path(self) -> str:
+        return str(getattr(self.service, "auto_battery_operating_mode_path", "") or "")
+
+    def _default_primary_energy_source(self) -> EnergySourceDefinition:
+        return EnergySourceDefinition(
+            source_id=self._primary_energy_source_id(),
+            role=self._primary_energy_source_role(),
+            service_name=self._primary_energy_service_name(),
+            service_prefix=self._primary_energy_service_prefix(),
+            soc_path=self._primary_energy_soc_path(),
+            usable_capacity_wh=self._primary_energy_capacity_wh(),
+            battery_power_path=self._primary_energy_battery_power_path(),
+            ac_power_path=self._primary_energy_ac_power_path(),
+            pv_power_path=self._primary_energy_pv_power_path(),
+            grid_interaction_path=self._primary_energy_grid_interaction_path(),
+            operating_mode_path=self._primary_energy_operating_mode_path(),
+        )
+
     def _primary_energy_source(self) -> EnergySourceDefinition:
-        sources = tuple(getattr(self.service, "auto_energy_sources", ()) or ())
+        sources = self._configured_primary_energy_sources()
         if sources:
             return cast(EnergySourceDefinition, sources[0])
-        return EnergySourceDefinition(
-            source_id="primary_battery",
-            role="battery",
-            service_name=str(getattr(self.service, "auto_battery_service", "") or ""),
-            service_prefix=str(getattr(self.service, "auto_battery_service_prefix", "") or ""),
-            soc_path=str(getattr(self.service, "auto_battery_soc_path", "/Soc") or "/Soc"),
-            usable_capacity_wh=getattr(self.service, "auto_battery_capacity_wh", None),
-            battery_power_path=str(getattr(self.service, "auto_battery_power_path", "") or ""),
-            ac_power_path=str(getattr(self.service, "auto_battery_ac_power_path", "") or ""),
-            pv_power_path=str(getattr(self.service, "auto_battery_pv_power_path", "") or ""),
-            grid_interaction_path=str(getattr(self.service, "auto_battery_grid_interaction_path", "") or ""),
-            operating_mode_path=str(getattr(self.service, "auto_battery_operating_mode_path", "") or ""),
-        )
+        return self._default_primary_energy_source()
 
     def _battery_service_has_soc(self, service_name: str) -> bool:
         """Return whether the given battery service currently provides a readable SOC."""
@@ -125,17 +166,15 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
         svc._auto_energy_last_scan[source_id] = now
         return service_name
 
-    def _resolve_energy_source_service(self, source: EnergySourceDefinition) -> str:
-        now = time.time()
-        if source.source_id == self._primary_energy_source().source_id:
-            primary_service = self.service._resolve_auto_battery_service()
-            resolved_primary_service: str = str(primary_service)
-            return resolved_primary_service
-        if source.service_name and self._energy_source_has_readable_data(source, source.service_name):
-            return self._remember_energy_service(source.source_id, source.service_name, now)
-        cached_service = self._energy_cache_valid(source.source_id, now)
-        if cached_service is not None:
-            return cached_service
+    def _primary_energy_source_service(self) -> str:
+        return str(self.service._resolve_auto_battery_service())
+
+    def _configured_energy_source_service(self, source: EnergySourceDefinition, now: float) -> str | None:
+        if not source.service_name or not self._energy_source_has_readable_data(source, source.service_name):
+            return None
+        return self._remember_energy_service(source.source_id, source.service_name, now)
+
+    def _discovered_energy_source_service(self, source: EnergySourceDefinition, now: float) -> str:
         if not source.service_prefix:
             raise ValueError(f"No readable DBus service configured for energy source '{source.source_id}'")
         service_name = first_matching_prefixed_service(
@@ -146,6 +185,18 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
         if service_name is None:
             raise ValueError(f"No DBus service found for energy source '{source.source_id}'")
         return self._remember_energy_service(source.source_id, service_name, now)
+
+    def _resolve_energy_source_service(self, source: EnergySourceDefinition) -> str:
+        now = time.time()
+        if source.source_id == self._primary_energy_source().source_id:
+            return self._primary_energy_source_service()
+        configured_service = self._configured_energy_source_service(source, now)
+        if configured_service is not None:
+            return configured_service
+        cached_service = self._energy_cache_valid(source.source_id, now)
+        if cached_service is not None:
+            return cached_service
+        return self._discovered_energy_source_service(source, now)
 
     def _scan_auto_battery_service(self, now: float) -> str:
         """Scan DBus services by prefix until a readable battery SOC appears."""
@@ -227,153 +278,228 @@ class _DbusInputStorageMixin(_ComposableControllerMixin):
             captured_at=now,
         )
 
+    def _battery_snapshot_sources(self) -> tuple[EnergySourceDefinition, ...]:
+        return tuple(getattr(self.service, "auto_energy_sources", ()) or (self._primary_energy_source(),))
+
+    def _battery_snapshot_cluster(
+        self,
+        now: float,
+    ) -> tuple[object, tuple[EnergySourceDefinition, ...], list[EnergySourceSnapshot]]:
+        sources = self._battery_snapshot_sources()
+        source_snapshots = [read_energy_source_snapshot(self, source, now) for source in sources]
+        return aggregate_energy_sources(source_snapshots), sources, source_snapshots
+
+    def _battery_snapshot_effective_soc(self, cluster: object) -> float | None:
+        primary_soc = cluster.sources[0].soc if cluster.sources else None
+        return cluster.effective_soc if bool(getattr(self.service, "auto_use_combined_battery_soc", True)) else primary_soc
+
+    @staticmethod
+    def _battery_snapshot_validate_soc(effective_soc: float | None, cluster: object) -> None:
+        if effective_soc is None and not any(source.soc is not None for source in cluster.sources):
+            raise TypeError("Battery SOC is not numeric")
+
+    def _battery_snapshot_cache_owner(self) -> object:
+        svc = self.service
+        return getattr(svc, "_service", svc)
+
+    def _battery_snapshot_learning_bundle(
+        self,
+        cache_owner: object,
+        cluster: object,
+        now: float,
+    ) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+        cache_owner._last_energy_learning_profiles = update_energy_learning_profiles(
+            getattr(cache_owner, "_last_energy_learning_profiles", {}),
+            cluster.sources,
+            now,
+        )
+        learning_summary = summarize_energy_learning_profiles(
+            getattr(cache_owner, "_last_energy_learning_profiles", {})
+        )
+        discharge_balance = derive_discharge_balance_metrics(
+            cluster.sources,
+            getattr(cache_owner, "_last_energy_learning_profiles", {}),
+        )
+        forecast = derive_energy_forecast(
+            {
+                "battery_combined_charge_power_w": cluster.combined_charge_power_w,
+                "battery_combined_discharge_power_w": cluster.combined_discharge_power_w,
+                "battery_combined_charge_limit_power_w": cluster.combined_charge_limit_power_w,
+                "battery_combined_discharge_limit_power_w": cluster.combined_discharge_limit_power_w,
+                "battery_combined_grid_interaction_w": cluster.combined_grid_interaction_w,
+            },
+            learning_summary,
+        )
+        return (
+            cast(dict[str, object], learning_summary),
+            cast(dict[str, object], discharge_balance),
+            cast(dict[str, object], forecast),
+        )
+
+    @staticmethod
+    def _battery_snapshot_discharge_control(
+        cluster: object,
+        sources: tuple[EnergySourceDefinition, ...],
+    ) -> dict[str, object]:
+        return cast(
+            dict[str, object],
+            derive_discharge_control_metrics(cluster.sources, {source.source_id: source for source in sources}),
+        )
+
+    @staticmethod
+    def _battery_snapshot_source_payloads(
+        cluster: object,
+        discharge_balance: dict[str, object],
+        discharge_control: dict[str, object],
+    ) -> list[dict[str, object]]:
+        source_payloads = [source.as_dict() for source in cluster.sources]
+        source_balance = cast(dict[str, dict[str, object]], discharge_balance.get("sources", {}))
+        source_control = cast(dict[str, dict[str, object]], discharge_control.get("sources", {}))
+        for source_payload in source_payloads:
+            source_id = str(source_payload.get("source_id", ""))
+            source_payload.update(source_balance.get(source_id, {}))
+            source_payload.update(source_control.get(source_id, {}))
+        return source_payloads
+
+    def _battery_snapshot_payload(
+        self,
+        cache_owner: object,
+        effective_soc: float | None,
+        cluster: object,
+        forecast: dict[str, object],
+        discharge_balance: dict[str, object],
+        discharge_control: dict[str, object],
+        source_payloads: list[dict[str, object]],
+    ) -> dict[str, object]:
+        return {
+            "battery_soc": effective_soc,
+            "battery_combined_soc": cluster.combined_soc,
+            "battery_combined_usable_capacity_wh": cluster.combined_usable_capacity_wh,
+            "battery_combined_charge_power_w": cluster.combined_charge_power_w,
+            "battery_combined_discharge_power_w": cluster.combined_discharge_power_w,
+            "battery_combined_net_power_w": cluster.combined_net_battery_power_w,
+            "battery_combined_ac_power_w": cluster.combined_ac_power_w,
+            "battery_combined_pv_input_power_w": cluster.combined_pv_input_power_w,
+            "battery_combined_grid_interaction_w": cluster.combined_grid_interaction_w,
+            "battery_headroom_charge_w": forecast["battery_headroom_charge_w"],
+            "battery_headroom_discharge_w": forecast["battery_headroom_discharge_w"],
+            "expected_near_term_export_w": forecast["expected_near_term_export_w"],
+            "expected_near_term_import_w": forecast["expected_near_term_import_w"],
+            "battery_discharge_balance_mode": discharge_balance.get("mode"),
+            "battery_discharge_balance_target_distribution_mode": discharge_balance.get("target_distribution_mode"),
+            "battery_discharge_balance_error_w": discharge_balance.get("error_w"),
+            "battery_discharge_balance_max_abs_error_w": discharge_balance.get("max_abs_error_w"),
+            "battery_discharge_balance_total_discharge_w": discharge_balance.get("total_discharge_w"),
+            "battery_discharge_balance_eligible_source_count": discharge_balance.get("eligible_source_count", 0),
+            "battery_discharge_balance_active_source_count": discharge_balance.get("active_source_count", 0),
+            "battery_discharge_balance_control_candidate_count": discharge_control.get("control_candidate_count", 0),
+            "battery_discharge_balance_control_ready_count": discharge_control.get("control_ready_count", 0),
+            "battery_discharge_balance_supported_control_source_count": discharge_control.get(
+                "supported_control_source_count",
+                0,
+            ),
+            "battery_discharge_balance_experimental_control_source_count": discharge_control.get(
+                "experimental_control_source_count",
+                0,
+            ),
+            "battery_average_confidence": cluster.average_confidence,
+            "battery_source_count": cluster.source_count,
+            "battery_online_source_count": cluster.online_source_count,
+            "battery_valid_soc_source_count": cluster.valid_soc_source_count,
+            "battery_battery_source_count": cluster.battery_source_count,
+            "battery_hybrid_inverter_source_count": cluster.hybrid_inverter_source_count,
+            "battery_inverter_source_count": cluster.inverter_source_count,
+            "battery_sources": source_payloads,
+            "battery_learning_profiles": {
+                source_id: profile.as_dict()
+                for source_id, profile in getattr(cache_owner, "_last_energy_learning_profiles", {}).items()
+            },
+        }
+
+    @staticmethod
+    def _empty_battery_snapshot_payload(failure: float | None) -> dict[str, object]:
+        return {
+            "battery_soc": cast(float | None, failure),
+            "battery_combined_soc": None,
+            "battery_combined_usable_capacity_wh": None,
+            "battery_combined_charge_power_w": None,
+            "battery_combined_discharge_power_w": None,
+            "battery_combined_net_power_w": None,
+            "battery_combined_ac_power_w": None,
+            "battery_combined_pv_input_power_w": None,
+            "battery_combined_grid_interaction_w": None,
+            "battery_headroom_charge_w": None,
+            "battery_headroom_discharge_w": None,
+            "expected_near_term_export_w": None,
+            "expected_near_term_import_w": None,
+            "battery_discharge_balance_mode": "",
+            "battery_discharge_balance_target_distribution_mode": "",
+            "battery_discharge_balance_error_w": None,
+            "battery_discharge_balance_max_abs_error_w": None,
+            "battery_discharge_balance_total_discharge_w": None,
+            "battery_discharge_balance_eligible_source_count": 0,
+            "battery_discharge_balance_active_source_count": 0,
+            "battery_discharge_balance_control_candidate_count": 0,
+            "battery_discharge_balance_control_ready_count": 0,
+            "battery_discharge_balance_supported_control_source_count": 0,
+            "battery_discharge_balance_experimental_control_source_count": 0,
+            "battery_average_confidence": None,
+            "battery_source_count": 0,
+            "battery_online_source_count": 0,
+            "battery_valid_soc_source_count": 0,
+            "battery_battery_source_count": 0,
+            "battery_hybrid_inverter_source_count": 0,
+            "battery_inverter_source_count": 0,
+            "battery_sources": [],
+            "battery_learning_profiles": {},
+        }
+
+    def _successful_battery_snapshot_payload(self, now: float) -> dict[str, object]:
+        cluster, sources, _ = self._battery_snapshot_cluster(now)
+        effective_soc = self._battery_snapshot_effective_soc(cluster)
+        self._battery_snapshot_validate_soc(effective_soc, cluster)
+        cache_owner = self._battery_snapshot_cache_owner()
+        learning_summary, discharge_balance, forecast = self._battery_snapshot_learning_bundle(cache_owner, cluster, now)
+        discharge_control = self._battery_snapshot_discharge_control(cluster, sources)
+        source_payloads = self._battery_snapshot_source_payloads(cluster, discharge_balance, discharge_control)
+        self._mark_source_recovery("battery", "Battery SOC readings recovered")
+        battery_payload = self._battery_snapshot_payload(
+            cache_owner,
+            effective_soc,
+            cluster,
+            forecast,
+            discharge_balance,
+            discharge_control,
+            source_payloads,
+        )
+        setattr(cache_owner, "_last_energy_cluster", dict(battery_payload))
+        return battery_payload
+
+    def _failed_battery_snapshot_payload(self, now: float, error: Exception) -> dict[str, object]:
+        svc = self.service
+        battery_service_name = str(getattr(svc, "auto_battery_service", "") or "")
+        battery_service_prefix = str(getattr(svc, "auto_battery_service_prefix", "") or "")
+        failure = self._handle_source_failure(
+            "battery",
+            now,
+            "battery-missing",
+            svc.auto_battery_scan_interval_seconds,
+            "Auto mode could not read battery SOC from %s %s: %s",
+            battery_service_name or battery_service_prefix,
+            svc.auto_battery_soc_path,
+            error,
+        )
+        return self._empty_battery_snapshot_payload(cast(float | None, failure))
+
     def get_battery_snapshot(self) -> dict[str, object]:
         """Return aggregated battery and inverter source data for Auto mode."""
-        svc = self.service
         now = time.time()
         if not self._source_retry_ready("battery", now):
             return {"battery_soc": None}
         try:
-            source_snapshots: list[EnergySourceSnapshot] = []
-            for source in tuple(getattr(svc, "auto_energy_sources", ()) or (self._primary_energy_source(),)):
-                source_snapshots.append(read_energy_source_snapshot(self, source, now))
-            cluster = aggregate_energy_sources(source_snapshots)
-            primary_soc = cluster.sources[0].soc if cluster.sources else None
-            effective_soc = cluster.effective_soc if bool(getattr(svc, "auto_use_combined_battery_soc", True)) else primary_soc
-            if effective_soc is None and not any(source.soc is not None for source in cluster.sources):
-                raise TypeError("Battery SOC is not numeric")
-            cache_owner = getattr(svc, "_service", svc)
-            cache_owner._last_energy_learning_profiles = update_energy_learning_profiles(
-                getattr(cache_owner, "_last_energy_learning_profiles", {}),
-                cluster.sources,
-                now,
-            )
-            learning_summary = summarize_energy_learning_profiles(
-                getattr(cache_owner, "_last_energy_learning_profiles", {})
-            )
-            discharge_balance = derive_discharge_balance_metrics(
-                cluster.sources,
-                getattr(cache_owner, "_last_energy_learning_profiles", {}),
-            )
-            discharge_control = derive_discharge_control_metrics(
-                cluster.sources,
-                {
-                    source.source_id: source
-                    for source in tuple(getattr(svc, "auto_energy_sources", ()) or (self._primary_energy_source(),))
-                },
-            )
-            forecast = derive_energy_forecast(
-                {
-                    "battery_combined_charge_power_w": cluster.combined_charge_power_w,
-                    "battery_combined_discharge_power_w": cluster.combined_discharge_power_w,
-                    "battery_combined_charge_limit_power_w": cluster.combined_charge_limit_power_w,
-                    "battery_combined_discharge_limit_power_w": cluster.combined_discharge_limit_power_w,
-                    "battery_combined_grid_interaction_w": cluster.combined_grid_interaction_w,
-                },
-                learning_summary,
-            )
-            source_payloads = [source.as_dict() for source in cluster.sources]
-            source_balance = cast(dict[str, dict[str, object]], discharge_balance.get("sources", {}))
-            source_control = cast(dict[str, dict[str, object]], discharge_control.get("sources", {}))
-            for source_payload in source_payloads:
-                source_metrics = source_balance.get(str(source_payload.get("source_id", "")), {})
-                source_payload.update(source_metrics)
-                source_payload.update(source_control.get(str(source_payload.get("source_id", "")), {}))
-            self._mark_source_recovery("battery", "Battery SOC readings recovered")
-            battery_payload: dict[str, object] = {
-                "battery_soc": effective_soc,
-                "battery_combined_soc": cluster.combined_soc,
-                "battery_combined_usable_capacity_wh": cluster.combined_usable_capacity_wh,
-                "battery_combined_charge_power_w": cluster.combined_charge_power_w,
-                "battery_combined_discharge_power_w": cluster.combined_discharge_power_w,
-                "battery_combined_net_power_w": cluster.combined_net_battery_power_w,
-                "battery_combined_ac_power_w": cluster.combined_ac_power_w,
-                "battery_combined_pv_input_power_w": cluster.combined_pv_input_power_w,
-                "battery_combined_grid_interaction_w": cluster.combined_grid_interaction_w,
-                "battery_headroom_charge_w": forecast["battery_headroom_charge_w"],
-                "battery_headroom_discharge_w": forecast["battery_headroom_discharge_w"],
-                "expected_near_term_export_w": forecast["expected_near_term_export_w"],
-                "expected_near_term_import_w": forecast["expected_near_term_import_w"],
-                "battery_discharge_balance_mode": discharge_balance.get("mode"),
-                "battery_discharge_balance_target_distribution_mode": discharge_balance.get("target_distribution_mode"),
-                "battery_discharge_balance_error_w": discharge_balance.get("error_w"),
-                "battery_discharge_balance_max_abs_error_w": discharge_balance.get("max_abs_error_w"),
-                "battery_discharge_balance_total_discharge_w": discharge_balance.get("total_discharge_w"),
-                "battery_discharge_balance_eligible_source_count": discharge_balance.get("eligible_source_count", 0),
-                "battery_discharge_balance_active_source_count": discharge_balance.get("active_source_count", 0),
-                "battery_discharge_balance_control_candidate_count": discharge_control.get("control_candidate_count", 0),
-                "battery_discharge_balance_control_ready_count": discharge_control.get("control_ready_count", 0),
-                "battery_discharge_balance_supported_control_source_count": discharge_control.get(
-                    "supported_control_source_count",
-                    0,
-                ),
-                "battery_discharge_balance_experimental_control_source_count": discharge_control.get(
-                    "experimental_control_source_count",
-                    0,
-                ),
-                "battery_average_confidence": cluster.average_confidence,
-                "battery_source_count": cluster.source_count,
-                "battery_online_source_count": cluster.online_source_count,
-                "battery_valid_soc_source_count": cluster.valid_soc_source_count,
-                "battery_battery_source_count": cluster.battery_source_count,
-                "battery_hybrid_inverter_source_count": cluster.hybrid_inverter_source_count,
-                "battery_inverter_source_count": cluster.inverter_source_count,
-                "battery_sources": source_payloads,
-                "battery_learning_profiles": {
-                    source_id: profile.as_dict()
-                    for source_id, profile in getattr(cache_owner, "_last_energy_learning_profiles", {}).items()
-                },
-            }
-            setattr(cache_owner, "_last_energy_cluster", dict(battery_payload))
-            return battery_payload
+            return self._successful_battery_snapshot_payload(now)
         except Exception as error:  # pylint: disable=broad-except
-            battery_service_name = str(getattr(svc, "auto_battery_service", "") or "")
-            battery_service_prefix = str(getattr(svc, "auto_battery_service_prefix", "") or "")
-            failure = self._handle_source_failure(
-                "battery",
-                now,
-                "battery-missing",
-                svc.auto_battery_scan_interval_seconds,
-                "Auto mode could not read battery SOC from %s %s: %s",
-                battery_service_name or battery_service_prefix,
-                svc.auto_battery_soc_path,
-                error,
-            )
-            return {
-                "battery_soc": cast(float | None, failure),
-                "battery_combined_soc": None,
-                "battery_combined_usable_capacity_wh": None,
-                "battery_combined_charge_power_w": None,
-                "battery_combined_discharge_power_w": None,
-                "battery_combined_net_power_w": None,
-                "battery_combined_ac_power_w": None,
-                "battery_combined_pv_input_power_w": None,
-                "battery_combined_grid_interaction_w": None,
-                "battery_headroom_charge_w": None,
-                "battery_headroom_discharge_w": None,
-                "expected_near_term_export_w": None,
-                "expected_near_term_import_w": None,
-                "battery_discharge_balance_mode": "",
-                "battery_discharge_balance_target_distribution_mode": "",
-                "battery_discharge_balance_error_w": None,
-                "battery_discharge_balance_max_abs_error_w": None,
-                "battery_discharge_balance_total_discharge_w": None,
-                "battery_discharge_balance_eligible_source_count": 0,
-                "battery_discharge_balance_active_source_count": 0,
-                "battery_discharge_balance_control_candidate_count": 0,
-                "battery_discharge_balance_control_ready_count": 0,
-                "battery_discharge_balance_supported_control_source_count": 0,
-                "battery_discharge_balance_experimental_control_source_count": 0,
-                "battery_average_confidence": None,
-                "battery_source_count": 0,
-                "battery_online_source_count": 0,
-                "battery_valid_soc_source_count": 0,
-                "battery_battery_source_count": 0,
-                "battery_hybrid_inverter_source_count": 0,
-                "battery_inverter_source_count": 0,
-                "battery_sources": [],
-                "battery_learning_profiles": {},
-            }
+            return self._failed_battery_snapshot_payload(now, error)
 
     def get_battery_soc(self) -> float | None:
         """Read battery SOC from the resolved battery service."""

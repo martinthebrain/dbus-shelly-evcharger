@@ -142,32 +142,36 @@ class _EnergyCompanionDbusBridgeServicesMixin:
             return grid_base + int(index)
         return pvinverter_base + int(index)
 
-    def _source_service_name(self, service_kind: str, source_id: str, device_instance: int) -> str:
-        svc = self.service
-        sanitized_source_id = self._sanitize_source_id(source_id or str(device_instance))
+    @staticmethod
+    def _source_default_service_prefix(service_kind: str) -> str:
         if service_kind == "battery":
-            configured_prefix = str(
-                getattr(svc, "companion_source_battery_service_prefix", "com.victronenergy.battery.external")
+            return "com.victronenergy.battery.external"
+        if service_kind == "grid":
+            return "com.victronenergy.grid.external"
+        return "com.victronenergy.pvinverter.external"
+
+    def _source_configured_service_prefix(self, service_kind: str) -> str:
+        svc = self.service
+        if service_kind == "battery":
+            return str(
+                getattr(svc, "companion_source_battery_service_prefix", self._source_default_service_prefix(service_kind))
             ).strip()
-        elif service_kind == "grid":
-            configured_prefix = str(
-                getattr(svc, "companion_source_grid_service_prefix", "com.victronenergy.grid.external")
+        if service_kind == "grid":
+            return str(
+                getattr(svc, "companion_source_grid_service_prefix", self._source_default_service_prefix(service_kind))
             ).strip()
-        else:
-            configured_prefix = str(
-                getattr(
-                    svc,
-                    "companion_source_pvinverter_service_prefix",
-                    "com.victronenergy.pvinverter.external",
-                )
-            ).strip()
-        prefix = configured_prefix.rstrip(".") or (
-            "com.victronenergy.battery.external"
-            if service_kind == "battery"
-            else "com.victronenergy.grid.external"
-            if service_kind == "grid"
-            else "com.victronenergy.pvinverter.external"
-        )
+        return str(
+            getattr(
+                svc,
+                "companion_source_pvinverter_service_prefix",
+                self._source_default_service_prefix(service_kind),
+            )
+        ).strip()
+
+    def _source_service_name(self, service_kind: str, source_id: str, device_instance: int) -> str:
+        sanitized_source_id = self._sanitize_source_id(source_id or str(device_instance))
+        configured_prefix = self._source_configured_service_prefix(service_kind)
+        prefix = configured_prefix.rstrip(".") or self._source_default_service_prefix(service_kind)
         return f"{prefix}.{sanitized_source_id}"
 
     @staticmethod

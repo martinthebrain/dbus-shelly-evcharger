@@ -94,16 +94,28 @@ def _modbus_field_settings(parser: Any, section_name: str) -> ModbusEnergyFieldS
     if not parser.has_section(section_name):
         return None
     section = parser[section_name]
-    address_text = str(section.get("Address", "")).strip()
+    address_text = _modbus_field_address_text(section)
     if not address_text:
         return None
     return ModbusEnergyFieldSettings(
-        register_type=str(section.get("RegisterType", "holding")).strip().lower() or "holding",
+        register_type=_modbus_field_option(section, "RegisterType", "holding"),
         address=int(address_text),
-        data_type=str(section.get("DataType", "uint16")).strip().lower() or "uint16",
-        scale=float(str(section.get("Scale", "1")).strip() or "1"),
-        word_order=str(section.get("WordOrder", "big")).strip().lower() or "big",
+        data_type=_modbus_field_option(section, "DataType", "uint16"),
+        scale=_modbus_field_scale(section),
+        word_order=_modbus_field_option(section, "WordOrder", "big"),
     )
+
+
+def _modbus_field_option(section: Any, option_name: str, fallback: str) -> str:
+    return str(section.get(option_name, fallback)).strip().lower() or fallback
+
+
+def _modbus_field_address_text(section: Any) -> str:
+    return str(section.get("Address", "")).strip()
+
+
+def _modbus_field_scale(section: Any) -> float:
+    return float(str(section.get("Scale", "1")).strip() or "1")
 
 
 def _modbus_text_map(parser: Any, section_name: str) -> dict[str, str]:
@@ -125,22 +137,27 @@ def _modbus_aggregation_setting(parser: Any, option_name: str) -> str:
     return str(parser["Aggregation"].get(option_name, "")).strip()
 
 
+def _modbus_has_any_read_field(settings: ModbusEnergySourceSettings) -> bool:
+    return any(
+        (
+            settings.soc_field is not None,
+            settings.usable_capacity_field is not None,
+            settings.battery_power_field is not None,
+            settings.charge_limit_power_field is not None,
+            settings.discharge_limit_power_field is not None,
+            settings.ac_power_field is not None,
+            settings.pv_input_power_field is not None,
+            settings.grid_interaction_field is not None,
+            settings.operating_mode_field is not None,
+        )
+    )
+
+
 def _validate_modbus_energy_source_settings(
     source: EnergySourceDefinition,
     settings: ModbusEnergySourceSettings,
 ) -> None:
-    if (
-        settings.soc_field is None
-        and settings.usable_capacity_field is None
-        and settings.battery_power_field is None
-        and settings.charge_limit_power_field is None
-        and settings.discharge_limit_power_field is None
-        and settings.ac_power_field is None
-        and settings.pv_input_power_field is None
-        and settings.grid_interaction_field is None
-        and settings.operating_mode_field is None
-        and source.usable_capacity_wh is None
-    ):
+    if not _modbus_has_any_read_field(settings) and source.usable_capacity_wh is None:
         raise ValueError(
             f"Energy source '{source.source_id}' requires at least one Modbus read section or UsableCapacityWh"
         )
@@ -220,4 +237,3 @@ def _render_scope_key(
 class _ScopeKeyFormatter(dict[str, object]):
     def __missing__(self, key: str) -> str:
         return "{" + key + "}"
-

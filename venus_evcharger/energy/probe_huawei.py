@@ -18,18 +18,10 @@ def _huawei_recommendation(
     source_id: str,
 ) -> dict[str, object]:
     normalized_source_id = _normalized_source_id(source_id)
-    detected = detection.get("detected")
-    details = detection.get("profile_details")
-    profile_details = details if isinstance(details, Mapping) else {}
-    detected_mapping = detected if isinstance(detected, Mapping) else {}
+    profile_details = _mapping_value(detection, "profile_details")
+    detected_mapping = _mapping_value(detection, "detected")
     template_name = _recommended_huawei_template(profile_name)
     config_path = _recommended_huawei_config_path(template_name)
-    notes = [
-        "Huawei meter block detected" if meter_block_detected else "Huawei meter block not detected",
-        "Configured Huawei energy fields responded successfully"
-        if required_fields_ok
-        else "One or more required Huawei energy fields did not respond",
-    ]
     return {
         "status": "ready" if required_fields_ok else "incomplete",
         "bundle_schema_type": RECOMMENDATION_BUNDLE_SCHEMA_TYPE,
@@ -63,7 +55,10 @@ def _huawei_recommendation(
             config_path=config_path,
             source_id=normalized_source_id,
         ),
-        "notes": notes,
+        "notes": _recommendation_notes(
+            meter_block_detected=meter_block_detected,
+            required_fields_ok=required_fields_ok,
+        ),
     }
 
 
@@ -75,13 +70,10 @@ def _normalized_source_id(source_id: str) -> str:
 def _recommended_huawei_template(profile_name: str) -> str:
     profile = resolve_energy_source_profile(profile_name)
     normalized = profile.profile_name if profile is not None else str(profile_name).strip().lower()
-    if normalized.endswith("_unit1"):
-        return "deploy/venus/template-energy-source-huawei-mb-unit1-modbus.ini"
-    if normalized.endswith("_unit2"):
-        return "deploy/venus/template-energy-source-huawei-mb-unit2-modbus.ini"
-    if profile is not None and str(profile.platform).upper() == "MA":
-        return "deploy/venus/template-energy-source-huawei-ma-modbus.ini"
-    if normalized.startswith("huawei_ma_"):
+    unit_template = _recommended_huawei_unit_template(normalized)
+    if unit_template is not None:
+        return unit_template
+    if _recommended_huawei_ma_profile(profile, normalized):
         return "deploy/venus/template-energy-source-huawei-ma-modbus.ini"
     return "deploy/venus/template-energy-source-huawei-mb-modbus.ini"
 
@@ -99,14 +91,7 @@ def _recommendation_summary(
     meter_block_detected: bool,
     template_name: str,
 ) -> str:
-    host = str(detected.get("host", "") or "")
-    port = detected.get("port")
-    unit_id = detected.get("unit_id")
-    location_text = f"host={host}" if host else "host=unknown"
-    if port is not None:
-        location_text += f", port={port}"
-    if unit_id is not None:
-        location_text += f", unit={unit_id}"
+    location_text = _recommendation_location_text(detected)
     meter_text = "present" if meter_block_detected else "missing"
     return f"Use profile {profile_name} with template {template_name}; {location_text}; meter block {meter_text}."
 
@@ -154,9 +139,7 @@ def _recommendation_wizard_hint_block(
     config_path: str,
     source_id: str,
 ) -> str:
-    host = str(detected.get("host", "") or "").strip() or "unknown"
-    port_text = str(_optional_int(detected.get("port")) or "unknown")
-    unit_text = str(_optional_int(detected.get("unit_id")) or "unknown")
+    host, port_text, unit_text = _recommendation_hint_values(detected)
     meter_text = "present" if meter_block_detected else "not detected"
     return "\n".join(
         (
@@ -173,6 +156,55 @@ def _recommendation_wizard_hint_block(
             "- next step: copy the template, then paste the config snippet into the main config",
         )
     )
+
+
+def _mapping_value(payload: Mapping[str, object], key: str) -> Mapping[str, object]:
+    value = payload.get(key)
+    return value if isinstance(value, Mapping) else {}
+
+
+def _recommendation_notes(*, meter_block_detected: bool, required_fields_ok: bool) -> list[str]:
+    return [
+        "Huawei meter block detected" if meter_block_detected else "Huawei meter block not detected",
+        (
+            "Configured Huawei energy fields responded successfully"
+            if required_fields_ok
+            else "One or more required Huawei energy fields did not respond"
+        ),
+    ]
+
+
+def _recommended_huawei_unit_template(normalized_profile_name: str) -> str | None:
+    if normalized_profile_name.endswith("_unit1"):
+        return "deploy/venus/template-energy-source-huawei-mb-unit1-modbus.ini"
+    if normalized_profile_name.endswith("_unit2"):
+        return "deploy/venus/template-energy-source-huawei-mb-unit2-modbus.ini"
+    return None
+
+
+def _recommended_huawei_ma_profile(profile: object, normalized_profile_name: str) -> bool:
+    if profile is not None and str(getattr(profile, "platform", "")).upper() == "MA":
+        return True
+    return normalized_profile_name.startswith("huawei_ma_")
+
+
+def _recommendation_location_text(detected: Mapping[str, object]) -> str:
+    host = str(detected.get("host", "") or "")
+    location_parts = [f"host={host}" if host else "host=unknown"]
+    port = detected.get("port")
+    unit_id = detected.get("unit_id")
+    if port is not None:
+        location_parts.append(f"port={port}")
+    if unit_id is not None:
+        location_parts.append(f"unit={unit_id}")
+    return ", ".join(location_parts)
+
+
+def _recommendation_hint_values(detected: Mapping[str, object]) -> tuple[str, str, str]:
+    host = str(detected.get("host", "") or "").strip() or "unknown"
+    port_text = str(_optional_int(detected.get("port")) or "unknown")
+    unit_text = str(_optional_int(detected.get("unit_id")) or "unknown")
+    return host, port_text, unit_text
 
 
 def _optional_int(value: object) -> int | None:

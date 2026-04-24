@@ -383,13 +383,27 @@ def energy_source_profile_probe_plan(
 
 
 def _candidate_values(configured_value: object, defaults: tuple[int, ...]) -> list[int]:
-    if isinstance(configured_value, bool):
-        configured_value = None
-    if isinstance(configured_value, int):
-        return [int(configured_value)]
-    if isinstance(configured_value, str) and configured_value.strip():
-        try:
-            return [int(configured_value.strip())]
-        except ValueError:
-            return list(defaults)
+    parsed_value = _candidate_int_value(configured_value)
+    if parsed_value is not None:
+        return [parsed_value]
     return list(defaults)
+
+
+def _candidate_int_value(configured_value: object) -> int | None:
+    if isinstance(configured_value, bool):
+        return None
+    if isinstance(configured_value, int):
+        return int(configured_value)
+    if isinstance(configured_value, str):
+        return _candidate_int_from_string(configured_value)
+    return None
+
+
+def _candidate_int_from_string(configured_value: str) -> int | None:
+    stripped_value = configured_value.strip()
+    if not stripped_value:
+        return None
+    try:
+        return int(stripped_value)
+    except ValueError:
+        return None

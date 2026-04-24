@@ -11,9 +11,9 @@ from venus_evcharger.energy.recommendation_schema import (
 )
 
 
-def existing_auto_energy_source_ids(config_path: Path) -> tuple[str, ...]:
+def _config_auto_energy_sources_value(config_path: Path) -> str:
     if not config_path.exists():
-        return ()
+        return ""
     import configparser
 
     parser = configparser.ConfigParser()
@@ -23,6 +23,11 @@ def existing_auto_energy_source_ids(config_path: Path) -> tuple[str, ...]:
         raw = str(parser.defaults().get("AutoEnergySources", "")).strip()
     if not raw and parser.has_section("DEFAULT"):
         raw = str(parser["DEFAULT"].get("AutoEnergySources", "")).strip()
+    return raw
+
+
+def existing_auto_energy_source_ids(config_path: Path) -> tuple[str, ...]:
+    raw = _config_auto_energy_sources_value(config_path)
     return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
@@ -36,17 +41,23 @@ def optional_capacity_wh(value: object) -> float | None:
     return capacity if capacity > 0.0 else None
 
 
+def _prefix_items(prefixes: str | tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    if isinstance(prefixes, str):
+        return (prefixes,)
+    return tuple(str(item) for item in prefixes)
+
+
+def _normalized_prefix(value: str) -> str:
+    return value.strip()
+
+
 def normalized_recommendation_prefixes(
     prefixes: str | tuple[str, ...] | list[str] | None,
 ) -> tuple[str, ...]:
     if prefixes is None:
         return ()
-    items: tuple[str, ...]
-    if isinstance(prefixes, str):
-        items = (prefixes,)
-    else:
-        items = tuple(str(item) for item in prefixes)
-    return tuple(item.strip() for item in items if item and item.strip())
+    normalized = (_normalized_prefix(item) for item in _prefix_items(prefixes))
+    return tuple(item for item in normalized if item)
 
 
 def merged_recommendation_prefixes(
@@ -69,7 +80,7 @@ def existing_auto_energy_assignments(config_path: Path) -> dict[str, str]:
     parser.read(config_path, encoding="utf-8")
     assignments: dict[str, str] = {}
     for key, value in parser.defaults().items():
-        if key == "AutoUseCombinedBatterySoc" or key == "AutoEnergySources" or key.startswith("AutoEnergySource."):
+        if _is_auto_energy_assignment_key(key):
             assignments[key] = str(value).strip()
     return assignments
 
@@ -83,19 +94,29 @@ def merge_energy_source_ids(existing_ids: tuple[str, ...], suggested_sources: tu
     return tuple(merged)
 
 
+def _energy_source_list_ids(raw_value: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in raw_value.split(",") if item.strip())
+
+
 def existing_source_ids_from_assignments(assignments: dict[str, str]) -> tuple[str, ...]:
-    source_ids = list(
-        item.strip()
-        for item in assignments.get("AutoEnergySources", "").split(",")
-        if item.strip()
-    )
+    source_ids = list(_energy_source_list_ids(assignments.get("AutoEnergySources", "")))
     for key in assignments:
-        if not key.startswith("AutoEnergySource."):
-            continue
-        source_id = key[len("AutoEnergySource.") :].split(".", 1)[0].strip()
+        source_id = _assignment_source_id(key)
         if source_id and source_id not in source_ids:
             source_ids.append(source_id)
     return tuple(source_ids)
+
+
+def _is_auto_energy_assignment_key(key: str) -> bool:
+    return key in {"AutoUseCombinedBatterySoc", "AutoEnergySources"} or key.startswith(
+        "AutoEnergySource."
+    )
+
+
+def _assignment_source_id(key: str) -> str:
+    if not key.startswith("AutoEnergySource."):
+        return ""
+    return key[len("AutoEnergySource.") :].split(".", 1)[0].strip()
 
 
 def suggested_energy_sources_with_capacity(
@@ -120,26 +141,58 @@ def suggested_energy_sources_with_capacity_overrides(
 ) -> tuple[dict[str, object], ...]:
     if not capacity_overrides:
         return suggested_sources
-    known_source_ids = {
+    _validate_capacity_overrides(suggested_sources, capacity_overrides)
+    return tuple(
+        _source_with_capacity_override(dict(source), capacity_overrides)
+        for source in suggested_sources
+    )
+
+
+def existing_auto_energy_source_ids_from_suggestions(
+    suggested_sources: tuple[dict[str, object], ...],
+) -> set[str]:
+    return {
         str(source.get("source_id", "")).strip()
         for source in suggested_sources
         if str(source.get("source_id", "")).strip()
     }
-    unknown_source_ids = sorted(source_id for source_id in capacity_overrides if source_id not in known_source_ids)
-    if unknown_source_ids:
-        raise ValueError(
-            "energy usable capacity overrides reference unknown source ids: "
-            + ", ".join(unknown_source_ids)
-        )
-    updated_sources: list[dict[str, object]] = []
-    for source in suggested_sources:
-        updated = dict(source)
-        source_id = str(updated.get("source_id", "")).strip()
-        capacity = capacity_overrides.get(source_id)
-        if capacity is not None and str(updated.get("capacityConfigKey", "")).strip():
-            updated["usableCapacityWh"] = capacity
-        updated_sources.append(updated)
-    return tuple(updated_sources)
+
+
+def unknown_capacity_override_source_ids(
+    capacity_overrides: dict[str, float],
+    known_source_ids: set[str],
+) -> list[str]:
+    return sorted(source_id for source_id in capacity_overrides if source_id not in known_source_ids)
+
+
+def _validate_capacity_overrides(
+    suggested_sources: tuple[dict[str, object], ...],
+    capacity_overrides: dict[str, float],
+) -> None:
+    known_source_ids = existing_auto_energy_source_ids_from_suggestions(suggested_sources)
+    unknown_source_ids = unknown_capacity_override_source_ids(capacity_overrides, known_source_ids)
+    if not unknown_source_ids:
+        return
+    raise ValueError(
+        "energy usable capacity overrides reference unknown source ids: "
+        + ", ".join(unknown_source_ids)
+    )
+
+
+def _source_supports_capacity_override(source: dict[str, object]) -> bool:
+    return bool(str(source.get("capacityConfigKey", "")).strip())
+
+
+def _source_with_capacity_override(
+    source: dict[str, object],
+    capacity_overrides: dict[str, float],
+) -> dict[str, object]:
+    if not _source_supports_capacity_override(source):
+        return source
+    capacity = capacity_overrides.get(str(source.get("source_id", "")).strip())
+    if capacity is not None:
+        source["usableCapacityWh"] = capacity
+    return source
 
 
 def validate_unique_suggested_energy_sources(
@@ -224,18 +277,19 @@ def suggested_energy_assignments(
     return ordered
 
 
-def build_suggested_energy_merge(
-    config_path: Path,
+def suggested_energy_capacity_follow_up(
     suggested_sources: tuple[dict[str, object], ...],
-) -> tuple[dict[str, object] | None, dict[str, str]]:
-    if not suggested_sources:
-        return None, {}
-    existing_assignments = existing_auto_energy_assignments(config_path)
-    existing_ids = existing_source_ids_from_assignments(existing_assignments)
-    merged_ids = merge_energy_source_ids(existing_ids, suggested_sources)
-    capacity_follow_up = tuple(
+) -> tuple[dict[str, object], ...]:
+    return tuple(
         item for item in (energy_source_capacity_follow_up(source) for source in suggested_sources) if item is not None
     )
+
+
+def suggested_energy_merge_lines(
+    merged_ids: tuple[str, ...],
+    suggested_sources: tuple[dict[str, object], ...],
+    capacity_follow_up: tuple[dict[str, object], ...],
+) -> list[str]:
     merge_lines = [
         "# Merge these lines into the main config when you want the suggested external energy source enabled.",
         "AutoUseCombinedBatterySoc=1",
@@ -247,6 +301,20 @@ def build_suggested_energy_merge(
         merge_lines.append("# Optional but recommended for weighted combined SOC:")
         for item in capacity_follow_up:
             merge_lines.append(f"# {item['config_key']}={item['placeholder']}")
+    return merge_lines
+
+
+def build_suggested_energy_merge(
+    config_path: Path,
+    suggested_sources: tuple[dict[str, object], ...],
+) -> tuple[dict[str, object] | None, dict[str, str]]:
+    if not suggested_sources:
+        return None, {}
+    existing_assignments = existing_auto_energy_assignments(config_path)
+    existing_ids = existing_source_ids_from_assignments(existing_assignments)
+    merged_ids = merge_energy_source_ids(existing_ids, suggested_sources)
+    capacity_follow_up = suggested_energy_capacity_follow_up(suggested_sources)
+    merge_lines = suggested_energy_merge_lines(merged_ids, suggested_sources, capacity_follow_up)
     merge_block = "\n".join(merge_lines)
     merge_payload: dict[str, object] = {
         "existing_source_ids": list(existing_ids),
@@ -260,6 +328,31 @@ def build_suggested_energy_merge(
     return merge_payload, {"wizard-auto-energy-merge.ini": merge_block + "\n"}
 
 
+def _structured_energy_source_line(raw_line: str, prefix: str) -> str | None:
+    line = raw_line.strip()
+    if not line or line.startswith("#") or not line.startswith(prefix) or "=" not in line:
+        return None
+    return line
+
+
+def _structured_energy_source_value(field_name: str, raw_value: str) -> object:
+    if field_name not in {"Port", "UnitId"}:
+        return raw_value.strip()
+    try:
+        return int(raw_value.strip())
+    except ValueError:
+        return raw_value.strip()
+
+
+def _structured_energy_source_field(raw_line: str, prefix: str) -> tuple[str, object] | None:
+    line = _structured_energy_source_line(raw_line, prefix)
+    if line is None:
+        return None
+    key, value = line.split("=", 1)
+    field_name = key[len(prefix) :]
+    return field_name[0].lower() + field_name[1:], _structured_energy_source_value(field_name, value)
+
+
 def structured_energy_source_from_block(
     source_id: str,
     config_snippet: str,
@@ -267,18 +360,11 @@ def structured_energy_source_from_block(
     fields: dict[str, object] = {"source_id": source_id}
     prefix = f"AutoEnergySource.{source_id}."
     for raw_line in config_snippet.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or not line.startswith(prefix) or "=" not in line:
+        parsed = _structured_energy_source_field(raw_line, prefix)
+        if parsed is None:
             continue
-        key, value = line.split("=", 1)
-        field_name = key[len(prefix) :]
-        parsed_value: object = value.strip()
-        if field_name in {"Port", "UnitId"}:
-            try:
-                parsed_value = int(str(parsed_value))
-            except ValueError:
-                pass
-        fields[field_name[0].lower() + field_name[1:]] = parsed_value
+        field_name, parsed_value = parsed
+        fields[field_name] = parsed_value
     return fields
 
 

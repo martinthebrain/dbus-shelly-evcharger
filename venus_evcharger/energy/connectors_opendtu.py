@@ -34,20 +34,51 @@ class OpenDtuEnergySourceSettings:
     max_data_age_seconds: float
 
 
-def _opendtu_energy_source_snapshot(owner: Any, source: EnergySourceDefinition, now: float) -> EnergySourceSnapshot:
-    runtime = _runtime_owner(owner)
-    settings = _opendtu_energy_source_settings(runtime, source)
-    client = TemplateHttpBackendBase(
+def _opendtu_snapshot_client(runtime: Any, settings: OpenDtuEnergySourceSettings) -> TemplateHttpBackendBase:
+    return TemplateHttpBackendBase(
         runtime,
         settings.timeout_seconds,
         auth_settings=settings.auth_settings,
     )
-    payload = client._perform_request("GET", settings.status_url)
+
+
+def _opendtu_snapshot_payload(client: TemplateHttpBackendBase, settings: OpenDtuEnergySourceSettings) -> dict[str, object]:
+    return client._perform_request("GET", settings.status_url)
+
+
+def _opendtu_online_inverters(
+    inverters: tuple[dict[str, object], ...],
+    max_data_age_seconds: float,
+) -> tuple[dict[str, object], ...]:
+    return tuple(
+        inverter
+        for inverter in inverters
+        if _opendtu_inverter_online(inverter, max_data_age_seconds)
+    )
+
+
+def _opendtu_snapshot_confidence(
+    inverters: tuple[dict[str, object], ...],
+    max_data_age_seconds: float,
+    plausible_idle: bool,
+) -> tuple[bool, float]:
+    filtered_count = len(inverters)
+    reachable_count = len(_opendtu_online_inverters(inverters, max_data_age_seconds))
+    online = bool(filtered_count) and (bool(reachable_count) or plausible_idle)
+    confidence = 0.0 if filtered_count <= 0 else float(reachable_count) / float(filtered_count)
+    if plausible_idle:
+        confidence = max(confidence, 1.0)
+    return online, confidence
+
+
+def _opendtu_energy_source_snapshot(owner: Any, source: EnergySourceDefinition, now: float) -> EnergySourceSnapshot:
+    runtime = _runtime_owner(owner)
+    settings = _opendtu_energy_source_settings(runtime, source)
+    client = _opendtu_snapshot_client(runtime, settings)
+    payload = _opendtu_snapshot_payload(client, settings)
     inverters = _opendtu_selected_inverters(payload, settings, client)
     ac_power = _opendtu_total_ac_power(payload, inverters, settings.serial_filter)
     pv_input_power = _opendtu_total_dc_power(inverters)
-    filtered_count = len(inverters)
-    reachable_count = sum(1 for inverter in inverters if _opendtu_inverter_online(inverter, settings.max_data_age_seconds))
     plausible_idle = _opendtu_plausible_idle_snapshot(
         payload,
         inverters,
@@ -56,10 +87,7 @@ def _opendtu_energy_source_snapshot(owner: Any, source: EnergySourceDefinition, 
         max_data_age_seconds=settings.max_data_age_seconds,
         allow_unreachable_idle=_energy_source_allows_unreachable_idle(source),
     )
-    online = filtered_count > 0 and (reachable_count > 0 or plausible_idle)
-    confidence = 0.0 if filtered_count <= 0 else float(reachable_count) / float(filtered_count)
-    if plausible_idle:
-        confidence = max(confidence, 1.0)
+    online, confidence = _opendtu_snapshot_confidence(inverters, settings.max_data_age_seconds, plausible_idle)
     return EnergySourceSnapshot(
         source_id=source.source_id,
         role=source.role,
@@ -81,6 +109,17 @@ def _opendtu_source_name(source: EnergySourceDefinition, settings: OpenDtuEnergy
     return source.config_path or source.source_id
 
 
+def _opendtu_timeout_seconds(runtime: Any, adapter: Any) -> float:
+    default_timeout = float(getattr(runtime, "shelly_request_timeout_seconds", 2.0) or 2.0)
+    timeout = finite_float_or_none(adapter.get("RequestTimeoutSeconds", str(default_timeout)))
+    return default_timeout if timeout is None or timeout <= 0.0 else float(timeout)
+
+
+def _opendtu_max_data_age_seconds(opendtu: Any) -> float:
+    max_data_age = finite_float_or_none(opendtu.get("MaxDataAgeSeconds", "600"))
+    return 600.0 if max_data_age is None or max_data_age < 0.0 else float(max_data_age)
+
+
 def _opendtu_energy_source_settings(runtime: Any, source: EnergySourceDefinition) -> OpenDtuEnergySourceSettings:
     cache = cast(
         dict[str, OpenDtuEnergySourceSettings],
@@ -96,17 +135,14 @@ def _opendtu_energy_source_settings(runtime: Any, source: EnergySourceDefinition
     adapter = config_section(parser, "Adapter")
     opendtu = config_section(parser, "OpenDTU")
     base_url = str(adapter.get("BaseUrl", "")).strip()
-    default_timeout = float(getattr(runtime, "shelly_request_timeout_seconds", 2.0) or 2.0)
-    timeout = finite_float_or_none(adapter.get("RequestTimeoutSeconds", str(default_timeout)))
-    max_data_age = finite_float_or_none(opendtu.get("MaxDataAgeSeconds", "600"))
     settings = OpenDtuEnergySourceSettings(
         base_url=base_url,
         auth_settings=load_template_auth_settings(adapter),
-        timeout_seconds=default_timeout if timeout is None or timeout <= 0.0 else float(timeout),
+        timeout_seconds=_opendtu_timeout_seconds(runtime, adapter),
         status_url=resolved_url(base_url, opendtu.get("StatusUrl", "/api/livedata/status")),
         inverter_status_url=resolved_url(base_url, opendtu.get("InverterStatusUrl", "/api/livedata/status?inv=${serial}")),
         serial_filter=_csv_filter(opendtu.get("InverterSerials", "")),
-        max_data_age_seconds=600.0 if max_data_age is None or max_data_age < 0.0 else float(max_data_age),
+        max_data_age_seconds=_opendtu_max_data_age_seconds(opendtu),
     )
     _validate_opendtu_energy_source_settings(source, settings)
     cache[cache_key] = settings
@@ -126,23 +162,54 @@ def _opendtu_selected_inverters(
     raw_inverters = payload.get("inverters")
     if not isinstance(raw_inverters, list):
         return ()
-    selected: list[dict[str, object]] = []
-    for raw_inverter in raw_inverters:
-        if not isinstance(raw_inverter, dict):
-            continue
-        serial = str(raw_inverter.get("serial", "")).strip()
-        if settings.serial_filter and serial not in settings.serial_filter:
-            continue
-        if "AC" in raw_inverter or _opendtu_unreachable_idle_stub(raw_inverter):
-            selected.append(cast(dict[str, object], raw_inverter))
-            continue
-        if not serial:
-            continue
-        detail = client._perform_request("GET", settings.inverter_status_url, context={"serial": serial})
-        detail_inverter = _opendtu_detail_inverter(detail)
-        if detail_inverter is not None:
-            selected.append(detail_inverter)
-    return tuple(selected)
+    filtered = _opendtu_filtered_raw_inverters(raw_inverters, settings.serial_filter)
+    return tuple(
+        inverter
+        for inverter in (
+            _opendtu_selected_inverter(raw_inverter, settings, client)
+            for raw_inverter in filtered
+        )
+        if inverter is not None
+    )
+
+
+def _opendtu_filtered_raw_inverters(
+    raw_inverters: list[object],
+    serial_filter: tuple[str, ...],
+) -> tuple[dict[str, object], ...]:
+    return tuple(
+        raw_inverter
+        for raw_inverter in raw_inverters
+        if _opendtu_filtered_raw_inverter(raw_inverter, serial_filter)
+    )
+
+
+def _opendtu_filtered_raw_inverter(
+    raw_inverter: object,
+    serial_filter: tuple[str, ...],
+) -> bool:
+    return isinstance(raw_inverter, dict) and _opendtu_matches_serial_filter(
+        raw_inverter, serial_filter
+    )
+
+
+def _opendtu_matches_serial_filter(inverter: dict[str, object], serial_filter: tuple[str, ...]) -> bool:
+    serial = str(inverter.get("serial", "")).strip()
+    return not serial_filter or serial in serial_filter
+
+
+def _opendtu_selected_inverter(
+    raw_inverter: dict[str, object],
+    settings: OpenDtuEnergySourceSettings,
+    client: TemplateHttpBackendBase,
+) -> dict[str, object] | None:
+    serial = str(raw_inverter.get("serial", "")).strip()
+    if "AC" in raw_inverter or _opendtu_unreachable_idle_stub(raw_inverter):
+        return raw_inverter
+    if not serial:
+        return None
+    detail = client._perform_request("GET", settings.inverter_status_url, context={"serial": serial})
+    return _opendtu_detail_inverter(detail)
 
 
 def _opendtu_detail_inverter(payload: dict[str, object]) -> dict[str, object] | None:
@@ -159,12 +226,21 @@ def _opendtu_total_ac_power(
     serial_filter: tuple[str, ...],
 ) -> float | None:
     if serial_filter:
-        return _sum_optional(_opendtu_ac_power(inverter) for inverter in inverters)
+        return _opendtu_summed_ac_power(inverters)
+    total_power = _opendtu_payload_total_power(payload)
+    if total_power is not None:
+        return total_power
+    return _opendtu_summed_ac_power(inverters)
+
+
+def _opendtu_payload_total_power(payload: dict[str, object]) -> float | None:
     total = payload.get("total")
-    if isinstance(total, dict):
-        total_power = _opendtu_metric_value(total, "Power")
-        if total_power is not None:
-            return total_power
+    if not isinstance(total, dict):
+        return None
+    return _opendtu_metric_value(total, "Power")
+
+
+def _opendtu_summed_ac_power(inverters: tuple[dict[str, object], ...]) -> float | None:
     return _sum_optional(_opendtu_ac_power(inverter) for inverter in inverters)
 
 
@@ -176,6 +252,22 @@ def _opendtu_any_producing(inverters: tuple[dict[str, object], ...]) -> bool:
     return any(bool(inverter.get("producing")) for inverter in inverters)
 
 
+def _opendtu_has_online_inverter(
+    inverters: tuple[dict[str, object], ...],
+    max_data_age_seconds: float,
+) -> bool:
+    return any(_opendtu_inverter_online(inverter, max_data_age_seconds) for inverter in inverters)
+
+
+def _opendtu_has_radio_problem(payload: dict[str, object]) -> bool:
+    hints = payload.get("hints")
+    return isinstance(hints, dict) and bool(hints.get("radio_problem"))
+
+
+def _opendtu_all_unreachable_idle_stubs(inverters: tuple[dict[str, object], ...]) -> bool:
+    return all(_opendtu_unreachable_idle_stub(inverter) for inverter in inverters)
+
+
 def _opendtu_plausible_idle_snapshot(
     payload: dict[str, object],
     inverters: tuple[dict[str, object], ...],
@@ -185,16 +277,17 @@ def _opendtu_plausible_idle_snapshot(
     max_data_age_seconds: float,
     allow_unreachable_idle: bool,
 ) -> bool:
-    if not allow_unreachable_idle or not inverters or _opendtu_any_producing(inverters):
-        return False
-    if any(_opendtu_inverter_online(inverter, max_data_age_seconds) for inverter in inverters):
-        return False
-    if not _opendtu_zeroish_power(ac_power_w) or not _opendtu_zeroish_power(pv_input_power_w):
-        return False
-    hints = payload.get("hints")
-    if isinstance(hints, dict) and bool(hints.get("radio_problem")):
-        return False
-    return all(_opendtu_unreachable_idle_stub(inverter) for inverter in inverters)
+    checks = (
+        allow_unreachable_idle,
+        bool(inverters),
+        not _opendtu_any_producing(inverters),
+        not _opendtu_has_online_inverter(inverters, max_data_age_seconds),
+        _opendtu_zeroish_power(ac_power_w),
+        _opendtu_zeroish_power(pv_input_power_w),
+        not _opendtu_has_radio_problem(payload),
+        _opendtu_all_unreachable_idle_stubs(inverters),
+    )
+    return all(checks)
 
 
 def _opendtu_unreachable_idle_stub(inverter: dict[str, object]) -> bool:
@@ -251,4 +344,3 @@ def _opendtu_metric_value(container: dict[str, object], key: str) -> float | Non
 
 def _opendtu_zeroish_power(value: float | None) -> bool:
     return value is None or abs(float(value)) <= 0.5
-

@@ -94,23 +94,64 @@ class _AutoInputHelperSourceDbusMixin:
         if isinstance(getattr(self, "_auto_energy_last_scan", None), dict):
             self._auto_energy_last_scan.pop("primary_battery", None)
 
+    def _configured_primary_energy_sources(self: Any) -> tuple[EnergySourceDefinition, ...]:
+        return tuple(getattr(self, "auto_energy_sources", ()) or ())
+
+    @staticmethod
+    def _primary_energy_source_id() -> str:
+        return "primary_battery"
+
+    @staticmethod
+    def _primary_energy_source_role() -> str:
+        return "battery"
+
+    def _primary_energy_service_name(self: Any) -> str:
+        return str(getattr(self, "auto_battery_service", "") or "")
+
+    def _primary_energy_service_prefix(self: Any) -> str:
+        return str(getattr(self, "auto_battery_service_prefix", "") or "")
+
+    def _primary_energy_soc_path(self: Any) -> str:
+        return str(getattr(self, "auto_battery_soc_path", "/Soc") or "/Soc")
+
+    def _primary_energy_capacity_wh(self: Any) -> Any:
+        return getattr(self, "auto_battery_capacity_wh", None)
+
+    def _primary_energy_battery_power_path(self: Any) -> str:
+        return str(getattr(self, "auto_battery_power_path", "") or "")
+
+    def _primary_energy_ac_power_path(self: Any) -> str:
+        return str(getattr(self, "auto_battery_ac_power_path", "") or "")
+
+    def _primary_energy_pv_power_path(self: Any) -> str:
+        return str(getattr(self, "auto_battery_pv_power_path", "") or "")
+
+    def _primary_energy_grid_interaction_path(self: Any) -> str:
+        return str(getattr(self, "auto_battery_grid_interaction_path", "") or "")
+
+    def _primary_energy_operating_mode_path(self: Any) -> str:
+        return str(getattr(self, "auto_battery_operating_mode_path", "") or "")
+
+    def _default_primary_energy_source(self: Any) -> EnergySourceDefinition:
+        return EnergySourceDefinition(
+            source_id=self._primary_energy_source_id(),
+            role=self._primary_energy_source_role(),
+            service_name=self._primary_energy_service_name(),
+            service_prefix=self._primary_energy_service_prefix(),
+            soc_path=self._primary_energy_soc_path(),
+            usable_capacity_wh=self._primary_energy_capacity_wh(),
+            battery_power_path=self._primary_energy_battery_power_path(),
+            ac_power_path=self._primary_energy_ac_power_path(),
+            pv_power_path=self._primary_energy_pv_power_path(),
+            grid_interaction_path=self._primary_energy_grid_interaction_path(),
+            operating_mode_path=self._primary_energy_operating_mode_path(),
+        )
+
     def _primary_energy_source(self: Any) -> EnergySourceDefinition:
-        sources = tuple(getattr(self, "auto_energy_sources", ()) or ())
+        sources = self._configured_primary_energy_sources()
         if sources:
             return cast(EnergySourceDefinition, sources[0])
-        return EnergySourceDefinition(
-            source_id="primary_battery",
-            role="battery",
-            service_name=str(getattr(self, "auto_battery_service", "") or ""),
-            service_prefix=str(getattr(self, "auto_battery_service_prefix", "") or ""),
-            soc_path=str(getattr(self, "auto_battery_soc_path", "/Soc") or "/Soc"),
-            usable_capacity_wh=getattr(self, "auto_battery_capacity_wh", None),
-            battery_power_path=str(getattr(self, "auto_battery_power_path", "") or ""),
-            ac_power_path=str(getattr(self, "auto_battery_ac_power_path", "") or ""),
-            pv_power_path=str(getattr(self, "auto_battery_pv_power_path", "") or ""),
-            grid_interaction_path=str(getattr(self, "auto_battery_grid_interaction_path", "") or ""),
-            operating_mode_path=str(getattr(self, "auto_battery_operating_mode_path", "") or ""),
-        )
+        return self._default_primary_energy_source()
 
     def _battery_service_has_soc(self: Any, service_name: str) -> bool:
         try:
@@ -202,16 +243,13 @@ class _AutoInputHelperSourceDbusMixin:
             return cast(str | None, cached_service)
         return None
 
-    def _resolve_energy_source_service(self: Any, source: EnergySourceDefinition) -> str:
-        now = time.time()
-        if source.source_id == self._primary_energy_source().source_id:
-            return cast(str, self._resolve_auto_battery_service())
-        if source.service_name and self._energy_source_has_readable_data(source, source.service_name):
-            self._cache_energy_service(source.source_id, source.service_name, now)
-            return source.service_name
-        cached_service = self._cached_energy_service(source.source_id, now)
-        if cached_service is not None:
-            return cast(str, cached_service)
+    def _configured_energy_source_service(self: Any, source: EnergySourceDefinition, now: float) -> str | None:
+        if not source.service_name or not self._energy_source_has_readable_data(source, source.service_name):
+            return None
+        self._cache_energy_service(source.source_id, source.service_name, now)
+        return source.service_name
+
+    def _discovered_energy_source_service(self: Any, source: EnergySourceDefinition, now: float) -> str:
         if not source.service_prefix:
             raise ValueError(f"No readable DBus service configured for energy source '{source.source_id}'")
         service_name = first_matching_prefixed_service(
@@ -224,6 +262,18 @@ class _AutoInputHelperSourceDbusMixin:
         self._cache_energy_service(source.source_id, service_name, now)
         return service_name
 
+    def _resolve_energy_source_service(self: Any, source: EnergySourceDefinition) -> str:
+        now = time.time()
+        if source.source_id == self._primary_energy_source().source_id:
+            return cast(str, self._resolve_auto_battery_service())
+        configured_service = self._configured_energy_source_service(source, now)
+        if configured_service is not None:
+            return configured_service
+        cached_service = self._cached_energy_service(source.source_id, now)
+        if cached_service is not None:
+            return cast(str, cached_service)
+        return self._discovered_energy_source_service(source, now)
+
     def _read_optional_energy_value(self: Any, service_name: str, path: str) -> float | None:
         if not path:
             return None
@@ -235,37 +285,65 @@ class _AutoInputHelperSourceDbusMixin:
         value = self._get_dbus_value(service_name, path)
         return "" if value is None else str(value).strip()
 
-    def _dbus_energy_source_snapshot(self: Any, source: EnergySourceDefinition, now: float) -> EnergySourceSnapshot:
+    def _read_dbus_energy_source_fields(
+        self: Any,
+        source: EnergySourceDefinition,
+        service_name: str,
+    ) -> tuple[float | None, float | None, float | None, float | None, float | None, str]:
+        return (
+            self._read_optional_energy_value(service_name, source.soc_path),
+            self._read_optional_energy_value(service_name, source.battery_power_path),
+            self._read_optional_energy_value(service_name, source.ac_power_path),
+            self._read_optional_energy_value(service_name, source.pv_power_path),
+            self._read_optional_energy_value(service_name, source.grid_interaction_path),
+            self._read_optional_energy_text(service_name, source.operating_mode_path),
+        )
+
+    def _read_dbus_energy_source_fields_with_primary_retry(
+        self: Any,
+        source: EnergySourceDefinition,
+    ) -> tuple[str, tuple[float | None, float | None, float | None, float | None, float | None, str]]:
         service_name = self._resolve_energy_source_service(source)
         try:
-            soc_value = self._read_optional_energy_value(service_name, source.soc_path)
-            net_battery_power = self._read_optional_energy_value(service_name, source.battery_power_path)
-            ac_power = self._read_optional_energy_value(service_name, source.ac_power_path)
-            pv_input_power = self._read_optional_energy_value(service_name, source.pv_power_path)
-            grid_interaction = self._read_optional_energy_value(service_name, source.grid_interaction_path)
-            operating_mode = self._read_optional_energy_text(service_name, source.operating_mode_path)
+            return service_name, self._read_dbus_energy_source_fields(source, service_name)
         except Exception:
             if source.source_id != self._primary_energy_source().source_id:
                 raise
             self._invalidate_auto_battery_service()
             service_name = self._resolve_energy_source_service(source)
-            soc_value = self._read_optional_energy_value(service_name, source.soc_path)
-            net_battery_power = self._read_optional_energy_value(service_name, source.battery_power_path)
-            ac_power = self._read_optional_energy_value(service_name, source.ac_power_path)
-            pv_input_power = self._read_optional_energy_value(service_name, source.pv_power_path)
-            grid_interaction = self._read_optional_energy_value(service_name, source.grid_interaction_path)
-            operating_mode = self._read_optional_energy_text(service_name, source.operating_mode_path)
-        if soc_value is not None and not 0.0 <= soc_value <= 100.0:
-            self._warning_throttled(
-                "auto-helper-battery-soc-invalid",
-                max(5.0, self.auto_battery_scan_interval_seconds or 5.0),
-                "Auto input helper ignored out-of-range battery SOC %s from %s %s",
-                soc_value,
-                service_name,
-                source.soc_path,
-            )
-            self._delay_source_retry("battery")
-            soc_value = None
+            return service_name, self._read_dbus_energy_source_fields(source, service_name)
+
+    def _validated_energy_source_soc(
+        self: Any,
+        source: EnergySourceDefinition,
+        service_name: str,
+        soc_value: float | None,
+    ) -> float | None:
+        if soc_value is None or 0.0 <= soc_value <= 100.0:
+            return soc_value
+        self._warning_throttled(
+            "auto-helper-battery-soc-invalid",
+            max(5.0, self.auto_battery_scan_interval_seconds or 5.0),
+            "Auto input helper ignored out-of-range battery SOC %s from %s %s",
+            soc_value,
+            service_name,
+            source.soc_path,
+        )
+        self._delay_source_retry("battery")
+        return None
+
+    @staticmethod
+    def _dbus_energy_source_snapshot_payload(
+        source: EnergySourceDefinition,
+        service_name: str,
+        soc_value: float | None,
+        net_battery_power: float | None,
+        ac_power: float | None,
+        pv_input_power: float | None,
+        grid_interaction: float | None,
+        operating_mode: str,
+        now: float,
+    ) -> EnergySourceSnapshot:
         return EnergySourceSnapshot(
             source_id=source.source_id,
             role=source.role,
@@ -280,4 +358,27 @@ class _AutoInputHelperSourceDbusMixin:
             online=True,
             confidence=1.0,
             captured_at=now,
+        )
+
+    def _dbus_energy_source_snapshot(self: Any, source: EnergySourceDefinition, now: float) -> EnergySourceSnapshot:
+        service_name, fields = self._read_dbus_energy_source_fields_with_primary_retry(source)
+        (
+            soc_value,
+            net_battery_power,
+            ac_power,
+            pv_input_power,
+            grid_interaction,
+            operating_mode,
+        ) = fields
+        validated_soc = self._validated_energy_source_soc(source, service_name, soc_value)
+        return self._dbus_energy_source_snapshot_payload(
+            source,
+            service_name,
+            validated_soc,
+            net_battery_power,
+            ac_power,
+            pv_input_power,
+            grid_interaction,
+            operating_mode,
+            now,
         )

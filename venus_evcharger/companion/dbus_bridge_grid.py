@@ -49,19 +49,17 @@ class _EnergyCompanionDbusBridgeGridMixin:
                 return cast(dict[str, Any], source)
         return None
 
-    def _grid_source_values(self, source: Mapping[str, Any], now: float) -> dict[str, Any]:
-        source_id = str(source.get("source_id", "")).strip() or "source"
-        held = self._resolved_grid_value(
-            f"source-grid:{source_id}",
-            raw_value=source.get("grid_interaction_w"),
-            online=bool(source.get("online", False)),
-            now=now,
-            hold_seconds=float(getattr(self.service, "companion_source_grid_hold_seconds", 0.0) or 0.0),
-            smoothing_alpha=float(getattr(self.service, "companion_source_grid_smoothing_alpha", 1.0) or 1.0),
-            smoothing_max_jump_watts=float(
+    def _grid_source_hold_config(self) -> dict[str, float]:
+        return {
+            "hold_seconds": float(getattr(self.service, "companion_source_grid_hold_seconds", 0.0) or 0.0),
+            "smoothing_alpha": float(getattr(self.service, "companion_source_grid_smoothing_alpha", 1.0) or 1.0),
+            "smoothing_max_jump_watts": float(
                 getattr(self.service, "companion_source_grid_smoothing_max_jump_watts", 0.0) or 0.0
             ),
-        )
+        }
+
+    @staticmethod
+    def _grid_source_payload(held: Mapping[str, Any]) -> dict[str, Any]:
         value = float(held["value"])
         return {
             "/Connected": 1 if held["connected"] else 0,
@@ -70,6 +68,59 @@ class _EnergyCompanionDbusBridgeGridMixin:
             "/Ac/L2/Power": 0.0,
             "/Ac/L3/Power": 0.0,
         }
+
+    def _grid_source_values(self, source: Mapping[str, Any], now: float) -> dict[str, Any]:
+        source_id = str(source.get("source_id", "")).strip() or "source"
+        hold_config = self._grid_source_hold_config()
+        held = self._resolved_grid_value(
+            f"source-grid:{source_id}",
+            raw_value=source.get("grid_interaction_w"),
+            online=bool(source.get("online", False)),
+            now=now,
+            hold_seconds=hold_config["hold_seconds"],
+            smoothing_alpha=hold_config["smoothing_alpha"],
+            smoothing_max_jump_watts=hold_config["smoothing_max_jump_watts"],
+        )
+        return self._grid_source_payload(held)
+
+    @staticmethod
+    def _grid_numeric_value(raw_value: Any) -> float | None:
+        return float(raw_value) if isinstance(raw_value, (int, float)) else None
+
+    @staticmethod
+    def _grid_normalized_alpha(smoothing_alpha: float) -> float:
+        return min(1.0, max(0.0, float(smoothing_alpha)))
+
+    @staticmethod
+    def _grid_smoothed_value(
+        numeric_value: float,
+        previous_value: Any,
+        normalized_alpha: float,
+        smoothing_max_jump_watts: float,
+    ) -> float:
+        if not isinstance(previous_value, (int, float)) or not 0.0 < normalized_alpha < 1.0:
+            return float(numeric_value)
+        delta_watts = abs(float(numeric_value) - float(previous_value))
+        if float(smoothing_max_jump_watts) > 0.0 and delta_watts > float(smoothing_max_jump_watts):
+            return float(numeric_value)
+        return float((normalized_alpha * numeric_value) + ((1.0 - normalized_alpha) * float(previous_value)))
+
+    @staticmethod
+    def _grid_resolved_payload(value: float, connected: bool, last_good_at: float | None) -> dict[str, Any]:
+        return {
+            "value": float(value),
+            "connected": bool(connected),
+            "last_good_at": last_good_at,
+        }
+
+    @staticmethod
+    def _grid_within_hold_window(cached: Mapping[str, Any], now: float, hold_seconds: float) -> bool:
+        last_good_at = cached.get("last_good_at")
+        return bool(
+            isinstance(last_good_at, (int, float))
+            and hold_seconds > 0.0
+            and float(now) - float(last_good_at) <= float(hold_seconds)
+        )
 
     def _resolved_grid_value(
         self,
@@ -83,35 +134,20 @@ class _EnergyCompanionDbusBridgeGridMixin:
         smoothing_max_jump_watts: float,
     ) -> dict[str, Any]:
         cached = self._grid_hold_state.get(state_key, {})
-        numeric_value = float(raw_value) if isinstance(raw_value, (int, float)) else None
-        normalized_alpha = min(1.0, max(0.0, float(smoothing_alpha)))
+        numeric_value = self._grid_numeric_value(raw_value)
+        normalized_alpha = self._grid_normalized_alpha(smoothing_alpha)
         if numeric_value is not None:
-            previous_value = cached.get("value")
-            if isinstance(previous_value, (int, float)) and 0.0 < normalized_alpha < 1.0:
-                delta_watts = abs(float(numeric_value) - float(previous_value))
-                if float(smoothing_max_jump_watts) <= 0.0 or delta_watts <= float(smoothing_max_jump_watts):
-                    numeric_value = (normalized_alpha * numeric_value) + (
-                        (1.0 - normalized_alpha) * float(previous_value)
-                    )
-            resolved = {
-                "value": float(numeric_value),
-                "connected": bool(online),
-                "last_good_at": float(now),
-            }
+            smoothed_value = self._grid_smoothed_value(
+                numeric_value,
+                cached.get("value"),
+                normalized_alpha,
+                smoothing_max_jump_watts,
+            )
+            resolved = self._grid_resolved_payload(smoothed_value, bool(online), float(now))
             self._grid_hold_state[state_key] = resolved
             return resolved
-        last_good_at = cached.get("last_good_at")
-        within_hold = (
-            isinstance(last_good_at, (int, float))
-            and hold_seconds > 0.0
-            and float(now) - float(last_good_at) <= float(hold_seconds)
-        )
-        if within_hold and isinstance(cached.get("value"), (int, float)):
-            held_last_good_at = cast(float, last_good_at)
-            return {
-                "value": float(cached["value"]),
-                "connected": True,
-                "last_good_at": held_last_good_at,
-            }
+        if self._grid_within_hold_window(cached, now, hold_seconds) and isinstance(cached.get("value"), (int, float)):
+            held_last_good_at = cast(float, cached.get("last_good_at"))
+            return self._grid_resolved_payload(float(cached["value"]), True, held_last_good_at)
         self._grid_hold_state.pop(state_key, None)
-        return {"value": 0.0, "connected": False, "last_good_at": None}
+        return self._grid_resolved_payload(0.0, False, None)

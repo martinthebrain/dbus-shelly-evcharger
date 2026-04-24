@@ -79,17 +79,26 @@ def _headroom_limit(
     average_active_power_w: object,
     current_power_w: float | None,
 ) -> float | None:
-    configured = _non_negative_optional_float(configured_limit_power_w)
-    observed = _non_negative_optional_float(observed_max_power_w)
-    average = _non_negative_optional_float(average_active_power_w)
-    current = 0.0 if current_power_w is None else float(current_power_w)
-    if configured is not None:
-        return max(float(configured), current)
-    if observed is not None:
-        return max(float(observed), current)
-    if average is not None:
-        return max(float(average) * 1.25, current)
+    current = _current_headroom_power(current_power_w)
+    for limit in (
+        _non_negative_optional_float(configured_limit_power_w),
+        _non_negative_optional_float(observed_max_power_w),
+        _average_headroom_limit(average_active_power_w),
+    ):
+        if limit is not None:
+            return max(float(limit), current)
     return current if current > 0.0 else None
+
+
+def _current_headroom_power(current_power_w: float | None) -> float:
+    return 0.0 if current_power_w is None else float(current_power_w)
+
+
+def _average_headroom_limit(average_active_power_w: object) -> float | None:
+    average = _non_negative_optional_float(average_active_power_w)
+    if average is None:
+        return None
+    return float(average) * 1.25
 
 
 def _headroom_w(limit_power_w: float | None, current_power_w: float | None) -> float | None:

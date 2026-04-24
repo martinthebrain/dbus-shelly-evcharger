@@ -443,17 +443,9 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
     def clone_worker_snapshot(snapshot: WorkerSnapshot) -> WorkerSnapshot:
         """Copy the worker snapshot so the main loop sees a stable view."""
         cloned = dict(snapshot)
-        if isinstance(cloned.get("pm_status"), dict):
-            cloned["pm_status"] = dict(cloned["pm_status"])
-        if isinstance(cloned.get("battery_sources"), list):
-            cloned["battery_sources"] = [
-                dict(item) if isinstance(item, dict) else item for item in cloned["battery_sources"]
-            ]
-        if isinstance(cloned.get("battery_learning_profiles"), dict):
-            cloned["battery_learning_profiles"] = {
-                str(key): dict(value) if isinstance(value, dict) else value
-                for key, value in cloned["battery_learning_profiles"].items()
-            }
+        _clone_worker_status_payload(cloned)
+        _clone_worker_battery_sources_payload(cloned)
+        _clone_worker_learning_profiles_payload(cloned)
         return cloned
 
     def init_worker_state(self) -> None:
@@ -480,6 +472,30 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
         svc._auto_input_snapshot_mtime_ns = None
         svc._auto_input_snapshot_last_captured_at = None
         svc._auto_input_snapshot_version = None
+
+
+def _clone_worker_status_payload(snapshot: WorkerSnapshot) -> None:
+    pm_status = snapshot.get("pm_status")
+    if isinstance(pm_status, dict):
+        snapshot["pm_status"] = dict(pm_status)
+
+
+def _clone_worker_battery_sources_payload(snapshot: WorkerSnapshot) -> None:
+    battery_sources = snapshot.get("battery_sources")
+    if isinstance(battery_sources, list):
+        snapshot["battery_sources"] = [
+            dict(item) if isinstance(item, dict) else item
+            for item in battery_sources
+        ]
+
+
+def _clone_worker_learning_profiles_payload(snapshot: WorkerSnapshot) -> None:
+    learning_profiles = snapshot.get("battery_learning_profiles")
+    if isinstance(learning_profiles, dict):
+        snapshot["battery_learning_profiles"] = {
+            str(key): dict(value) if isinstance(value, dict) else value
+            for key, value in learning_profiles.items()
+        }
 
 
 __all__ = ["_RuntimeSupportSetupMixin"]

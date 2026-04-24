@@ -107,30 +107,88 @@ def _result_suggested_block_lines(result: WizardResult) -> list[str]:
     return lines
 
 
+def _suggested_energy_source_summary(source: dict[str, object]) -> str:
+    source_id = str(source.get("source_id", "unknown"))
+    profile = str(source.get("profile", ""))
+    config_path = str(source.get("configPath", source.get("config_path", "")))
+    host = str(source.get("host", ""))
+    port = source.get("port")
+    unit_id = source.get("unitId", source.get("unit_id"))
+    summary = f"  - {source_id}: profile={profile}"
+    if config_path:
+        summary += f", config={config_path}"
+    if host:
+        summary += f", host={host}"
+    if port not in (None, ""):
+        summary += f", port={port}"
+    if unit_id not in (None, ""):
+        summary += f", unit_id={unit_id}"
+    return summary
+
+
 def _result_suggested_energy_source_lines(result: WizardResult) -> list[str]:
     if not result.suggested_energy_sources:
         return []
     lines = ["Suggested energy sources:"]
     for source in result.suggested_energy_sources:
-        source_id = str(source.get("source_id", "unknown"))
-        profile = str(source.get("profile", ""))
-        config_path = str(source.get("configPath", source.get("config_path", "")))
-        host = str(source.get("host", ""))
-        port = source.get("port")
-        unit_id = source.get("unitId", source.get("unit_id"))
-        summary = f"  - {source_id}: profile={profile}"
-        if config_path:
-            summary += f", config={config_path}"
-        if host:
-            summary += f", host={host}"
-        if port not in (None, ""):
-            summary += f", port={port}"
-        if unit_id not in (None, ""):
-            summary += f", unit_id={unit_id}"
-        lines.append(summary)
+        lines.append(_suggested_energy_source_summary(source))
         capacity_key = str(source.get("capacityConfigKey", ""))
         if capacity_key:
             lines.append(f"    capacity follow-up: {capacity_key}=<set-me>")
+    return lines
+
+
+def _suggested_energy_merge_capacity_lines(merge: dict[str, object]) -> list[str]:
+    capacity_follow_up = merge.get("capacity_follow_up")
+    if not isinstance(capacity_follow_up, list) or not capacity_follow_up:
+        return []
+    lines = ["  - capacity follow-up:"]
+    for item in capacity_follow_up:
+        config_line = _suggested_energy_merge_capacity_line(item)
+        if config_line is not None:
+            lines.append(config_line)
+    return lines
+
+
+def _suggested_energy_merge_capacity_line(item: object) -> str | None:
+    if not isinstance(item, dict):
+        return None
+    config_key = str(item.get("config_key", "")).strip()
+    if not config_key:
+        return None
+    return f"    {config_key}=<set-me>"
+
+
+def _merged_source_ids_line(merge: dict[str, object]) -> str | None:
+    merged_source_ids = merge.get("merged_source_ids")
+    if not isinstance(merged_source_ids, list) or not merged_source_ids:
+        return None
+    return "  - merged source ids: " + ",".join(str(item) for item in merged_source_ids)
+
+
+def _helper_file_line(merge: dict[str, object]) -> str | None:
+    helper_file = merge.get("helper_file")
+    if isinstance(helper_file, str) and helper_file:
+        return f"  - helper file: {helper_file}"
+    return None
+
+
+def _suggested_energy_merge_block_lines(block: object) -> list[str]:
+    if not isinstance(block, str) or not block.strip():
+        return []
+    return ["  - merge block:", *(f"    {line}" if line else "" for line in block.strip().splitlines())]
+
+
+def _suggested_energy_merge_header_lines(merge: dict[str, object]) -> list[str]:
+    applied_to_config = bool(merge.get("applied_to_config"))
+    lines = ["Suggested AutoEnergy merge:"]
+    merged_source_ids_line = _merged_source_ids_line(merge)
+    if merged_source_ids_line is not None:
+        lines.append(merged_source_ids_line)
+    helper_file_line = _helper_file_line(merge)
+    if helper_file_line is not None:
+        lines.append(helper_file_line)
+    lines.append(f"  - applied to main config: {'yes' if applied_to_config else 'no'}")
     return lines
 
 
@@ -138,27 +196,8 @@ def _result_suggested_energy_merge_lines(result: WizardResult) -> list[str]:
     merge = result.suggested_energy_merge
     if not isinstance(merge, dict):
         return []
-    merged_source_ids = merge.get("merged_source_ids")
-    helper_file = merge.get("helper_file")
-    block = merge.get("merge_block")
-    applied_to_config = bool(merge.get("applied_to_config"))
-    lines = ["Suggested AutoEnergy merge:"]
-    if isinstance(merged_source_ids, list) and merged_source_ids:
-        lines.append("  - merged source ids: " + ",".join(str(item) for item in merged_source_ids))
-    if isinstance(helper_file, str) and helper_file:
-        lines.append(f"  - helper file: {helper_file}")
-    lines.append(f"  - applied to main config: {'yes' if applied_to_config else 'no'}")
-    capacity_follow_up = merge.get("capacity_follow_up")
-    if isinstance(capacity_follow_up, list) and capacity_follow_up:
-        lines.append("  - capacity follow-up:")
-        for item in capacity_follow_up:
-            if not isinstance(item, dict):
-                continue
-            config_key = str(item.get("config_key", "")).strip()
-            if not config_key:
-                continue
-            lines.append(f"    {config_key}=<set-me>")
-    if isinstance(block, str) and block.strip():
-        lines.append("  - merge block:")
-        lines.extend(f"    {line}" if line else "" for line in block.strip().splitlines())
-    return lines
+    return [
+        *_suggested_energy_merge_header_lines(merge),
+        *_suggested_energy_merge_capacity_lines(merge),
+        *_suggested_energy_merge_block_lines(merge.get("merge_block")),
+    ]

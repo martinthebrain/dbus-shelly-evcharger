@@ -210,38 +210,33 @@ class _AutoInputSupervisorSnapshotValidationMixin:
     ) -> dict[str, Any] | None:
         normalized = dict(snapshot)
         normalized["snapshot_version"] = version
-        if not self._normalize_snapshot_fields(
-            path,
-            snapshot,
-            normalized,
-            ("captured_at", "heartbeat_at", "pv_captured_at", "battery_captured_at", "grid_captured_at"),
-            self._coerce_snapshot_timestamp,
-            "timestamp",
-        ):
-            return None
-        if not self._normalize_snapshot_fields(
-            path,
-            snapshot,
-            normalized,
-            ("pv_power", "battery_soc", "grid_power"),
-            self._coerce_snapshot_number,
-            "numeric",
-        ):
-            return None
-        if not self._normalize_snapshot_fields(
-            path,
-            snapshot,
-            normalized,
-            self.OPTIONAL_NUMERIC_FIELDS,
-            self._coerce_snapshot_number,
-            "numeric",
-        ):
-            return None
+        for keys, coercer, label in self._snapshot_normalization_specs():
+            if not self._normalize_snapshot_fields(path, snapshot, normalized, keys, coercer, label):
+                return None
         if not self._normalize_snapshot_count_fields(path, snapshot, normalized):
             return None
         if not self._normalize_snapshot_structured_fields(path, snapshot, normalized):
             return None
         return normalized
+
+    def _snapshot_normalization_specs(self) -> tuple[tuple[tuple[str, ...], Any, str], ...]:
+        return (
+            (
+                ("captured_at", "heartbeat_at", "pv_captured_at", "battery_captured_at", "grid_captured_at"),
+                self._coerce_snapshot_timestamp,
+                "timestamp",
+            ),
+            (
+                ("pv_power", "battery_soc", "grid_power"),
+                self._coerce_snapshot_number,
+                "numeric",
+            ),
+            (
+                self.OPTIONAL_NUMERIC_FIELDS,
+                self._coerce_snapshot_number,
+                "numeric",
+            ),
+        )
 
     def _normalize_snapshot_count_fields(
         self,
@@ -282,34 +277,52 @@ class _AutoInputSupervisorSnapshotValidationMixin:
         snapshot: dict[str, Any],
         normalized: dict[str, Any],
     ) -> bool:
+        battery_sources = self._normalized_snapshot_battery_sources(path, snapshot)
+        if battery_sources is None:
+            return False
+        learning_profiles = self._normalized_snapshot_learning_profiles(path, snapshot)
+        if learning_profiles is None:
+            return False
+        normalized["battery_sources"] = battery_sources
+        normalized["battery_learning_profiles"] = learning_profiles
+        return True
+
+    def _normalized_snapshot_battery_sources(
+        self,
+        path: str,
+        snapshot: dict[str, Any],
+    ) -> list[Any] | None:
         sources = snapshot.get("battery_sources")
         if sources is None:
-            normalized["battery_sources"] = []
-        elif isinstance(sources, list):
-            normalized["battery_sources"] = [dict(item) if isinstance(item, dict) else item for item in sources]
-        else:
-            self._invalid_snapshot(
-                "auto-input-helper-schema-invalid",
-                path,
-                "Auto input helper snapshot %s has invalid battery_sources payload",
-            )
-            return False
+            return []
+        if isinstance(sources, list):
+            return [dict(item) if isinstance(item, dict) else item for item in sources]
+        self._invalid_structured_snapshot_field(path, "battery_sources")
+        return None
+
+    def _normalized_snapshot_learning_profiles(
+        self,
+        path: str,
+        snapshot: dict[str, Any],
+    ) -> dict[str, Any] | None:
         learning_profiles = snapshot.get("battery_learning_profiles")
         if learning_profiles is None:
-            normalized["battery_learning_profiles"] = {}
-        elif isinstance(learning_profiles, dict):
-            normalized["battery_learning_profiles"] = {
+            return {}
+        if isinstance(learning_profiles, dict):
+            return {
                 str(key): dict(value) if isinstance(value, dict) else value
                 for key, value in learning_profiles.items()
             }
-        else:
-            self._invalid_snapshot(
-                "auto-input-helper-schema-invalid",
-                path,
-                "Auto input helper snapshot %s has invalid battery_learning_profiles payload",
-            )
-            return False
-        return True
+        self._invalid_structured_snapshot_field(path, "battery_learning_profiles")
+        return None
+
+    def _invalid_structured_snapshot_field(self, path: str, field_name: str) -> None:
+        self._invalid_snapshot(
+            "auto-input-helper-schema-invalid",
+            path,
+            "Auto input helper snapshot %s has invalid %s payload",
+            field_name,
+        )
 
     def _validate_snapshot_semantics(
         self,

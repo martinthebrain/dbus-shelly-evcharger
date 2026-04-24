@@ -12,19 +12,25 @@ from .recommendation_schema import recommendation_bundle_manifest, recommendatio
 
 
 def _render_payload(args: argparse.Namespace, payload: Mapping[str, object]) -> str:
-    if args.command != "validate-huawei-energy" or str(args.emit) == "json":
+    emit_mode = str(args.emit)
+    if args.command != "validate-huawei-energy" or emit_mode == "json":
         return json.dumps(payload, indent=2, sort_keys=True)
     recommendation = payload.get("recommendation")
     if not isinstance(recommendation, Mapping):
         return json.dumps(payload, indent=2, sort_keys=True)
-    emit_mode = str(args.emit)
-    if emit_mode == "ini":
-        return _render_recommendation_field(recommendation, "config_snippet", payload)
-    if emit_mode == "wizard-hint":
-        return _render_recommendation_field(recommendation, "wizard_hint_block", payload)
-    if emit_mode == "summary":
-        return _render_recommendation_field(recommendation, "summary", payload)
-    return json.dumps(payload, indent=2, sort_keys=True)
+    field_name = _recommendation_emit_field(emit_mode)
+    if field_name is None:
+        return json.dumps(payload, indent=2, sort_keys=True)
+    return _render_recommendation_field(recommendation, field_name, payload)
+
+
+def _recommendation_emit_field(emit_mode: str) -> str | None:
+    emit_fields = {
+        "ini": "config_snippet",
+        "wizard-hint": "wizard_hint_block",
+        "summary": "summary",
+    }
+    return emit_fields.get(emit_mode)
 
 
 def _render_recommendation_field(
@@ -81,10 +87,7 @@ def _write_recommendation_bundle(prefix: str, recommendation: Mapping[str, objec
 def _bundle_source_id_from_recommendation(recommendation: Mapping[str, object]) -> str:
     config_snippet = str(recommendation.get("config_snippet", "") or "")
     for raw_line in config_snippet.splitlines():
-        line = raw_line.strip()
-        if not line.startswith("AutoEnergySource.") or "=" not in line:
-            continue
-        source_id = line[len("AutoEnergySource.") :].split(".", 1)[0].strip()
+        source_id = _bundle_source_id_from_config_line(raw_line)
         if source_id:
             return source_id
     return "huawei"
@@ -93,3 +96,10 @@ def _bundle_source_id_from_recommendation(recommendation: Mapping[str, object]) 
 def _recommendation_text(recommendation: Mapping[str, object], field_name: str) -> str:
     value = recommendation.get(field_name)
     return value if isinstance(value, str) else ""
+
+
+def _bundle_source_id_from_config_line(raw_line: str) -> str:
+    line = raw_line.strip()
+    if not line.startswith("AutoEnergySource.") or "=" not in line:
+        return ""
+    return line[len("AutoEnergySource.") :].split(".", 1)[0].strip()

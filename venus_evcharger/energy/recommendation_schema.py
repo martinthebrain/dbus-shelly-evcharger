@@ -37,29 +37,25 @@ def recommendation_bundle_manifest(
     }
 
 
-def validate_recommendation_bundle_manifest(payload: Mapping[str, object]) -> dict[str, object]:
-    """Validate and normalize one recommendation bundle manifest."""
-    schema_type = str(payload.get("schema_type", "")).strip()
-    if schema_type != RECOMMENDATION_BUNDLE_SCHEMA_TYPE:
-        raise ValueError(f"Unsupported recommendation bundle schema type '{schema_type}'")
-    schema_version = payload.get("schema_version")
-    if schema_version != RECOMMENDATION_BUNDLE_SCHEMA_VERSION:
-        raise ValueError(
-            "Unsupported recommendation bundle schema version "
-            f"'{schema_version}' (expected {RECOMMENDATION_BUNDLE_SCHEMA_VERSION})"
-        )
-    source_id = str(payload.get("source_id", "")).strip()
-    profile = str(payload.get("profile", "")).strip()
-    config_path = str(payload.get("config_path", "")).strip()
+def _manifest_string(payload: Mapping[str, object], key: str) -> str:
+    return str(payload.get(key, "")).strip()
+
+
+def _manifest_required_string(payload: Mapping[str, object], key: str) -> str:
+    value = _manifest_string(payload, key)
+    if value:
+        return value
+    raise ValueError(f"Recommendation bundle manifest is missing {key}")
+
+
+def _manifest_files(payload: Mapping[str, object]) -> Mapping[str, object]:
     files = payload.get("files")
-    if not source_id:
-        raise ValueError("Recommendation bundle manifest is missing source_id")
-    if not profile:
-        raise ValueError("Recommendation bundle manifest is missing profile")
-    if not config_path:
-        raise ValueError("Recommendation bundle manifest is missing config_path")
-    if not isinstance(files, Mapping):
-        raise ValueError("Recommendation bundle manifest is missing files")
+    if isinstance(files, Mapping):
+        return files
+    raise ValueError("Recommendation bundle manifest is missing files")
+
+
+def _normalized_manifest_files(files: Mapping[str, object]) -> dict[str, str]:
     normalized_files = {
         "config_snippet": str(files.get("config_snippet", "")).strip(),
         "wizard_hint": str(files.get("wizard_hint", "")).strip(),
@@ -68,6 +64,24 @@ def validate_recommendation_bundle_manifest(payload: Mapping[str, object]) -> di
     for key, value in normalized_files.items():
         if not value:
             raise ValueError(f"Recommendation bundle manifest is missing files.{key}")
+    return normalized_files
+
+
+def validate_recommendation_bundle_manifest(payload: Mapping[str, object]) -> dict[str, object]:
+    """Validate and normalize one recommendation bundle manifest."""
+    schema_type = _manifest_string(payload, "schema_type")
+    if schema_type != RECOMMENDATION_BUNDLE_SCHEMA_TYPE:
+        raise ValueError(f"Unsupported recommendation bundle schema type '{schema_type}'")
+    schema_version = payload.get("schema_version")
+    if schema_version != RECOMMENDATION_BUNDLE_SCHEMA_VERSION:
+        raise ValueError(
+            "Unsupported recommendation bundle schema version "
+            f"'{schema_version}' (expected {RECOMMENDATION_BUNDLE_SCHEMA_VERSION})"
+        )
+    source_id = _manifest_required_string(payload, "source_id")
+    profile = _manifest_required_string(payload, "profile")
+    config_path = _manifest_required_string(payload, "config_path")
+    normalized_files = _normalized_manifest_files(_manifest_files(payload))
     return {
         "schema_type": RECOMMENDATION_BUNDLE_SCHEMA_TYPE,
         "schema_version": RECOMMENDATION_BUNDLE_SCHEMA_VERSION,
