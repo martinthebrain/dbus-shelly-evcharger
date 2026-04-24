@@ -8,11 +8,85 @@ from tests.bootstrap_install_scripts_cases_common import (
     os,
     subprocess,
     tempfile,
+    UPDATER_HASH,
     UPDATER_SCRIPT,
 )
 
 
 class _BootstrapInstallScriptsInstallerCases(_BootstrapInstallScriptsBase):
+    def test_bootstrap_checked_in_updater_hash_matches_updater_script(self) -> None:
+        expected_hash = hashlib.sha256(UPDATER_SCRIPT.read_bytes()).hexdigest()
+        self.assertEqual(UPDATER_HASH.read_text(encoding="utf-8").split()[0], expected_hash)
+
+    def test_bootstrap_installer_defaults_to_hash_validated_updater_when_manifest_is_unset(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bootstrap_dir = root / "bootstrap"
+            bootstrap_dir.mkdir()
+            target_dir = root / "target"
+            source_dir = root / "source"
+            updater_dir = root / "updater"
+            updater_dir.mkdir()
+
+            (source_dir / "deploy/venus/service_venus_evcharger/log").mkdir(parents=True, exist_ok=True)
+            (source_dir / "venus_evcharger").mkdir(parents=True, exist_ok=True)
+            (source_dir / "scripts/ops").mkdir(parents=True, exist_ok=True)
+
+            for rel_path, content in (
+                ("install.sh", "#!/bin/bash\n"),
+                ("LICENSE", "license\n"),
+                ("README.md", "readme\n"),
+                ("SHELLY_PROFILES.md", "profiles\n"),
+                ("version.txt", "1.2.3\n"),
+                ("venus_evcharger_service.py", "#!/usr/bin/env python3\n"),
+                ("venus_evcharger_auto_input_helper.py", "#!/usr/bin/env python3\n"),
+                ("deploy/venus/boot_venus_evcharger_service.sh", "#!/bin/bash\n"),
+                ("deploy/venus/restart_venus_evcharger_service.sh", "#!/bin/bash\n"),
+                ("deploy/venus/uninstall_venus_evcharger_service.sh", "#!/bin/bash\n"),
+                ("deploy/venus/service_venus_evcharger/run", "#!/bin/sh\n"),
+                ("deploy/venus/service_venus_evcharger/log/run", "#!/bin/sh\n"),
+                ("deploy/venus/config.venus_evcharger.ini", "[DEFAULT]\nHost=template-host\n"),
+                ("venus_evcharger/__init__.py", "# pkg\n"),
+                ("scripts/ops/example.sh", "#!/bin/bash\n"),
+                (
+                    "deploy/venus/install_venus_evcharger_service.sh",
+                    "#!/bin/bash\nprintf 'installed-without-manifest\\n' > \"$(dirname \"$0\")/../../installed.txt\"\n",
+                ),
+            ):
+                path = source_dir / rel_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+
+            bootstrap_copy = bootstrap_dir / "install.sh"
+            bootstrap_copy.write_text(BOOTSTRAP_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+            bootstrap_copy.chmod(0o755)
+
+            updater_copy = updater_dir / "bootstrap_updater.sh"
+            updater_copy.write_text(UPDATER_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+            updater_copy.chmod(0o755)
+            updater_hash = hashlib.sha256(updater_copy.read_bytes()).hexdigest()
+            (updater_dir / "bootstrap_updater.sh.sha256").write_text(
+                f"{updater_hash}  bootstrap_updater.sh\n",
+                encoding="utf-8",
+            )
+
+            subprocess.run(
+                ["bash", str(bootstrap_copy)],
+                check=True,
+                env={
+                    **os.environ,
+                    "VENUS_EVCHARGER_TARGET_DIR": str(target_dir),
+                    "VENUS_EVCHARGER_SOURCE_DIR": str(source_dir),
+                    "VENUS_EVCHARGER_UPDATER_SOURCE": str(updater_copy),
+                },
+            )
+
+            cached_updater = bootstrap_dir / ".venus-evcharger-bootstrap/bootstrap_updater.sh"
+            self.assertTrue(cached_updater.is_file())
+            self.assertEqual(hashlib.sha256(cached_updater.read_bytes()).hexdigest(), updater_hash)
+            self.assertTrue((target_dir / "installed.txt").is_file())
+            self.assertEqual((target_dir / "installed.txt").read_text(encoding="utf-8"), "installed-without-manifest\n")
+
     def test_bootstrap_installer_refreshes_local_updater_and_runs_target_installer(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -334,7 +334,7 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
         svc.software_update_channel = os.environ.get("VENUS_EVCHARGER_CHANNEL", "main")
         svc.software_update_manifest_source = os.environ.get(
             "VENUS_EVCHARGER_MANIFEST_SOURCE",
-            f"https://raw.githubusercontent.com/{svc.software_update_repo_slug}/{svc.software_update_channel}/deploy/venus/bootstrap_manifest.json",
+            "",
         )
         svc.software_update_version_source = os.environ.get(
             "VENUS_EVCHARGER_VERSION_SOURCE",

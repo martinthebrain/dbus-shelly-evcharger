@@ -57,6 +57,20 @@ class TestRuntimeSupportControllerState(RuntimeSupportTestCaseBase):
         with patch("os.path.isfile", return_value=True), patch("builtins.open", side_effect=OSError("no version")):
             self.assertEqual(controller._read_local_version("/tmp/repo"), "")
 
+    def test_runtime_support_defaults_manifest_source_to_empty_unless_overridden(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            service = make_runtime_support_service()
+            controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
+            controller.initialize_runtime_support()
+            self.assertEqual(service.software_update_manifest_source, "")
+
+        manifest_url = "https://example.invalid/bootstrap_manifest.json"
+        with patch.dict(os.environ, {"VENUS_EVCHARGER_MANIFEST_SOURCE": manifest_url}, clear=False):
+            service = make_runtime_support_service()
+            controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
+            controller.initialize_runtime_support()
+            self.assertEqual(service.software_update_manifest_source, manifest_url)
+
     def test_get_system_bus_reuses_cached_bus_until_generation_changes(self) -> None:
         partial_service = SimpleNamespace()
         controller = RuntimeSupportController(partial_service, self._age_zero, self._health_zero)
