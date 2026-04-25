@@ -191,7 +191,6 @@ class _ServiceBootstrapPathMixin(_ComposableControllerMixin):
             except Exception as error:  # pylint: disable=broad-except
                 logging.error("Failed to register path %s: %s", path, error, exc_info=error)
                 raise
-        svc._dbusservice.register()
 
     def _register_management_paths(self) -> None:
         """Register immutable management and identity DBus paths."""

@@ -285,6 +285,15 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
         factory.assert_called_once_with("com.victronenergy.evcharger.http_60", register=False)
         self.assertEqual(service._dbusservice, "dbus-service")
 
+    def test_publish_dbus_service_registers_initialized_dbus_shell(self):
+        dbus_service = MagicMock()
+        service = SimpleNamespace(_dbusservice=dbus_service)
+        controller = self._controller(service)
+
+        controller.publish_dbus_service()
+
+        dbus_service.register.assert_called_once_with()
+
     def test_register_paths_logs_and_reraises_add_path_failures(self):
         class _BrokenDbusService(_FakeDbusService):
             def add_path(self, path, value, **kwargs):

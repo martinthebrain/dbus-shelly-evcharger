@@ -168,19 +168,30 @@ class ServiceBootstrapController(
 
     def initialize_service(self) -> None:
         """Fully initialize the wallbox service instance."""
-        self.load_runtime_configuration()
-        self.initialize_controllers()
-        self.initialize_virtual_state()
-        self.restore_runtime_state()
-        self.initialize_dbus_service()
-        self.apply_device_metadata()
-        self.register_paths()
-        self.start_runtime_loops()
+        bootstrap_steps = (
+            ("load-runtime-configuration", self.load_runtime_configuration),
+            ("initialize-controllers", self.initialize_controllers),
+            ("initialize-virtual-state", self.initialize_virtual_state),
+            ("restore-runtime-state", self.restore_runtime_state),
+            ("apply-device-metadata", self.apply_device_metadata),
+            ("start-runtime-loops", self.start_runtime_loops),
+            ("initialize-dbus-service", self.initialize_dbus_service),
+            ("register-dbus-paths", self.register_paths),
+            ("publish-dbus-service", self.publish_dbus_service),
+        )
+        for step_name, step_func in bootstrap_steps:
+            logging.info("Bootstrap step start: %s", step_name)
+            step_func()
+            logging.info("Bootstrap step complete: %s", step_name)
 
     def initialize_dbus_service(self) -> None:
         """Create the EV charger DBus service using the bootstrap module factory."""
         svc = self.service
         svc._dbusservice = VeDbusService(f"{svc.service_name}.http_{svc.deviceinstance}", register=False)
+
+    def publish_dbus_service(self) -> None:
+        """Publish the DBus service only after the full bootstrap sequence completed."""
+        self.service._dbusservice.register()
 
 
 def run_service_main(service_class: Callable[[], Any], config_path: str, gobject_module: Any) -> None:

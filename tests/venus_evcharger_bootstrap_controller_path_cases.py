@@ -16,7 +16,7 @@ from tests.venus_evcharger_bootstrap_controller_support import (
 
 
 class TestServiceBootstrapControllerPaths(ServiceBootstrapControllerTestCase):
-    def test_register_paths_uses_main_script_path_and_registers_service(self):
+    def test_register_paths_uses_main_script_path_without_publishing_service_yet(self):
         service = SimpleNamespace(
             _dbusservice=_FakeDbusService(),
             connection_name="Shelly RPC",
@@ -253,6 +253,14 @@ class TestServiceBootstrapControllerPaths(ServiceBootstrapControllerTestCase):
         self.assertTrue(service._dbusservice.paths["/Auto/PhaseMismatchLockoutCount"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/Auto/PhaseLockoutReset"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/Auto/ContactorLockoutReset"]["writeable"])
+        self.assertFalse(service._dbusservice.register_called)
+
+    def test_publish_dbus_service_registers_service_after_paths_exist(self):
+        service = SimpleNamespace(_dbusservice=_FakeDbusService())
+
+        controller = self._controller(service)
+        controller.publish_dbus_service()
+
         self.assertTrue(service._dbusservice.register_called)
 
     def test_register_paths_marks_service_disconnected_when_host_is_not_configured(self):
