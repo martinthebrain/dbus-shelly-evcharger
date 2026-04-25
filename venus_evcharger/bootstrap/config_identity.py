@@ -8,12 +8,18 @@ from venus_evcharger.bootstrap.config_shared import _config_value
 from venus_evcharger.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
 
 
+def _host_is_configured(value: object) -> bool:
+    """Return whether the primary device host has been configured."""
+    return bool(str(value).strip() if value is not None else "")
+
+
 class _ServiceBootstrapIdentityConfigMixin(_ComposableControllerMixin):
     def _load_identity_config(self, defaults: configparser.SectionProxy) -> None:
         """Load generic device, HTTP, and EV charger presentation settings."""
         svc = self.service
         svc.deviceinstance = int(_config_value(defaults, "DeviceInstance", 60))
         svc.host = defaults["Host"].strip()
+        svc.host_configured = _host_is_configured(svc.host)
         svc.phase = self._normalize_phase(defaults.get("Phase", "L1"))
         svc.position = int(_config_value(defaults, "Position", 1))
         svc.poll_interval_ms = int(_config_value(defaults, "PollIntervalMs", 1000))

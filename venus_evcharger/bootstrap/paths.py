@@ -209,7 +209,7 @@ class _ServiceBootstrapPathMixin(_ComposableControllerMixin):
         svc._dbusservice.add_path("/FirmwareVersion", svc.firmware_version)
         svc._dbusservice.add_path("/HardwareVersion", svc.hardware_version)
         svc._dbusservice.add_path("/Serial", svc.serial)
-        svc._dbusservice.add_path("/Connected", 1)
+        svc._dbusservice.add_path("/Connected", 1 if bool(getattr(svc, "host_configured", True)) else 0)
         svc._dbusservice.add_path("/Position", svc.position)
         svc._dbusservice.add_path("/UpdateIndex", 0)
 

@@ -108,6 +108,7 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
             config={"DEFAULT": {"ProductName": "Configured Product"}},
             custom_name_override="My Wallbox",
             host="192.168.1.20",
+            host_configured=True,
         )
         controller = self._controller(service)
         controller.fetch_device_info_with_fallback = MagicMock(return_value={})
@@ -125,6 +126,7 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
             config={"DEFAULT": {}},
             custom_name_override="",
             host="192.168.1.20",
+            host_configured=True,
         )
         controller = self._controller(service)
         controller.fetch_device_info_with_fallback = MagicMock(
@@ -144,12 +146,33 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
         self.assertEqual(service.firmware_version, "fw-123")
         self.assertEqual(service.hardware_version, "Shelly Plus")
 
+    def test_apply_device_metadata_skips_device_lookup_when_host_is_not_configured(self):
+        service = SimpleNamespace(
+            config={"DEFAULT": {"ProductName": "Configured Product"}},
+            custom_name_override="",
+            host="",
+            host_configured=False,
+            deviceinstance=60,
+        )
+        controller = self._controller(service)
+        controller.fetch_device_info_with_fallback = MagicMock(return_value={"name": "should-not-be-used"})
+
+        controller.apply_device_metadata()
+
+        controller.fetch_device_info_with_fallback.assert_not_called()
+        self.assertEqual(service.product_name, "Configured Product")
+        self.assertEqual(service.custom_name, "Venus EV Charger Service")
+        self.assertEqual(service.serial, "unconfigured-60")
+        self.assertEqual(service.firmware_version, "1.0")
+        self.assertEqual(service.hardware_version, "Not configured")
+
     def test_start_runtime_loops_starts_worker_and_schedules_timers(self):
         gobject_module = MagicMock()
         service = SimpleNamespace(
             _start_io_worker=MagicMock(),
             _start_control_api_server=MagicMock(),
             _start_companion_dbus_bridge=MagicMock(),
+            host_configured=True,
             runtime_state_path="/run/state.json",
             _state_summary=MagicMock(return_value="mode=1"),
             poll_interval_ms=1000,
@@ -186,6 +209,7 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
             _start_io_worker=MagicMock(),
             _start_control_api_server=MagicMock(),
             _start_companion_dbus_bridge=None,
+            host_configured=True,
             runtime_state_path="/run/state.json",
             _state_summary=MagicMock(return_value="mode=1"),
             poll_interval_ms=1000,
@@ -213,6 +237,43 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
         service._start_io_worker.assert_called_once_with()
         service._start_control_api_server.assert_called_once_with()
         gobject_module.timeout_add.assert_any_call(1000, service._update)
+
+    def test_start_runtime_loops_skips_worker_when_host_is_not_configured(self):
+        gobject_module = MagicMock()
+        service = SimpleNamespace(
+            _start_io_worker=MagicMock(),
+            _start_control_api_server=MagicMock(),
+            _start_companion_dbus_bridge=MagicMock(),
+            host_configured=False,
+            runtime_state_path="/run/state.json",
+            _state_summary=MagicMock(return_value="mode=0"),
+            poll_interval_ms=1000,
+            sign_of_life_minutes=10,
+            _update=MagicMock(),
+            _sign_of_life=MagicMock(),
+        )
+        controller = ServiceBootstrapController(
+            service,
+            normalize_phase_func=lambda value: value,
+            normalize_mode_func=lambda value: int(value),
+            mode_uses_auto_logic_func=lambda mode: int(mode) in (1, 2),
+            month_window_func=lambda *_args, **_kwargs: ((8, 0), (18, 0)),
+            age_seconds_func=lambda *_args, **_kwargs: 0,
+            health_code_func=lambda reason: {"init": 0, "not-configured": 41}.get(reason, 99),
+            phase_values_func=lambda *_args, **_kwargs: {},
+            read_version_func=lambda _name: "1.0",
+            gobject_module=gobject_module,
+            script_path="/tmp/venus_evcharger_service.py",
+            formatters={"kwh": None, "a": None, "w": None, "v": None, "status": None},
+        )
+
+        controller.start_runtime_loops()
+
+        service._start_io_worker.assert_not_called()
+        service._start_control_api_server.assert_called_once_with()
+        service._start_companion_dbus_bridge.assert_called_once_with()
+        gobject_module.timeout_add.assert_any_call(1000, service._update)
+        gobject_module.timeout_add.assert_any_call(600000, service._sign_of_life)
 
     def test_initialize_dbus_service_uses_device_instance_in_name(self):
         service = SimpleNamespace(service_name="com.victronenergy.evcharger", deviceinstance=60)

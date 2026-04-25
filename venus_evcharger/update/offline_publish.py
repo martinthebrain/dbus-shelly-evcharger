@@ -12,6 +12,11 @@ from venus_evcharger.core.contracts import timestamp_age_within
 
 class _UpdateCycleOfflineMixin:
     @staticmethod
+    def _offline_health_reason(svc: Any) -> str:
+        """Return the health reason used for one offline publish."""
+        return "shelly-offline" if bool(getattr(svc, "host_configured", True)) else "not-configured"
+
+    @staticmethod
     def _offline_confirmed_relay_max_age_seconds(svc: Any) -> float:
         """Return how old a confirmed relay sample may be for offline publishing."""
         candidates = [2.0]
@@ -73,7 +78,7 @@ class _UpdateCycleOfflineMixin:
         power, energy_forward, status = self._offline_power_state()
         self._mark_offline_status_state(svc)
         phase_data = self._phase_data_for_pm_status(offline_pm_status, power, voltage, 0.0)
-        svc._set_health("shelly-offline", cached=False)
+        svc._set_health(self._offline_health_reason(svc), cached=False)
         total_current = self._total_phase_current(phase_data)
         changed = self._publish_offline_live_state(
             svc,
@@ -132,7 +137,7 @@ class _UpdateCycleOfflineMixin:
     @staticmethod
     def _mark_offline_status_state(svc: Any) -> None:
         """Mark service observability fields for one offline Shelly publish."""
-        svc._last_status_source = "shelly-offline"
+        svc._last_status_source = _UpdateCycleOfflineMixin._offline_health_reason(svc)
         svc._last_charger_fault_active = 0
 
     def _publish_offline_live_state(

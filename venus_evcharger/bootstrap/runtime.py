@@ -162,9 +162,16 @@ class _ServiceBootstrapRuntimeMixin(_ComposableControllerMixin):
     def apply_device_metadata(self) -> None:
         """Fetch Shelly metadata and apply UI-facing identity fields."""
         svc = self.service
-        device_info = self.fetch_device_info_with_fallback()
         defaults = svc.config["DEFAULT"]
         svc.product_name = defaults.get("ProductName", "Venus EV Charger Service").strip()
+        if not bool(getattr(svc, "host_configured", False)):
+            svc.custom_name = svc.custom_name_override or "Venus EV Charger Service"
+            svc.serial = f"unconfigured-{svc.deviceinstance}"
+            svc.firmware_version = self._read_version("version.txt")
+            svc.hardware_version = "Not configured"
+            logging.info("Primary host is not configured yet; starting without Shelly device metadata")
+            return
+        device_info = self.fetch_device_info_with_fallback()
         svc.custom_name = svc.custom_name_override or device_info.get("name") or "Venus EV Charger Service"
         svc.serial = device_info.get("mac", svc.host.replace(".", ""))
         svc.firmware_version = device_info.get("fw_id", self._read_version("version.txt"))
@@ -173,7 +180,10 @@ class _ServiceBootstrapRuntimeMixin(_ComposableControllerMixin):
     def start_runtime_loops(self) -> None:
         """Register DBus paths, start background workers, and arm timers."""
         svc = self.service
-        svc._start_io_worker()
+        if bool(getattr(svc, "host_configured", False)):
+            svc._start_io_worker()
+        else:
+            logging.info("Primary host is not configured yet; skipping Shelly I/O worker startup")
         svc._start_control_api_server()
         start_companion_bridge = getattr(svc, "_start_companion_dbus_bridge", None)
         if callable(start_companion_bridge):
