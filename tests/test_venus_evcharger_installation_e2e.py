@@ -123,6 +123,7 @@ class TestVenusEvchargerInstallationEndToEnd(unittest.TestCase):
             self._stub_disable_helper(repo_copy, helper_marker)
             target_cli_path = repo_copy / "deploy/venus/venus_evchargerctl.sh"
             gx_smoke_path = repo_copy / "deploy/venus/gx_api_smoke_test_skeleton.sh"
+            reset_helper_path = repo_copy / "deploy/venus/reset_venus_evcharger_config.sh"
 
             subprocess.run(
                 ["bash", str(repo_copy / "deploy/venus/configure_venus_evcharger_service.sh"), *wizard_args],
@@ -156,6 +157,8 @@ class TestVenusEvchargerInstallationEndToEnd(unittest.TestCase):
             self.assertTrue(os.access(target_cli_path, os.X_OK))
             self.assertTrue(gx_smoke_path.is_file())
             self.assertTrue(os.access(gx_smoke_path, os.X_OK))
+            self.assertTrue(reset_helper_path.is_file())
+            self.assertTrue(os.access(reset_helper_path, os.X_OK))
             rc_local_text = rc_local_path.read_text(encoding="utf-8")
             self.assertIn(str(repo_copy / "deploy/venus/boot_venus_evcharger_service.sh"), rc_local_text)
 

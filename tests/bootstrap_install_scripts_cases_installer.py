@@ -18,6 +18,11 @@ class _BootstrapInstallScriptsInstallerCases(_BootstrapInstallScriptsBase):
         expected_hash = hashlib.sha256(UPDATER_SCRIPT.read_bytes()).hexdigest()
         self.assertEqual(UPDATER_HASH.read_text(encoding="utf-8").split()[0], expected_hash)
 
+    def test_bootstrap_checked_in_reset_template_matches_live_default_config(self) -> None:
+        config_template = (UPDATER_SCRIPT.parent / "config.venus_evcharger.ini").read_text(encoding="utf-8")
+        reset_template = (UPDATER_SCRIPT.parent / "config.venus_evcharger.default.ini").read_text(encoding="utf-8")
+        self.assertEqual(reset_template, config_template)
+
     def test_bootstrap_installer_defaults_to_hash_validated_updater_when_manifest_is_unset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

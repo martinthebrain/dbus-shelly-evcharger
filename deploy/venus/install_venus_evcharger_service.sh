@@ -22,6 +22,7 @@ MAIN_ENTRYPOINT="$REPO_DIR/venus_evcharger_service.py"
 AUTO_INPUT_HELPER="$REPO_DIR/venus_evcharger_auto_input_helper.py"
 CONFIGURE_HELPER="$SCRIPT_DIR/configure_venus_evcharger_service.sh"
 RESTART_HELPER="$SCRIPT_DIR/restart_venus_evcharger_service.sh"
+RESET_CONFIG_HELPER="$SCRIPT_DIR/reset_venus_evcharger_config.sh"
 UNINSTALL_HELPER="$SCRIPT_DIR/uninstall_venus_evcharger_service.sh"
 CONTROL_API_CLI_HELPER="$SCRIPT_DIR/venus_evchargerctl.sh"
 GX_SMOKE_HELPER="$SCRIPT_DIR/gx_api_smoke_test_skeleton.sh"
@@ -59,6 +60,11 @@ fi
 if [ -f "$RESTART_HELPER" ]; then
     chmod a+x "$RESTART_HELPER"
     chmod 744 "$RESTART_HELPER"
+fi
+
+if [ -f "$RESET_CONFIG_HELPER" ]; then
+    chmod a+x "$RESET_CONFIG_HELPER"
+    chmod 744 "$RESET_CONFIG_HELPER"
 fi
 
 if [ -f "$BOOT_HELPER" ]; then
