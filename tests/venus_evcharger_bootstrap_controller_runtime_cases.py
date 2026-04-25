@@ -294,6 +294,61 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
 
         dbus_service.register.assert_called_once_with()
 
+    def test_publish_dbus_service_tolerates_name_exists_when_current_process_already_owns_name(self):
+        class NameExistsException(Exception):
+            pass
+
+        dbus_service = MagicMock()
+        dbus_service.register.side_effect = NameExistsException("exists")
+        dbus_service.name = "com.victronenergy.evcharger.http_60"
+        service = SimpleNamespace(_dbusservice=dbus_service)
+        controller = self._controller(service)
+        controller._dbus_service_owned_by_current_process = MagicMock(return_value=True)
+
+        controller.publish_dbus_service()
+
+        controller._dbus_service_owned_by_current_process.assert_called_once_with(dbus_service)
+
+    def test_publish_dbus_service_reraises_name_exists_for_foreign_owner(self):
+        class NameExistsException(Exception):
+            pass
+
+        dbus_service = MagicMock()
+        dbus_service.register.side_effect = NameExistsException("exists")
+        service = SimpleNamespace(_dbusservice=dbus_service)
+        controller = self._controller(service)
+        controller._dbus_service_owned_by_current_process = MagicMock(return_value=False)
+
+        with self.assertRaises(NameExistsException):
+            controller.publish_dbus_service()
+
+    def test_dbus_service_owned_by_current_process_checks_bus_owner_pid(self):
+        bus_proxy = MagicMock()
+        bus_proxy.GetNameOwner.return_value = ":1.42"
+        bus_proxy.GetConnectionUnixProcessID.return_value = 1234
+        dbus_conn = MagicMock()
+        dbus_conn.get_object.return_value = bus_proxy
+        dbus_service = SimpleNamespace(_dbusconn=dbus_conn, name="com.victronenergy.evcharger.http_60")
+        controller = self._controller(SimpleNamespace())
+
+        with patch("venus_evcharger.bootstrap.controller.os.getpid", return_value=1234):
+            self.assertTrue(controller._dbus_service_owned_by_current_process(dbus_service))
+
+        bus_proxy.GetNameOwner.assert_called_once_with(
+            "com.victronenergy.evcharger.http_60",
+            dbus_interface="org.freedesktop.DBus",
+        )
+        bus_proxy.GetConnectionUnixProcessID.assert_called_once_with(
+            ":1.42",
+            dbus_interface="org.freedesktop.DBus",
+        )
+
+    def test_dbus_service_owned_by_current_process_returns_false_without_connection(self):
+        controller = self._controller(SimpleNamespace())
+        dbus_service = SimpleNamespace(name="com.victronenergy.evcharger.http_60")
+
+        self.assertFalse(controller._dbus_service_owned_by_current_process(dbus_service))
+
     def test_register_paths_logs_and_reraises_add_path_failures(self):
         class _BrokenDbusService(_FakeDbusService):
             def add_path(self, path, value, **kwargs):
