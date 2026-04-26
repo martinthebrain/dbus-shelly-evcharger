@@ -199,7 +199,7 @@ class _DbusInputStorageSupportMixin(_ComposableControllerMixin):
             svc._auto_battery_last_scan = now
             self._remember_energy_service(source.source_id, service_name, now)
             logging.debug("Auto battery service resolved: %s", svc._resolved_auto_battery_service)
-            return cast(str, svc._resolved_auto_battery_service)
+            return service_name
         raise ValueError(f"No DBus service found with prefix '{source.service_prefix or battery_service_prefix}'")
 
     def resolve_auto_battery_service(self) -> str:

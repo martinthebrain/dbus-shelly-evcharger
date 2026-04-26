@@ -218,8 +218,18 @@ def _legacy_policy_mode(value: object) -> PolicyMode:
 
 def _legacy_runtime_values(config: configparser.ConfigParser) -> _LegacyTopologyRuntime:
     """Return normalized legacy config fields used to build one topology."""
-    defaults = config["DEFAULT"] if "DEFAULT" in config else {}
-    backends = config["Backends"] if config.has_section("Backends") else defaults
+    defaults: Mapping[str, object]
+    if "DEFAULT" in config:
+        defaults = cast(Mapping[str, object], config["DEFAULT"])
+    else:
+        defaults = {}
+
+    backends: Mapping[str, object]
+    if config.has_section("Backends"):
+        backends = cast(Mapping[str, object], config["Backends"])
+    else:
+        backends = defaults
+
     return _LegacyTopologyRuntime(
         defaults=defaults,
         host=str(defaults.get("Host", "")).strip(),
