@@ -4,188 +4,69 @@
 from __future__ import annotations
 
 import argparse
-import configparser
 import json
-import shutil
 import sys
 import tempfile
-from datetime import datetime
 from pathlib import Path
-from typing import Callable, cast
+from typing import cast
 
-from venus_evcharger.backend.config import load_backend_selection
-from venus_evcharger.backend.probe import (
-    probe_meter_backend,
-    probe_switch_backend,
-    read_charger_backend,
-    validate_wallbox_config,
-)
+from venus_evcharger.backend.factory import build_service_backends
+from venus_evcharger.backend.probe import probe_meter_backend, probe_switch_backend, read_charger_backend
 from venus_evcharger.bootstrap.wizard_cli import build_answers, build_parser, prompt_yes_no
 from venus_evcharger.bootstrap.wizard_cli_output import result_text
+from venus_evcharger.bootstrap.wizard_capacity import (
+    resolved_energy_capacity_overrides as _resolved_energy_capacity_overrides,
+    resolved_energy_capacity_wh as _resolved_energy_capacity_wh_impl,
+)
+from venus_evcharger.bootstrap.wizard_energy import merged_recommendation_prefixes
 from venus_evcharger.bootstrap.wizard_guidance import compatibility_warnings, probe_roles
-from venus_evcharger.bootstrap.wizard_layouts import generated_adapter_files
+from venus_evcharger.bootstrap.wizard_inventory_cli import run_inventory_editor
+from venus_evcharger.bootstrap.wizard_inventory_support import (
+    inventory_action_path,
+    inventory_summary_text,
+    load_inventory,
+)
 from venus_evcharger.bootstrap.wizard_models import WizardAnswers, WizardResult, WizardTransportKind
-from venus_evcharger.bootstrap.wizard_persistence import persist_wizard_state
-from venus_evcharger.bootstrap.wizard_review import manual_review_items
-from venus_evcharger.bootstrap.wizard_support import host_from_input, transport_summary
-from venus_evcharger.core.common_values import normalize_phase
+from venus_evcharger.bootstrap.wizard_render import (
+    answer_defaults,
+    append_backends,
+    default_config_path,
+    default_template_path,
+    materialized_config_text,
+    replace_assignment,
+    render_wizard_config,
+    upsert_default_assignments,
+    write_generated_files,
+)
+from venus_evcharger.bootstrap.wizard_runtime import (
+    _existing_output_paths,
+    _live_connectivity_payload_with_hooks,
+    configure_wallbox as _runtime_configure_wallbox,
+)
+
+_replace_assignment = replace_assignment
+_append_backends = append_backends
+_write_generated_files = write_generated_files
 
 
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
-
-
-def default_template_path() -> Path:
-    return _repo_root() / "deploy" / "venus" / "config.venus_evcharger.ini"
-
-def default_config_path() -> Path:
-    return default_template_path()
-
-
-def _timestamp() -> str:
-    return datetime.now().strftime("%Y%m%d-%H%M%S")
-
-
-def _mode_value(policy_mode: str) -> str:
-    return {"manual": "0", "auto": "1", "scheduled": "2"}[policy_mode]
-
-
-def _replace_assignment(text: str, key: str, value: str) -> str:
-    replaced = False
-    lines: list[str] = []
-    for line in text.splitlines():
-        if line.startswith(f"{key}="):
-            lines.append(f"{key}={value}")
-            replaced = True
-            continue
-        lines.append(line)
-    if not replaced:
-        raise ValueError(f"Config template is missing required key '{key}'")
-    return "\n".join(lines) + "\n"
-
-
-def _remove_section(text: str, section_name: str) -> str:
-    def is_header(line: str) -> bool:
-        return line.startswith("[") and line.endswith("]")
-
-    result: list[str] = []
-    in_section = False
-    for line in text.splitlines():
-        if is_header(line):
-            in_section = line == f"[{section_name}]"
-            if in_section:
-                continue
-        if in_section:
-            continue
-        result.append(line)
-    return "\n".join(result).rstrip() + "\n"
-
-
-def _append_backends(text: str, lines: list[str]) -> str:
-    if not lines:
-        return _remove_section(text, "Backends")
-    result = _remove_section(text, "Backends").rstrip()
-    return f"{result}\n\n[Backends]\n" + "\n".join(lines) + "\n"
-
-
-def render_wizard_config(template_text: str, answers: WizardAnswers) -> tuple[str, dict[str, str], dict[str, str]]:
-    config_text = _replace_assignment(template_text, "Host", host_from_input(answers.host_input))
-    config_text = _replace_assignment(config_text, "DeviceInstance", str(int(answers.device_instance)))
-    config_text = _replace_assignment(config_text, "DigestAuth", "1" if answers.digest_auth else "0")
-    config_text = _replace_assignment(config_text, "Username", answers.username.strip())
-    config_text = _replace_assignment(config_text, "Password", answers.password.strip())
-    config_text = _replace_assignment(config_text, "Phase", normalize_phase(answers.phase))
-    config_text = _replace_assignment(config_text, "Mode", _mode_value(answers.policy_mode))
-    config_text = _replace_optional_assignment(config_text, "AutoStartSurplusWatts", answers.auto_start_surplus_watts)
-    config_text = _replace_optional_assignment(config_text, "AutoStopSurplusWatts", answers.auto_stop_surplus_watts)
-    config_text = _replace_optional_assignment(config_text, "AutoMinSoc", answers.auto_min_soc)
-    config_text = _replace_optional_assignment(config_text, "AutoResumeSoc", answers.auto_resume_soc)
-    config_text = _replace_optional_assignment(config_text, "AutoScheduledEnabledDays", answers.scheduled_enabled_days)
-    config_text = _replace_optional_assignment(config_text, "AutoScheduledLatestEndTime", answers.scheduled_latest_end_time)
-    config_text = _replace_optional_assignment(config_text, "AutoScheduledNightCurrentAmps", answers.scheduled_night_current_amps)
-    backend_lines, adapter_files, role_hosts = generated_adapter_files(
-        profile=answers.profile,
-        primary_host_input=answers.host_input,
-        meter_host_input=answers.meter_host_input,
-        switch_host_input=answers.switch_host_input,
-        charger_host_input=answers.charger_host_input,
-        split_preset=answers.split_preset,
-        charger_backend=answers.charger_backend,
-        charger_preset=answers.charger_preset,
-        request_timeout_seconds=answers.request_timeout_seconds,
-        switch_group_supported_phase_selections=answers.switch_group_supported_phase_selections,
-        transport_kind=answers.transport_kind,
-        transport_host=answers.transport_host,
-        transport_port=answers.transport_port,
-        transport_device=answers.transport_device,
-        transport_unit_id=answers.transport_unit_id,
-    )
-    return _append_backends(config_text, backend_lines), adapter_files, role_hosts
-
-
-def _replace_optional_assignment(text: str, key: str, value: object) -> str:
-    if value is None:
-        return text
-    if isinstance(value, float):
-        rendered = f"{value:g}"
-    else:
-        rendered = str(value)
-    return _replace_assignment(text, key, rendered)
-
-
-def _materialized_config_text(config_text: str, output_dir: Path, adapter_files: dict[str, str]) -> str:
-    rendered = config_text
-    for relative_path in sorted(adapter_files):
-        rendered = rendered.replace(f"={relative_path}\n", f"={output_dir / relative_path}\n")
-    return rendered
-
-
-def _validate_rendered_setup(config_text: str, adapter_files: dict[str, str], config_name: str) -> dict[str, object]:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_path = Path(temp_dir)
-        materialized_text = _materialized_config_text(config_text, temp_path, adapter_files)
-        main_path = temp_path / config_name
-        main_path.write_text(materialized_text, encoding="utf-8")
-        for relative_path, content in adapter_files.items():
-            (temp_path / relative_path).write_text(content, encoding="utf-8")
-        return validate_wallbox_config(str(main_path))
+def _resolve_live_check(namespace: argparse.Namespace) -> bool:
+    if namespace.live_check or getattr(namespace, "probe_roles", None):
+        return True
+    if namespace.non_interactive or namespace.yes:
+        return False
+    return prompt_yes_no("Run optional live connectivity checks now?", False)
 
 
 def _live_connectivity_payload(main_path: Path, selected_roles: tuple[str, ...] | None) -> dict[str, object]:
-    parser = configparser.ConfigParser()
-    parser.read(main_path, encoding="utf-8")
-    selection = load_backend_selection(parser)
-    role_results: dict[str, dict[str, object]] = {}
-    ok = True
-
-    def run_role(
-        role: str,
-        config_path: Path | None,
-        probe: Callable[[str], dict[str, object]],
-    ) -> None:
-        nonlocal ok
-        if selected_roles is not None and role not in selected_roles:
-            role_results[role] = {"status": "skipped", "reason": "not requested"}
-            return
-        if config_path is None:
-            role_results[role] = {"status": "skipped", "reason": "not configured"}
-            return
-        resolved_path = config_path if config_path.is_absolute() else main_path.parent / config_path
-        try:
-            role_results[role] = {"status": "ok", "payload": probe(str(resolved_path))}
-        except Exception as exc:
-            ok = False
-            role_results[role] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
-
-    run_role("meter", selection.meter_config_path, probe_meter_backend)
-    run_role("switch", selection.switch_config_path, probe_switch_backend)
-    run_role("charger", selection.charger_config_path, read_charger_backend)
-    checked_roles = tuple(role for role, payload in role_results.items() if payload.get("status") != "skipped")
-    return {
-        "ok": ok,
-        "checked_roles": checked_roles,
-        "roles": role_results,
-    }
+    """Run live connectivity checks through patchable module-level hook targets."""
+    return _live_connectivity_payload_with_hooks(
+        main_path,
+        selected_roles,
+        build_backends_fn=build_service_backends,
+        probe_meter_fn=probe_meter_backend,
+        probe_switch_fn=probe_switch_backend,
+        read_charger_fn=read_charger_backend,
+    )
 
 
 def _live_check_rendered_setup(
@@ -194,9 +75,10 @@ def _live_check_rendered_setup(
     config_name: str,
     selected_roles: tuple[str, ...] | None,
 ) -> dict[str, object]:
+    """Materialize one rendered setup and probe it through patchable module-level hooks."""
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
-        materialized_text = _materialized_config_text(config_text, temp_path, adapter_files)
+        materialized_text = materialized_config_text(config_text, temp_path, adapter_files)
         main_path = temp_path / config_name
         main_path.write_text(materialized_text, encoding="utf-8")
         for relative_path, content in adapter_files.items():
@@ -204,222 +86,23 @@ def _live_check_rendered_setup(
         return _live_connectivity_payload(main_path, selected_roles)
 
 
-def _answer_defaults(answers: WizardAnswers) -> dict[str, object]:
-    return {
-        "profile": answers.profile,
-        "host_input": answers.host_input,
-        "meter_host_input": answers.meter_host_input,
-        "switch_host_input": answers.switch_host_input,
-        "charger_host_input": answers.charger_host_input,
-        "device_instance": answers.device_instance,
-        "phase": answers.phase,
-        "policy_mode": answers.policy_mode,
-        "digest_auth": answers.digest_auth,
-        "username": answers.username,
-        "password_present": bool(answers.password),
-        "split_preset": answers.split_preset,
-        "charger_backend": answers.charger_backend,
-        "charger_preset": answers.charger_preset,
-        "request_timeout_seconds": answers.request_timeout_seconds,
-        "switch_group_supported_phase_selections": answers.switch_group_supported_phase_selections,
-        "auto_start_surplus_watts": answers.auto_start_surplus_watts,
-        "auto_stop_surplus_watts": answers.auto_stop_surplus_watts,
-        "auto_min_soc": answers.auto_min_soc,
-        "auto_resume_soc": answers.auto_resume_soc,
-        "scheduled_enabled_days": answers.scheduled_enabled_days,
-        "scheduled_latest_end_time": answers.scheduled_latest_end_time,
-        "scheduled_night_current_amps": answers.scheduled_night_current_amps,
-        "transport_kind": answers.transport_kind,
-        "transport_host": answers.transport_host,
-        "transport_port": answers.transport_port,
-        "transport_device": answers.transport_device,
-        "transport_unit_id": answers.transport_unit_id,
-    }
-
-
-def _backup_path(target: Path) -> Path:
-    return target.with_name(f"{target.name}.wizard-backup-{_timestamp()}")
-
-
-def _write_with_backup(target: Path, content: str) -> str | None:
-    backup_path: str | None = None
-    if target.exists():
-        destination = _backup_path(target)
-        shutil.copy2(target, destination)
-        backup_path = str(destination)
-    target.write_text(content, encoding="utf-8")
-    return backup_path
-
-
-def _preview_result(
-    answers: WizardAnswers,
-    config_path: Path,
-    created_at: str,
-    validation: dict[str, object],
-    live_check_payload: dict[str, object] | None,
-    role_hosts: dict[str, str],
-    generated_files: tuple[str, ...],
-    warnings: tuple[str, ...],
-    imported_from: str | None,
-    dry_run: bool,
-) -> WizardResult:
-    return WizardResult(
-        created_at=created_at,
-        config_path=str(config_path),
-        imported_from=imported_from,
-        profile=answers.profile,
-        policy_mode=answers.policy_mode,
-        split_preset=answers.split_preset,
-        charger_backend=answers.charger_backend,
-        charger_preset=answers.charger_preset,
-        transport_kind=cast(WizardTransportKind | None, transport_summary(answers.charger_backend, answers.transport_kind)),
-        role_hosts=role_hosts,
-        validation=validation,
-        live_check=live_check_payload,
-        warnings=warnings,
-        answer_defaults=_answer_defaults(answers),
-        generated_files=generated_files,
-        backup_files=tuple(),
-        result_path=None,
-        audit_path=None,
-        topology_summary_path=None,
-        manual_review=manual_review_items(
-            answers.profile,
-            answers.policy_mode,
-            answers.charger_backend,
-            answers.transport_kind,
-            answers.split_preset,
-        ),
-        dry_run=dry_run,
+def _resolved_energy_capacity_wh(
+    namespace: argparse.Namespace,
+    recommendation_prefixes: tuple[str, ...],
+) -> float | None:
+    """Resolve one capacity prompt through patchable module-level prompt hooks."""
+    return _resolved_energy_capacity_wh_impl(
+        namespace,
+        recommendation_prefixes,
+        prompt_yes_no_fn=prompt_yes_no,
+        input_fn=input,
     )
 
 
-def _write_generated_files(config_path: Path, materialized_text: str, adapter_files: dict[str, str]) -> list[str]:
-    backup_files: list[str] = []
-    backup_path = _write_with_backup(config_path, materialized_text)
-    if backup_path is not None:
-        backup_files.append(backup_path)
-    for relative_path, content in sorted(adapter_files.items()):
-        backup_path = _write_with_backup(config_path.parent / relative_path, content)
-        if backup_path is not None:
-            backup_files.append(backup_path)
-    return backup_files
-
-
-def _persisted_result(result: WizardResult) -> WizardResult:
-    result_path, audit_path, topology_summary_path = persist_wizard_state(Path(result.config_path), result.as_dict())
-    return WizardResult(
-        created_at=result.created_at,
-        config_path=result.config_path,
-        imported_from=result.imported_from,
-        profile=result.profile,
-        policy_mode=result.policy_mode,
-        split_preset=result.split_preset,
-        charger_backend=result.charger_backend,
-        charger_preset=result.charger_preset,
-        transport_kind=result.transport_kind,
-        role_hosts=result.role_hosts,
-        validation=result.validation,
-        live_check=result.live_check,
-        warnings=result.warnings,
-        answer_defaults=result.answer_defaults,
-        generated_files=result.generated_files,
-        backup_files=result.backup_files,
-        result_path=result_path,
-        audit_path=audit_path,
-        topology_summary_path=topology_summary_path,
-        manual_review=result.manual_review,
-        dry_run=result.dry_run,
-    )
-
-
-def configure_wallbox(
-    answers: WizardAnswers,
-    *,
-    config_path: Path,
-    template_path: Path,
-    dry_run: bool = False,
-    live_check: bool = False,
-    selected_probe_roles: tuple[str, ...] | None = None,
-    imported_from: str | None = None,
-) -> WizardResult:
-    template_text = template_path.read_text(encoding="utf-8")
-    created_at = datetime.now().isoformat(timespec="seconds")
-    config_text, adapter_files, role_hosts = render_wizard_config(template_text, answers)
-    validation = _validate_rendered_setup(config_text, adapter_files, config_path.name)
-    live_check_payload = (
-        _live_check_rendered_setup(config_text, adapter_files, config_path.name, selected_probe_roles) if live_check else None
-    )
-    materialized_text = _materialized_config_text(config_text, config_path.parent, adapter_files)
-    generated_files = (config_path.name,) + tuple(sorted(adapter_files))
-    backup_files: list[str] = []
-    warnings = compatibility_warnings(
-        profile=answers.profile,
-        split_preset=answers.split_preset,
-        charger_backend=answers.charger_backend,
-        charger_preset=answers.charger_preset,
-        primary_host_input=answers.host_input,
-        role_hosts=role_hosts,
-        transport_kind=answers.transport_kind,
-        transport_host=answers.transport_host,
-        switch_group_supported_phase_selections=answers.switch_group_supported_phase_selections,
-    )
-    result = _preview_result(
-        answers,
-        config_path,
-        created_at,
-        validation,
-        live_check_payload,
-        role_hosts,
-        generated_files,
-        warnings,
-        imported_from,
-        dry_run,
-    )
-    if dry_run:
-        return result
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    backup_files.extend(_write_generated_files(config_path, materialized_text, adapter_files))
-    result = WizardResult(
-        created_at=result.created_at,
-        config_path=result.config_path,
-        imported_from=result.imported_from,
-        profile=result.profile,
-        policy_mode=result.policy_mode,
-        split_preset=result.split_preset,
-        charger_backend=result.charger_backend,
-        charger_preset=result.charger_preset,
-        transport_kind=result.transport_kind,
-        role_hosts=result.role_hosts,
-        validation=result.validation,
-        live_check=result.live_check,
-        warnings=result.warnings,
-        answer_defaults=result.answer_defaults,
-        generated_files=result.generated_files,
-        backup_files=tuple(backup_files),
-        result_path=None,
-        audit_path=None,
-        topology_summary_path=None,
-        manual_review=result.manual_review,
-        dry_run=result.dry_run,
-    )
-    return _persisted_result(result)
-
-
-def _existing_output_paths(config_path: Path, generated_files: tuple[str, ...]) -> tuple[str, ...]:
-    existing = []
-    for relative_path in generated_files:
-        candidate = config_path.parent / relative_path
-        if candidate.exists():
-            existing.append(str(candidate))
-    return tuple(existing)
-
-
-def _confirm_write(namespace: object, preview: WizardResult, existing_files: tuple[str, ...]) -> None:
-    if _skip_write_confirmation(namespace, existing_files):
-        return
-    if not _interactive_write_confirmed(preview, existing_files):
-        raise ValueError("Wizard write cancelled by user")
+def _interactive_write_confirmed(preview: WizardResult, existing_files: tuple[str, ...]) -> bool:
+    print(result_text(preview))
+    prompt = "Write config now and create backups of existing files?" if existing_files else "Write config now?"
+    return prompt_yes_no(prompt, not bool(existing_files))
 
 
 def _non_interactive_write_allowed(namespace: object, existing_files: tuple[str, ...]) -> bool:
@@ -441,10 +124,44 @@ def _skip_write_confirmation(namespace: object, existing_files: tuple[str, ...])
     return bool(getattr(namespace, "yes"))
 
 
-def _interactive_write_confirmed(preview: WizardResult, existing_files: tuple[str, ...]) -> bool:
-    print(result_text(preview))
-    prompt = "Write config now and create backups of existing files?" if existing_files else "Write config now?"
-    return prompt_yes_no(prompt, not bool(existing_files))
+def _confirm_write(namespace: object, preview: WizardResult, existing_files: tuple[str, ...]) -> None:
+    if _skip_write_confirmation(namespace, existing_files):
+        return
+    if not _interactive_write_confirmed(preview, existing_files):
+        raise ValueError("Wizard write cancelled by user")
+
+
+def configure_wallbox(
+    answers: WizardAnswers,
+    *,
+    config_path: Path,
+    template_path: Path,
+    dry_run: bool = False,
+    live_check: bool = False,
+    selected_probe_roles: tuple[str, ...] | None = None,
+    imported_from: str | None = None,
+    energy_recommendation_prefix: str | tuple[str, ...] | list[str] | None = None,
+    huawei_recommendation_prefix: str | tuple[str, ...] | list[str] | None = None,
+    apply_suggested_energy_merge: bool = False,
+    suggested_energy_capacity_wh: float | None = None,
+    suggested_energy_capacity_overrides: dict[str, float] | None = None,
+) -> WizardResult:
+    """Configure one setup and keep module-level live-check hooks patchable in tests."""
+    return _runtime_configure_wallbox(
+        answers,
+        config_path=config_path,
+        template_path=template_path,
+        dry_run=dry_run,
+        live_check=live_check,
+        selected_probe_roles=selected_probe_roles,
+        imported_from=imported_from,
+        energy_recommendation_prefix=energy_recommendation_prefix,
+        huawei_recommendation_prefix=huawei_recommendation_prefix,
+        apply_suggested_energy_merge=apply_suggested_energy_merge,
+        suggested_energy_capacity_wh=suggested_energy_capacity_wh,
+        suggested_energy_capacity_overrides=suggested_energy_capacity_overrides,
+        live_check_runner=_live_check_rendered_setup,
+    )
 
 
 def _run_wizard(namespace: argparse.Namespace) -> WizardResult:
@@ -452,6 +169,12 @@ def _run_wizard(namespace: argparse.Namespace) -> WizardResult:
     imported_from = imported.imported_from if imported is not None else None
     live_check = _resolve_live_check(namespace)
     selected_probe_roles = probe_roles(namespace)
+    recommendation_prefixes = merged_recommendation_prefixes(
+        getattr(namespace, "energy_recommendation_prefix", None),
+        getattr(namespace, "huawei_recommendation_prefix", None),
+    )
+    suggested_energy_capacity_wh = _resolved_energy_capacity_wh(namespace, recommendation_prefixes)
+    suggested_energy_capacity_overrides = _resolved_energy_capacity_overrides(namespace)
     preview = configure_wallbox(
         answers,
         config_path=Path(namespace.config_path),
@@ -460,6 +183,11 @@ def _run_wizard(namespace: argparse.Namespace) -> WizardResult:
         live_check=live_check,
         selected_probe_roles=selected_probe_roles,
         imported_from=imported_from,
+        energy_recommendation_prefix=recommendation_prefixes,
+        huawei_recommendation_prefix=recommendation_prefixes,
+        apply_suggested_energy_merge=getattr(namespace, "apply_energy_merge", False),
+        suggested_energy_capacity_wh=suggested_energy_capacity_wh,
+        suggested_energy_capacity_overrides=suggested_energy_capacity_overrides,
     )
     existing_files = _existing_output_paths(Path(namespace.config_path), preview.generated_files)
     _confirm_write(namespace, preview, existing_files)
@@ -473,33 +201,74 @@ def _run_wizard(namespace: argparse.Namespace) -> WizardResult:
         live_check=live_check,
         selected_probe_roles=selected_probe_roles,
         imported_from=imported_from,
+        energy_recommendation_prefix=recommendation_prefixes,
+        huawei_recommendation_prefix=recommendation_prefixes,
+        apply_suggested_energy_merge=getattr(namespace, "apply_energy_merge", False),
+        suggested_energy_capacity_wh=suggested_energy_capacity_wh,
+        suggested_energy_capacity_overrides=suggested_energy_capacity_overrides,
     )
-
-
-def _resolve_live_check(namespace: argparse.Namespace) -> bool:
-    if namespace.live_check or getattr(namespace, "probe_roles", None):
-        return True
-    if namespace.non_interactive or namespace.yes:
-        return False
-    return prompt_yes_no("Run optional live connectivity checks now?", False)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser(str(default_config_path()), str(default_template_path()))
     namespace = parser.parse_args(argv)
     try:
+        if getattr(namespace, "inventory_action", None):
+            _print_inventory_action_result(namespace, run_inventory_editor(namespace))
+            return 0
         result = _run_wizard(namespace)
     except ValueError as exc:
-        if getattr(namespace, "json", False):
-            print(json.dumps({"error": str(exc)}, indent=2, sort_keys=True))
-        else:
-            print(f"Error: {exc}", file=sys.stderr)
+        _print_main_error(namespace, exc)
         return 2
+    _print_main_result(namespace, result)
+    return 0
+
+
+def _print_inventory_action_result(namespace: argparse.Namespace, payload: dict[str, object]) -> None:
+    """Print the result of one inventory-editor action."""
+    if namespace.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    current_inventory_path = inventory_action_path(namespace)
+    inventory = load_inventory(current_inventory_path)
+    print(inventory_summary_text(current_inventory_path, inventory))
+
+
+def _print_main_error(namespace: argparse.Namespace, exc: ValueError) -> None:
+    """Print one CLI error in text or JSON form."""
+    if getattr(namespace, "json", False):
+        print(json.dumps({"error": str(exc)}, indent=2, sort_keys=True))
+        return
+    print(f"Error: {exc}", file=sys.stderr)
+
+
+def _print_main_result(namespace: argparse.Namespace, result: WizardResult) -> None:
+    """Print one successful wizard result in text or JSON form."""
     if namespace.json:
         print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
-    else:
-        print(result_text(result))
-    return 0
+        return
+    print(result_text(result))
+
+
+__all__ = [
+    "WizardAnswers",
+    "configure_wallbox",
+    "default_template_path",
+    "default_config_path",
+    "main",
+    "_live_connectivity_payload",
+    "_live_check_rendered_setup",
+    "_replace_assignment",
+    "_append_backends",
+    "_write_generated_files",
+    "_non_interactive_write_allowed",
+    "_confirm_write",
+    "probe_meter_backend",
+    "probe_switch_backend",
+    "read_charger_backend",
+    "prompt_yes_no",
+    "_interactive_write_confirmed",
+]
 
 
 if __name__ == "__main__":

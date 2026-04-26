@@ -16,28 +16,19 @@ from typing import Any
 import dbus
 import requests
 from venus_evcharger.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
+from venus_evcharger.runtime.setup_support import (
+    _first_existing_version_line,
+    clone_worker_battery_sources_payload as _clone_worker_battery_sources_payload,
+    clone_worker_learning_profiles_payload as _clone_worker_learning_profiles_payload,
+    clone_worker_status_payload as _clone_worker_status_payload,
+    default_auto_metrics,
+    empty_worker_snapshot as _empty_worker_snapshot,
+    initialize_runtime_override_state,
+    initialize_software_update_runtime_state,
+    initialize_victron_balance_runtime_state,
+)
 
 WorkerSnapshot = dict[str, Any]
-
-
-def _first_existing_version_line(paths: tuple[str, ...]) -> str:
-    """Return the first non-empty version line found in the candidate files."""
-    for path in paths:
-        version = _read_version_line(path)
-        if version:
-            return version
-    return ""
-
-
-def _read_version_line(path: str) -> str:
-    """Return one stripped version line from a file when it exists."""
-    if not path or not os.path.isfile(path):
-        return ""
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            return handle.readline().strip()
-    except OSError:
-        return ""
 
 
 
@@ -95,6 +86,8 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
         svc._last_pv_missing_warning = None
         svc._resolved_auto_battery_service = None
         svc._auto_battery_last_scan = 0.0
+        svc._resolved_auto_energy_services = {}
+        svc._auto_energy_last_scan = {}
         svc._last_battery_missing_warning = None
         svc._last_battery_allow_warning = None
         svc._last_grid_missing_warning = None
@@ -114,83 +107,37 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
         svc._last_grid_at = None
         svc._last_battery_soc_value = None
         svc._last_battery_soc_at = None
+        svc._last_combined_battery_soc_value = None
+        svc._last_combined_battery_soc_at = None
+        svc._last_combined_battery_charge_power_w = None
+        svc._last_combined_battery_charge_power_at = None
+        svc._last_combined_battery_discharge_power_w = None
+        svc._last_combined_battery_discharge_power_at = None
+        svc._last_combined_battery_net_power_w = None
+        svc._last_combined_battery_net_power_at = None
+        svc._last_combined_battery_ac_power_w = None
+        svc._last_combined_battery_ac_power_at = None
+        svc._last_energy_cluster = {}
+        svc._last_energy_learning_profiles = {}
         svc._last_pm_status = None
         svc._last_pm_status_at = None
         svc._last_pm_status_confirmed = False
         svc._last_shelly_warning = None
-        svc._last_auto_metrics = {
-            "state": "idle",
-            "surplus": None,
-            "grid": None,
-            "soc": None,
-            "profile": "normal",
-            "start_threshold": None,
-            "stop_threshold": None,
-            "learned_charge_power": None,
-            "threshold_scale": 1.0,
-            "threshold_mode": "static",
-            "stop_alpha": None,
-            "stop_alpha_stage": "base",
-            "surplus_volatility": None,
-        }
+        svc._last_auto_metrics = default_auto_metrics()
+        initialize_victron_balance_runtime_state(svc)
         svc._last_voltage = None
         svc._last_dbus_ok_at = None
         svc._last_successful_update_at = None
         svc._last_recovery_attempt_at = None
         svc._recovery_attempts = 0
-        svc._runtime_state_serialized = None
-        svc._runtime_overrides_serialized = None
-        svc._runtime_overrides_last_saved_at = None
-        svc._runtime_overrides_pending_serialized = None
-        svc._runtime_overrides_pending_values = None
-        svc._runtime_overrides_pending_text = None
-        svc._runtime_overrides_pending_due_at = None
-        svc._runtime_overrides_active = False
-        svc._runtime_overrides_values = {}
-        svc.runtime_overrides_write_min_interval_seconds = 1.0
-        svc._dbus_publish_state = {}
-        svc._dbus_live_publish_interval_seconds = 1.0
-        svc._dbus_slow_publish_interval_seconds = 5.0
-        svc._last_auto_audit_key = None
-        svc._last_auto_audit_event_at = None
-        svc._last_auto_audit_cleanup_at = 0.0
-        svc.started_at = started_at
-        svc.software_update_repo_root = repo_root
-        svc.software_update_install_script = os.path.join(repo_root, "install.sh") if repo_root else ""
-        svc.software_update_restart_script = (
-            os.path.join(repo_root, "deploy/venus/restart_venus_evcharger_service.sh") if repo_root else ""
+        initialize_runtime_override_state(svc)
+        initialize_software_update_runtime_state(
+            svc,
+            repo_root=repo_root,
+            started_at=started_at,
+            current_version=self._read_local_version(repo_root),
+            boot_auto_due_at=self._boot_delayed_update_due_at(started_at, 3600.0),
         )
-        svc.software_update_no_update_file = os.path.join(repo_root, "noUpdate") if repo_root else ""
-        svc.software_update_log_path = "/var/volatile/log/dbus-venus-evcharger/software-update.log"
-        svc.software_update_repo_slug = os.environ.get(
-            "VENUS_EVCHARGER_REPO_SLUG",
-            "martinthebrain/venus-evcharger-service",
-        )
-        svc.software_update_channel = os.environ.get("VENUS_EVCHARGER_CHANNEL", "main")
-        svc.software_update_manifest_source = os.environ.get(
-            "VENUS_EVCHARGER_MANIFEST_SOURCE",
-            f"https://raw.githubusercontent.com/{svc.software_update_repo_slug}/{svc.software_update_channel}/deploy/venus/bootstrap_manifest.json",
-        )
-        svc.software_update_version_source = os.environ.get(
-            "VENUS_EVCHARGER_VERSION_SOURCE",
-            f"https://raw.githubusercontent.com/{svc.software_update_repo_slug}/{svc.software_update_channel}/version.txt",
-        )
-        svc._software_update_current_version = self._read_local_version(repo_root)
-        svc._software_update_available_version = ""
-        svc._software_update_available = False
-        svc._software_update_state = "idle"
-        svc._software_update_detail = ""
-        svc._software_update_last_check_at = None
-        svc._software_update_last_run_at = None
-        svc._software_update_last_result = ""
-        svc._software_update_process = None
-        svc._software_update_process_log_handle = None
-        svc._software_update_run_requested_at = None
-        svc._software_update_no_update_active = int(
-            bool(svc.software_update_no_update_file and os.path.isfile(svc.software_update_no_update_file))
-        )
-        svc._software_update_next_check_at = started_at + 300.0
-        svc._software_update_boot_auto_due_at = self._boot_delayed_update_due_at(started_at, 3600.0)
 
     def reset_system_bus(self) -> None:
         """Invalidate cached DBus connections so each thread reconnects cleanly."""
@@ -217,29 +164,32 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
         """Create a fresh DBus connection for the current thread."""
         return dbus.SystemBus(private=True)
 
+    def get_system_bus(self) -> Any:
+        """Return the current thread-local DBus connection, reconnecting after resets."""
+        svc = self.service
+        svc._ensure_system_bus_state()
+        state = svc._system_bus_state
+        generation = int(getattr(svc, "_system_bus_generation", 0))
+        bus = getattr(state, "bus", None)
+        bus_generation = int(getattr(state, "generation", -1))
+        if bus is None or bus_generation != generation:
+            bus = self.create_system_bus()
+            state.bus = bus
+            state.generation = generation
+        return bus
+
     @staticmethod
     def empty_worker_snapshot() -> WorkerSnapshot:
         """Return a default RAM snapshot for the background I/O worker."""
-        return {
-            "captured_at": 0.0,
-            "pm_captured_at": None,
-            "pm_status": None,
-            "pm_confirmed": False,
-            "pv_captured_at": None,
-            "pv_power": None,
-            "battery_captured_at": None,
-            "battery_soc": None,
-            "grid_captured_at": None,
-            "grid_power": None,
-            "auto_mode_active": False,
-        }
+        return _empty_worker_snapshot()
 
     @staticmethod
     def clone_worker_snapshot(snapshot: WorkerSnapshot) -> WorkerSnapshot:
         """Copy the worker snapshot so the main loop sees a stable view."""
         cloned = dict(snapshot)
-        if isinstance(cloned.get("pm_status"), dict):
-            cloned["pm_status"] = dict(cloned["pm_status"])
+        _clone_worker_status_payload(cloned)
+        _clone_worker_battery_sources_payload(cloned)
+        _clone_worker_learning_profiles_payload(cloned)
         return cloned
 
     def init_worker_state(self) -> None:
@@ -266,6 +216,4 @@ class _RuntimeSupportSetupMixin(_ComposableControllerMixin):
         svc._auto_input_snapshot_mtime_ns = None
         svc._auto_input_snapshot_last_captured_at = None
         svc._auto_input_snapshot_version = None
-
-
 __all__ = ["_RuntimeSupportSetupMixin"]

@@ -29,6 +29,9 @@ class AutoInputHelperTestCase(unittest.TestCase):
         helper._auto_pv_last_scan = 0.0
         helper._resolved_auto_battery_service = None
         helper._auto_battery_last_scan = 0.0
+        helper._resolved_auto_energy_services = {}
+        helper._auto_energy_last_scan = {}
+        helper._energy_learning_profiles = {}
         helper._last_payload = None
         helper._last_snapshot_state = AutoInputHelper._empty_snapshot()
         helper._next_source_poll_at = {"pv": 0.0, "battery": 0.0, "grid": 0.0}
@@ -48,8 +51,13 @@ class AutoInputHelperTestCase(unittest.TestCase):
         helper.auto_dc_pv_path = "/Dc/Pv/Power"
         helper.auto_battery_service = "com.victronenergy.battery.socketcan_can1"
         helper.auto_battery_soc_path = "/Soc"
+        helper.auto_battery_capacity_wh = 0.0
+        helper.auto_battery_power_path = ""
+        helper.auto_battery_ac_power_path = ""
         helper.auto_battery_service_prefix = "com.victronenergy.battery"
         helper.auto_battery_scan_interval_seconds = 60.0
+        helper.auto_energy_sources = ()
+        helper.auto_use_combined_battery_soc = True
         helper.auto_grid_service = "com.victronenergy.system"
         helper.auto_grid_l1_path = "/Ac/Grid/L1/Power"
         helper.auto_grid_l2_path = "/Ac/Grid/L2/Power"

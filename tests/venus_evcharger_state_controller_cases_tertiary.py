@@ -75,6 +75,11 @@ class TestServiceStateControllerTertiary(ServiceStateControllerTestBase):
             auto_stop_ewma_alpha_volatile=-1,
             auto_stop_surplus_volatility_low_watts=-1,
             auto_stop_surplus_volatility_high_watts=-2,
+            auto_battery_discharge_balance_warn_error_watts=-1,
+            auto_battery_discharge_balance_bias_start_error_watts=-2,
+            auto_battery_discharge_balance_bias_max_penalty_watts=-3,
+            auto_battery_discharge_balance_bias_mode="bad-mode",
+            auto_battery_discharge_balance_bias_reserve_margin_soc=-4,
             auto_input_cache_seconds=-1,
             auto_input_helper_restart_seconds=-1,
             auto_input_helper_stale_seconds=-1,
@@ -112,6 +117,11 @@ class TestServiceStateControllerTertiary(ServiceStateControllerTestBase):
         self.assertEqual(service.auto_learn_charge_power_max_age_seconds, 0.0)
         self.assertEqual(service.auto_stop_surplus_volatility_low_watts, 0.0)
         self.assertEqual(service.auto_stop_surplus_volatility_high_watts, 0.0)
+        self.assertEqual(service.auto_battery_discharge_balance_warn_error_watts, 0.0)
+        self.assertEqual(service.auto_battery_discharge_balance_bias_start_error_watts, 0.0)
+        self.assertEqual(service.auto_battery_discharge_balance_bias_max_penalty_watts, 0.0)
+        self.assertEqual(service.auto_battery_discharge_balance_bias_mode, "always")
+        self.assertEqual(service.auto_battery_discharge_balance_bias_reserve_margin_soc, 0.0)
         self.assertEqual(service.shelly_request_timeout_seconds, 2.0)
         self.assertEqual(service.dbus_method_timeout_seconds, 1.0)
         self.assertEqual(service.auto_min_soc, 100.0)

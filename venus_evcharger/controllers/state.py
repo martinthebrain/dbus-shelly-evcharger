@@ -56,7 +56,7 @@ class ServiceStateController(
         if "DEFAULT" not in config or "Host" not in config["DEFAULT"]:
             raise ValueError(
                 "deploy/venus/config.venus_evcharger.ini is missing or incomplete. "
-                "Copy it from the documented deploy/venus/config.venus_evcharger.ini template and set DEFAULT Host."
+                "Copy it from the documented deploy/venus/config.venus_evcharger.ini template so the required keys exist."
             )
         return self._apply_runtime_overrides_to_config(self.service, config)
 

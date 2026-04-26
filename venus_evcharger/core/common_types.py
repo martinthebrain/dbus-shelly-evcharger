@@ -87,6 +87,7 @@ HEALTH_CODES: dict[str, int] = {
     "charger-transport-response": 38,
     "charger-transport-error": 39,
     "scheduled-night-charge": 40,
+    "not-configured": 41,
 }
 
 AUTO_STATE_CODES: dict[str, int] = {
@@ -184,6 +185,7 @@ RECOVERY_AUTO_REASONS = {
     "charger-transport-error",
 }
 BLOCKED_AUTO_REASONS = {
+    "not-configured",
     "disabled",
     "autostart-disabled",
     "warmup",

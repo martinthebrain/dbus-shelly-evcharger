@@ -252,13 +252,14 @@ class TestServiceBootstrapControllerConfig(ServiceBootstrapControllerTestCase):
         self.assertEqual(service.control_api_auth_token, "token-123")
         self.assertEqual(service.control_api_listen_host, "")
         self.assertEqual(service.control_api_listen_port, 0)
-        self.assertEqual(service.backend_mode, "combined")
-        self.assertEqual(service.meter_backend_type, "shelly_combined")
-        self.assertEqual(service.switch_backend_type, "shelly_combined")
-        self.assertIsNone(service.charger_backend_type)
-        self.assertIsNone(service.meter_backend_config_path)
-        self.assertIsNone(service.switch_backend_config_path)
-        self.assertIsNone(service.charger_backend_config_path)
+        self.assertFalse(hasattr(service, "_backend_selection"))
+        self.assertFalse(hasattr(service, "backend_mode"))
+        self.assertFalse(hasattr(service, "meter_backend_type"))
+        self.assertFalse(hasattr(service, "switch_backend_type"))
+        self.assertFalse(hasattr(service, "charger_backend_type"))
+        self.assertFalse(hasattr(service, "meter_backend_config_path"))
+        self.assertFalse(hasattr(service, "switch_backend_config_path"))
+        self.assertFalse(hasattr(service, "charger_backend_config_path"))
         self.assertEqual(service.auto_pv_service, "com.example.pv")
         self.assertEqual(service.auto_pv_service_prefix, "com.example.pvprefix")
         self.assertEqual(service.auto_pv_path, "/Pv/Power")
@@ -320,13 +321,49 @@ class TestServiceBootstrapControllerConfig(ServiceBootstrapControllerTestCase):
 
         controller.load_runtime_configuration()
 
-        self.assertEqual(service.backend_mode, "split")
-        self.assertEqual(service.meter_backend_type, "shelly_combined")
-        self.assertEqual(service.switch_backend_type, "shelly_combined")
-        self.assertIsNone(service.charger_backend_type)
-        self.assertEqual(service.meter_backend_config_path, Path("/data/meter.ini"))
-        self.assertEqual(service.switch_backend_config_path, Path("/data/switch.ini"))
-        self.assertIsNone(service.charger_backend_config_path)
+        self.assertFalse(hasattr(service, "_backend_selection"))
+        self.assertFalse(hasattr(service, "backend_mode"))
+        self.assertFalse(hasattr(service, "meter_backend_type"))
+        self.assertFalse(hasattr(service, "switch_backend_type"))
+        self.assertFalse(hasattr(service, "charger_backend_type"))
+        self.assertFalse(hasattr(service, "meter_backend_config_path"))
+        self.assertFalse(hasattr(service, "switch_backend_config_path"))
+        self.assertFalse(hasattr(service, "charger_backend_config_path"))
+
+    def test_load_runtime_configuration_stores_topology_without_forcing_non_bridge_backend_selection(self):
+        parser = configparser.ConfigParser()
+        parser.read_dict(
+            {
+                "DEFAULT": {
+                    "Host": "",
+                    "Phase": "L1",
+                },
+                "Topology": {
+                    "Type": "simple_relay",
+                },
+                "Actuator": {
+                    "Type": "template_switch",
+                    "ConfigPath": "/data/etc/wallbox-actuator.ini",
+                },
+                "Measurement": {
+                    "Type": "fixed_reference",
+                    "ReferenceWatts": "2300",
+                },
+            }
+        )
+        service = SimpleNamespace(_load_config=MagicMock(return_value=parser), _validate_runtime_config=MagicMock())
+        controller = self._controller(service)
+
+        controller.load_runtime_configuration()
+
+        self.assertEqual(service._topology_config.topology.type, "simple_relay")
+        self.assertEqual(service._topology_config.actuator.type, "template_switch")
+        self.assertEqual(service._topology_config.measurement.type, "fixed_reference")
+        self.assertFalse(hasattr(service, "_backend_selection"))
+        self.assertFalse(hasattr(service, "backend_mode"))
+        self.assertFalse(hasattr(service, "meter_backend_type"))
+        self.assertFalse(hasattr(service, "switch_backend_type"))
+        self.assertFalse(hasattr(service, "charger_backend_type"))
 
     def test_load_runtime_configuration_rejects_invalid_meterless_backend_combo_early(self):
         parser = configparser.ConfigParser()

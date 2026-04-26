@@ -8,6 +8,7 @@ from __future__ import annotations
 import time
 from typing import Any, cast
 
+from venus_evcharger.backend.config import backend_mode_for_service, backend_type_for_service
 from venus_evcharger.backend.models import effective_supported_phase_selections, switch_feedback_mismatch
 from venus_evcharger.core.common import (
     _fresh_charger_retry_reason,
@@ -31,6 +32,9 @@ def _normalized_optional_audit_text(value: object) -> str | None:
 class _RuntimeSupportAuditFieldsMixin:
     @staticmethod
     def _backend_value(svc: Any, attribute_name: str, default: str = "") -> str:
+        resolved = _resolved_backend_value(svc, attribute_name, default)
+        if resolved is not None:
+            return resolved
         raw_value = getattr(svc, attribute_name, default)
         normalized = str(raw_value).strip() if raw_value is not None else ""
         return normalized or default
@@ -198,3 +202,24 @@ class _RuntimeSupportAuditFieldsMixin:
 
     def ensure_observability_state(self) -> None:
         self.ensure_missing_attributes(self.service, self.observability_state_defaults())
+
+
+def _resolved_backend_value(svc: Any, attribute_name: str, default: str) -> str | None:
+    """Return resolved backend metadata for known audit attribute names."""
+    if attribute_name == "backend_mode":
+        return backend_mode_for_service(svc, default)
+    role = _backend_role_name(attribute_name)
+    if role is None:
+        return None
+    return backend_type_for_service(svc, role, default)
+
+
+def _backend_role_name(attribute_name: str) -> str | None:
+    """Return the backend role implied by one audit attribute name."""
+    if attribute_name == "meter_backend_type":
+        return "meter"
+    if attribute_name == "switch_backend_type":
+        return "switch"
+    if attribute_name == "charger_backend_type":
+        return "charger"
+    return None

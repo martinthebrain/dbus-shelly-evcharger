@@ -22,7 +22,10 @@ MAIN_ENTRYPOINT="$REPO_DIR/venus_evcharger_service.py"
 AUTO_INPUT_HELPER="$REPO_DIR/venus_evcharger_auto_input_helper.py"
 CONFIGURE_HELPER="$SCRIPT_DIR/configure_venus_evcharger_service.sh"
 RESTART_HELPER="$SCRIPT_DIR/restart_venus_evcharger_service.sh"
+RESET_CONFIG_HELPER="$SCRIPT_DIR/reset_venus_evcharger_config.sh"
 UNINSTALL_HELPER="$SCRIPT_DIR/uninstall_venus_evcharger_service.sh"
+CONTROL_API_CLI_HELPER="$SCRIPT_DIR/venus_evchargerctl.sh"
+GX_SMOKE_HELPER="$SCRIPT_DIR/gx_api_smoke_test_skeleton.sh"
 SOAK_HELPER="$REPO_DIR/scripts/ops/cerbo_soak_check.sh"
 RC_LOCAL_FILE=/data/rc.local
 
@@ -59,6 +62,11 @@ if [ -f "$RESTART_HELPER" ]; then
     chmod 744 "$RESTART_HELPER"
 fi
 
+if [ -f "$RESET_CONFIG_HELPER" ]; then
+    chmod a+x "$RESET_CONFIG_HELPER"
+    chmod 744 "$RESET_CONFIG_HELPER"
+fi
+
 if [ -f "$BOOT_HELPER" ]; then
     chmod a+x "$BOOT_HELPER"
     chmod 755 "$BOOT_HELPER"
@@ -67,6 +75,16 @@ fi
 if [ -f "$UNINSTALL_HELPER" ]; then
     chmod a+x "$UNINSTALL_HELPER"
     chmod 744 "$UNINSTALL_HELPER"
+fi
+
+if [ -f "$CONTROL_API_CLI_HELPER" ]; then
+    chmod a+x "$CONTROL_API_CLI_HELPER"
+    chmod 755 "$CONTROL_API_CLI_HELPER"
+fi
+
+if [ -f "$GX_SMOKE_HELPER" ]; then
+    chmod a+x "$GX_SMOKE_HELPER"
+    chmod 755 "$GX_SMOKE_HELPER"
 fi
 
 if [ -f "$SOAK_HELPER" ]; then

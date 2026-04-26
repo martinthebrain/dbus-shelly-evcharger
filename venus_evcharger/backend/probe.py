@@ -25,8 +25,8 @@ from typing import Any, cast
 
 import requests
 
+from .config import compat_legacy_backend_view_from_runtime
 from .factory import build_service_backends
-from .config import load_backend_selection
 from .registry import CHARGER_BACKENDS, METER_BACKENDS, SWITCH_BACKENDS
 
 
@@ -72,8 +72,8 @@ def _probe_service() -> Any:
 def _probe_service_from_wallbox_config(config: configparser.ConfigParser) -> Any:
     """Return one small service stub seeded from a full wallbox config file."""
     defaults = config["DEFAULT"]
-    selection = load_backend_selection(config)
     return SimpleNamespace(
+        config=config,
         session=requests.Session(),
         host=defaults.get("Host", "").strip(),
         username=defaults.get("Username", "").strip(),
@@ -85,13 +85,6 @@ def _probe_service_from_wallbox_config(config: configparser.ConfigParser) -> Any
         phase=defaults.get("Phase", "L1").strip(),
         max_current=float(defaults.get("MaxCurrent", "16.0") or 16.0),
         _last_voltage=None,
-        backend_mode=selection.mode,
-        meter_backend_type=selection.meter_type,
-        switch_backend_type=selection.switch_type,
-        charger_backend_type=selection.charger_type,
-        meter_backend_config_path=selection.meter_config_path,
-        switch_backend_config_path=selection.switch_config_path,
-        charger_backend_config_path=selection.charger_config_path,
     )
 
 
@@ -157,7 +150,8 @@ def validate_wallbox_config(path: str) -> dict[str, object]:
     resolved = build_service_backends(service)
     return {
         "path": path,
-        "selection": _json_ready(resolved.selection),
+        "runtime": _json_ready(resolved.runtime),
+        "selection": _json_ready(compat_legacy_backend_view_from_runtime(resolved.runtime)),
         "resolved_roles": {
             "meter": resolved.meter is not None,
             "switch": resolved.switch is not None,

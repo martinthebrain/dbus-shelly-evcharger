@@ -332,6 +332,10 @@ class TestShellyWallboxBackendProbeCommands(BackendProbeTestCase):
 
             payload = json.loads(stdout.getvalue())
             self.assertEqual(rc, 0)
+            self.assertEqual(payload["runtime"]["backend_mode"], "split")
+            self.assertIsNone(payload["runtime"]["meter_type"])
+            self.assertIsNone(payload["runtime"]["switch_type"])
+            self.assertEqual(payload["runtime"]["charger_type"], "template_charger")
             self.assertEqual(payload["selection"]["mode"], "split")
             self.assertEqual(payload["selection"]["meter_type"], "none")
             self.assertEqual(payload["selection"]["switch_type"], "none")

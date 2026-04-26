@@ -87,7 +87,9 @@ def run_service_loop(
     logging_module: Any,
 ) -> None:
     """Instantiate the service and enter the GLib main loop."""
+    logging_module.info("Instantiating Venus EV charger service bootstrap")
     service_class()
+    logging_module.info("Service bootstrap completed; preparing GLib main loop")
     mainloop = gobject_module.MainLoop()
     install_signal_logging_func(lambda: request_mainloop_quit_func(gobject_module, mainloop))
     logging_module.info("Connected to dbus, and switching over to gobject.MainLoop() (= event based)")

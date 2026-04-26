@@ -10,6 +10,7 @@ import tempfile
 import time
 import unittest
 
+from tests.venus_evcharger_control_test_support import started_control_api_server
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,6 +40,7 @@ class TestVenusEvchargerInstallationEndToEnd(unittest.TestCase):
             "scripts/ops",
             "venus_evcharger_service.py",
             "venus_evcharger_auto_input_helper.py",
+            "venus_evchargerctl.py",
         ):
             source = REPO_ROOT / rel_path
             target = repo_copy / rel_path
@@ -119,6 +121,9 @@ class TestVenusEvchargerInstallationEndToEnd(unittest.TestCase):
             self._rewrite_shell_paths(repo_copy, service_root, rc_local_path)
             self._stub_service_entrypoint(repo_copy, started_marker)
             self._stub_disable_helper(repo_copy, helper_marker)
+            target_cli_path = repo_copy / "deploy/venus/venus_evchargerctl.sh"
+            gx_smoke_path = repo_copy / "deploy/venus/gx_api_smoke_test_skeleton.sh"
+            reset_helper_path = repo_copy / "deploy/venus/reset_venus_evcharger_config.sh"
 
             subprocess.run(
                 ["bash", str(repo_copy / "deploy/venus/configure_venus_evcharger_service.sh"), *wizard_args],
@@ -148,6 +153,12 @@ class TestVenusEvchargerInstallationEndToEnd(unittest.TestCase):
 
             self.assertTrue(service_link.is_symlink())
             self.assertEqual(service_link.resolve(), (repo_copy / "deploy/venus/service_venus_evcharger").resolve())
+            self.assertTrue(target_cli_path.is_file())
+            self.assertTrue(os.access(target_cli_path, os.X_OK))
+            self.assertTrue(gx_smoke_path.is_file())
+            self.assertTrue(os.access(gx_smoke_path, os.X_OK))
+            self.assertTrue(reset_helper_path.is_file())
+            self.assertTrue(os.access(reset_helper_path, os.X_OK))
             rc_local_text = rc_local_path.read_text(encoding="utf-8")
             self.assertIn(str(repo_copy / "deploy/venus/boot_venus_evcharger_service.sh"), rc_local_text)
 
@@ -175,7 +186,7 @@ class TestVenusEvchargerInstallationEndToEnd(unittest.TestCase):
                     "--non-interactive",
                     "--force",
                     "--profile",
-                    "simple-relay",
+                    "simple_relay",
                     "--host",
                     "192.168.1.44",
                     "--device-instance",
@@ -194,7 +205,7 @@ class TestVenusEvchargerInstallationEndToEnd(unittest.TestCase):
                     "--non-interactive",
                     "--force",
                     "--profile",
-                    "native-charger",
+                    "native_device",
                     "--host",
                     "goe.local",
                     "--charger-host",
@@ -226,7 +237,7 @@ class TestVenusEvchargerInstallationEndToEnd(unittest.TestCase):
                     "--non-interactive",
                     "--force",
                     "--profile",
-                    "native-charger",
+                    "native_device",
                     "--host",
                     "192.168.1.90",
                     "--device-instance",
@@ -264,8 +275,8 @@ class TestVenusEvchargerInstallationEndToEnd(unittest.TestCase):
                     "--non-interactive",
                     "--force",
                     "--profile",
-                    "split-topology",
-                    "--split-preset",
+                    "multi_adapter_topology",
+                    "--topology-preset",
                     "shelly-meter-goe",
                     "--host",
                     "goe.local",
@@ -305,8 +316,8 @@ class TestVenusEvchargerInstallationEndToEnd(unittest.TestCase):
                     "--non-interactive",
                     "--force",
                     "--profile",
-                    "split-topology",
-                    "--split-preset",
+                    "multi_adapter_topology",
+                    "--topology-preset",
                     "goe-external-switch-group",
                     "--host",
                     "goe.local",
@@ -355,6 +366,62 @@ class TestVenusEvchargerInstallationEndToEnd(unittest.TestCase):
                     expected_generated_files=scenario.get("expected_generated_files", ()),
                     generated_file_fragments=scenario.get("generated_file_fragments"),
                 )
+
+    def test_installed_target_cli_wrapper_can_query_live_local_api(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo_copy = self._copy_installation_tree(root)
+            service_root = root / "service"
+            rc_local_path = root / "data" / "rc.local"
+            wrapper_path = repo_copy / "deploy/venus/venus_evchargerctl.sh"
+            service_root.mkdir(parents=True, exist_ok=True)
+            rc_local_path.parent.mkdir(parents=True, exist_ok=True)
+            self._rewrite_shell_paths(repo_copy, service_root, rc_local_path)
+
+            subprocess.run(
+                ["bash", str(repo_copy / "deploy/venus/install_venus_evcharger_service.sh")],
+                cwd=repo_copy,
+                check=True,
+            )
+
+            with started_control_api_server() as (_service, server):
+                environment = {**os.environ, "PYTHONPATH": str(repo_copy)}
+
+                health_result = subprocess.run(
+                    [
+                        "sh",
+                        str(wrapper_path),
+                        "--url",
+                        f"http://{server.bound_host}:{server.bound_port}",
+                        "health",
+                    ],
+                    cwd=repo_copy,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                )
+                self.assertTrue(Path(wrapper_path).is_file())
+                self.assertIn('"ok": true', health_result.stdout)
+
+                state_result = subprocess.run(
+                    [
+                        "sh",
+                        str(wrapper_path),
+                        "--url",
+                        f"http://{server.bound_host}:{server.bound_port}",
+                        "--token",
+                        "read-token",
+                        "state",
+                        "summary",
+                    ],
+                    cwd=repo_copy,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                )
+                self.assertIn('"kind": "summary"', state_result.stdout)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,38 @@ class _AutoInputHelperSnapshotMixin:
             "grid": 0.0,
         }
 
+    @staticmethod
+    def _battery_snapshot_field_names() -> tuple[str, ...]:
+        return (
+            "battery_soc",
+            "battery_combined_soc",
+            "battery_combined_usable_capacity_wh",
+            "battery_combined_charge_power_w",
+            "battery_combined_discharge_power_w",
+            "battery_combined_net_power_w",
+            "battery_combined_ac_power_w",
+            "battery_headroom_charge_w",
+            "battery_headroom_discharge_w",
+            "expected_near_term_export_w",
+            "expected_near_term_import_w",
+            "battery_discharge_balance_mode",
+            "battery_discharge_balance_target_distribution_mode",
+            "battery_discharge_balance_error_w",
+            "battery_discharge_balance_max_abs_error_w",
+            "battery_discharge_balance_total_discharge_w",
+            "battery_discharge_balance_eligible_source_count",
+            "battery_discharge_balance_active_source_count",
+            "battery_discharge_balance_control_candidate_count",
+            "battery_discharge_balance_control_ready_count",
+            "battery_discharge_balance_supported_control_source_count",
+            "battery_discharge_balance_experimental_control_source_count",
+            "battery_source_count",
+            "battery_online_source_count",
+            "battery_valid_soc_source_count",
+            "battery_sources",
+            "battery_learning_profiles",
+        )
+
     def _ensure_poll_state(self: Any) -> None:
         """Initialize runtime state for tests or partially constructed instances."""
         self._ensure_source_poll_intervals()
@@ -87,12 +119,7 @@ class _AutoInputHelperSnapshotMixin:
             if current < float(self._next_source_poll_at.get(source_name, 0.0)):
                 continue
             value = getter()
-            if value is None:
-                snapshot[value_key] = None
-                snapshot[captured_key] = None
-            else:
-                snapshot[value_key] = value
-                snapshot[captured_key] = current
+            self._apply_source_snapshot_value(snapshot, source_name, value_key, captured_key, value, current)
             self._next_source_poll_at[source_name] = current + float(interval_seconds)
 
         snapshot["captured_at"] = current
@@ -110,13 +137,42 @@ class _AutoInputHelperSnapshotMixin:
         if snapshot_keys is None:
             return
         value_key, captured_key = snapshot_keys
-        snapshot[value_key] = value
-        snapshot[captured_key] = None if value is None else current
+        self._apply_source_snapshot_value(snapshot, source_name, value_key, captured_key, value, current)
         snapshot["captured_at"] = current
         snapshot["heartbeat_at"] = current
         snapshot["snapshot_version"] = self.SNAPSHOT_SCHEMA_VERSION
         self._last_snapshot_state = snapshot
         self._write_snapshot(snapshot)
+
+    def _apply_source_snapshot_value(
+        self: Any,
+        snapshot: dict[str, object],
+        source_name: str,
+        value_key: str,
+        captured_key: str,
+        value: object,
+        current: float,
+    ) -> None:
+        if source_name == "battery" and isinstance(value, dict):
+            self._apply_battery_snapshot_value(snapshot, value, captured_key, current)
+            return
+        snapshot[value_key] = value
+        snapshot[captured_key] = None if value is None else current
+
+    def _apply_battery_snapshot_value(
+        self: Any,
+        snapshot: dict[str, object],
+        value: dict[str, object],
+        captured_key: str,
+        current: float,
+    ) -> None:
+        battery_soc = value.get("battery_soc")
+        snapshot["battery_soc"] = battery_soc
+        snapshot[captured_key] = None if battery_soc is None else current
+        for field_name in self._battery_snapshot_field_names():
+            if field_name == "battery_soc":
+                continue
+            snapshot[field_name] = value.get(field_name)
 
     @staticmethod
     def _source_snapshot_keys(source_name: str) -> tuple[str, str] | None:

@@ -77,6 +77,18 @@ This keeps API control metadata runtime-only and avoids writing it to flash-back
 - `GET /v1/events`
 - all `GET /v1/state/*`
 
+Focused recommendation readout:
+
+- `GET /v1/state/victron-bias-recommendation`
+
+This small state payload is meant for direct operator use and exposes:
+
+- current Victron-bias `kp`, `ki`, and ramp values
+- recommended `kp`, `ki`, and ramp values
+- recommendation confidence and reason
+- a copy-paste-ready INI snippet
+- a short operator hint
+
 ### Authenticated control endpoint
 
 - `POST /v1/control/command`
@@ -126,7 +138,7 @@ Notable fields:
 
 Accepts one JSON object and returns one structured command/result payload.
 
-Supported request styles:
+Canonical request style for new clients:
 
 1. Canonical command form
 
@@ -137,6 +149,8 @@ Supported request styles:
 }
 ```
 
+Compatibility request style:
+
 2. Path/value form
 
 ```json
@@ -145,6 +159,13 @@ Supported request styles:
   "value": 1
 }
 ```
+
+Normative guidance:
+
+- new clients should prefer the canonical `name` form
+- `path/value` exists for compatibility and bridge-friendly usage
+- both forms map into the same canonical `ControlCommand`
+- clients should not treat `path/value` as a second primary control model
 
 For runtime-setting commands, an explicit path is required:
 
@@ -230,11 +251,55 @@ Every command response uses this stable outer shape:
 - `retryable`
 - `details`
 
+## Response semantics
+
+The response intentionally exposes three different layers of meaning:
+
+- HTTP status:
+  transport-level outcome of the request
+- `ok`:
+  coarse success flag for the normalized API envelope
+- `result.status`:
+  coarse command lifecycle outcome for accepted commands
+- `error.code`:
+  fine-grained semantic reason when the request or command was not successful
+
+`ok` is intentionally coarse:
+
+- command responses use `ok=true` for accepted/applied command handling
+- command responses use `ok=false` for rejected commands and malformed requests
+- read/state responses use `ok=true` when the endpoint returns a normalized payload
+
+Clients should therefore interpret responses in this order:
+
+1. check HTTP status for transport success/failure
+2. check `ok` for coarse API success/failure
+3. check `result.status` for command lifecycle
+4. check `error.code` for the precise failure class
+
 Stable `status` values:
 
 - `applied`
 - `accepted_in_flight`
 - `rejected`
+
+The `status` taxonomy is intentionally coarse within `v1`:
+
+- `applied` means the command was accepted and completed within the current request lifecycle
+- `accepted_in_flight` means the command was accepted and side effects have started, but completion is still in flight
+- `rejected` means the command was not accepted for execution
+
+Blocked commands stay within this stable taxonomy:
+
+- topology, health, mode, and update blockers remain `status=rejected`
+- clients must use `error.code` for the finer reason, for example:
+  - `blocked_by_health`
+  - `blocked_by_mode`
+  - `unsupported_for_topology`
+  - `update_in_progress`
+
+`v1` does not define separate top-level statuses such as `blocked` or `no_effect`.
+If a client needs the finer class, it should rely on `error.code` and `detail`.
 
 Stable error codes include:
 
@@ -269,6 +334,34 @@ local state token in:
 
 - `ETag`
 - `X-State-Token`
+
+## Command matrix
+
+The table below is the practical client-facing contract summary. For exact
+machine-readable validation rules, treat `GET /v1/openapi.json` as normative.
+
+<!-- BEGIN:CONTROL_API_COMMAND_MATRIX -->
+| Command name | Required fields | Value type | Allowed values / ranges | Idempotent shape | `accepted_in_flight` | Required scope | Typical restrictions |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `set_mode` | `name`, `path`, `value` | integer | `0`, `1`, `2` | yes | possible | `control_basic` | mode-specific runtime rules |
+| `set_auto_start` | `name`, `path`, `value` | boolean or `0/1` | binary | yes | uncommon | `control_basic` | none beyond local policy |
+| `set_start_stop` | `name`, `path`, `value` | boolean or `0/1` | binary | yes | possible | `control_basic` | mode/backend policy |
+| `set_enable` | `name`, `path`, `value` | boolean or `0/1` | binary | yes | possible | `control_basic` | backend/health policy |
+| `set_current_setting` | `name`, `path`, `value` | number | `>= 0` | yes | possible | `control_basic` | backend/current limits |
+| `set_phase_selection` | `name`, `path`, `value` | string | `P1`, `P1_P2`, `P1_P2_P3` | yes | possible | `control_basic` | supported topology and phase hardware |
+| `set_auto_runtime_setting` | `name`, `path`, `value` | boolean or `0/1`, integer, number, or string depending on `path` | path-specific schema | yes | uncommon | `control_admin` | only supported runtime-setting paths |
+| `reset_phase_lockout` | `name`, `path`, `value` | boolean or `0/1` | binary | no | uncommon | `control_admin` | only meaningful when lockout exists |
+| `reset_contactor_lockout` | `name`, `path`, `value` | boolean or `0/1` | binary | no | uncommon | `control_admin` | only meaningful when lockout exists |
+| `trigger_software_update` | `name`, `path`, `value` | boolean or `0/1` | binary | no | possible | `update_admin` | update policy, availability, current update state |
+| `legacy_unknown_write` | `name`, `path`, `value` | implementation-defined | implementation-defined | compatibility-only | implementation-defined | `control_admin` | not for new clients |
+<!-- END:CONTROL_API_COMMAND_MATRIX -->
+
+Notes:
+
+- the canonical form is `name`-first; `path` is only required where the command family needs a more specific target
+- path-based compatibility payloads are still accepted, but new clients should model against command names
+- "Idempotent shape" means a client can safely reason about repeated writes to the same target/value pair; replay protection is additionally available through `Idempotency-Key`
+- `accepted_in_flight` should be treated as a possible outcome for commands that can trigger external actuation or longer-running local side effects
 
 ## Idempotency and command tracking
 
@@ -386,9 +479,30 @@ curl -N \
   'http://127.0.0.1:8765/v1/events?limit=10&timeout=30'
 ```
 
-## Curl examples
+## Client examples
 
-Read capabilities:
+<!-- BEGIN:CONTROL_API_GETTING_STARTED -->
+Official example files:
+
+- Python example: [examples/control_api_client.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/examples/control_api_client.py)
+- Small CLI: [venus_evchargerctl.py](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/venus_evchargerctl.py)
+- Target-system wrapper: [venus_evchargerctl.sh](/home/martin/Schreibtisch/cerbo300126/vomCerbo/data/dbus-opendtuAndi/github/venus-evcharger-service/deploy/venus/venus_evchargerctl.sh)
+- Local developer runbook: [DEV_API_WORKFLOW.md](DEV_API_WORKFLOW.md)
+
+CLI quick start:
+
+```bash
+python3 ./venus_evchargerctl.py --token READ-TOKEN health
+python3 ./venus_evchargerctl.py --token READ-TOKEN doctor
+python3 ./venus_evchargerctl.py --token READ-TOKEN capabilities
+python3 ./venus_evchargerctl.py --token READ-TOKEN state summary
+python3 ./venus_evchargerctl.py --token CONTROL-TOKEN command set-mode 1
+python3 ./venus_evchargerctl.py --token CONTROL-TOKEN safe-write set-mode 1
+python3 ./venus_evchargerctl.py --token CONTROL-TOKEN command set-current-setting 12.5 --path /SetCurrent
+python3 ./venus_evchargerctl.py --unix-socket /run/venus-evcharger-control.sock --token READ-TOKEN watch --kind command --once
+```
+
+Read capabilities with `curl`:
 
 ```bash
 curl -s \
@@ -396,7 +510,7 @@ curl -s \
   http://127.0.0.1:8765/v1/capabilities
 ```
 
-Execute a command:
+Execute a command with `curl`:
 
 ```bash
 curl -s \
@@ -415,6 +529,69 @@ curl --unix-socket /run/venus-evcharger-control.sock \
   -H 'Content-Type: application/json' \
   -d '{"name":"set_mode","value":1}' \
   http://localhost/v1/control/command
+```
+
+Use `If-Match` with the current state token:
+
+```bash
+STATE_TOKEN="$(curl -s -D - -o /tmp/state.json \
+  -H 'Authorization: Bearer READ-TOKEN' \
+  http://127.0.0.1:8765/v1/state/health \
+  | awk -F': ' '/^X-State-Token:/ {print $2}' | tr -d '\r')"
+
+curl -s \
+  -H 'Authorization: Bearer CONTROL-TOKEN' \
+  -H 'Content-Type: application/json' \
+  -H "If-Match: \"$STATE_TOKEN\"" \
+  -d '{"name":"set_mode","value":1}' \
+  http://127.0.0.1:8765/v1/control/command
+```
+
+Python quick start:
+
+```python
+from venus_evcharger.control.client import LocalControlApiClient
+
+client = LocalControlApiClient(
+    base_url="http://127.0.0.1:8765",
+    bearer_token="CONTROL-TOKEN",
+)
+
+summary = client.state("summary").json()
+state_token = client.state("health").headers.get("X-State-Token", "")
+result = client.command(
+    {"name": "set_mode", "value": 1},
+    idempotency_key="set-mode-1",
+    if_match=state_token,
+).json()
+```
+<!-- END:CONTROL_API_GETTING_STARTED -->
+
+## CLI contract
+
+`venus_evchargerctl` is the small first-class operator client for this local
+API.
+
+Supported entrypoints:
+
+- repository-local:
+  `python3 ./venus_evchargerctl.py`
+- installed target wrapper:
+  `./deploy/venus/venus_evchargerctl.sh`
+
+Exit codes:
+
+- `0` when the API returned a `2xx` response
+- `1` when the request reached the API but was rejected or failed
+- `2` when the CLI invocation itself was invalid
+
+That means shell automation can treat `1` as an application/API failure and `2`
+as a local usage bug.
+
+Example:
+
+```bash
+python3 ./venus_evchargerctl.py --token READ-TOKEN state victron-bias-recommendation
 ```
 
 ## Versioning

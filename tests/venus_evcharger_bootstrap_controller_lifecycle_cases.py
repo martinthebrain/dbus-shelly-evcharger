@@ -22,17 +22,38 @@ class TestServiceBootstrapControllerLifecycle(ServiceBootstrapControllerTestCase
         controller.initialize_controllers = MagicMock(side_effect=lambda: calls.append("controllers"))
         controller.initialize_virtual_state = MagicMock(side_effect=lambda: calls.append("virtual"))
         controller.restore_runtime_state = MagicMock(side_effect=lambda: calls.append("restore"))
-        controller.initialize_dbus_service = MagicMock(side_effect=lambda: calls.append("dbus"))
         controller.apply_device_metadata = MagicMock(side_effect=lambda: calls.append("metadata"))
-        controller.register_paths = MagicMock(side_effect=lambda: calls.append("paths"))
         controller.start_runtime_loops = MagicMock(side_effect=lambda: calls.append("loops"))
+        controller.initialize_dbus_service = MagicMock(side_effect=lambda: calls.append("dbus"))
+        controller.register_paths = MagicMock(side_effect=lambda: calls.append("paths"))
+        controller.publish_dbus_service = MagicMock(side_effect=lambda: calls.append("publish"))
 
         controller.initialize_service()
 
         self.assertEqual(
             calls,
-            ["config", "controllers", "virtual", "restore", "dbus", "metadata", "paths", "loops"],
+            ["config", "controllers", "virtual", "restore", "metadata", "loops", "dbus", "paths", "publish"],
         )
+
+    def test_initialize_service_does_not_publish_half_ready_dbus_service_when_loops_fail(self):
+        service = MagicMock()
+        controller = self._controller(service)
+        controller.load_runtime_configuration = MagicMock()
+        controller.initialize_controllers = MagicMock()
+        controller.initialize_virtual_state = MagicMock()
+        controller.restore_runtime_state = MagicMock()
+        controller.apply_device_metadata = MagicMock()
+        controller.start_runtime_loops = MagicMock(side_effect=RuntimeError("boom"))
+        controller.initialize_dbus_service = MagicMock()
+        controller.register_paths = MagicMock()
+        controller.publish_dbus_service = MagicMock()
+
+        with self.assertRaises(RuntimeError):
+            controller.initialize_service()
+
+        controller.initialize_dbus_service.assert_not_called()
+        controller.register_paths.assert_not_called()
+        controller.publish_dbus_service.assert_not_called()
 
     def test_request_mainloop_quit_uses_idle_add_when_available_and_falls_back(self):
         mainloop = MagicMock()

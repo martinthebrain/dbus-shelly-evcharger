@@ -16,7 +16,7 @@ from tests.venus_evcharger_bootstrap_controller_support import (
 
 
 class TestServiceBootstrapControllerPaths(ServiceBootstrapControllerTestCase):
-    def test_register_paths_uses_main_script_path_and_registers_service(self):
+    def test_register_paths_uses_main_script_path_without_publishing_service_yet(self):
         service = SimpleNamespace(
             _dbusservice=_FakeDbusService(),
             connection_name="Shelly RPC",
@@ -253,7 +253,163 @@ class TestServiceBootstrapControllerPaths(ServiceBootstrapControllerTestCase):
         self.assertTrue(service._dbusservice.paths["/Auto/PhaseMismatchLockoutCount"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/Auto/PhaseLockoutReset"]["writeable"])
         self.assertTrue(service._dbusservice.paths["/Auto/ContactorLockoutReset"]["writeable"])
+        self.assertFalse(service._dbusservice.register_called)
+
+    def test_publish_dbus_service_registers_service_after_paths_exist(self):
+        service = SimpleNamespace(_dbusservice=_FakeDbusService())
+
+        controller = self._controller(service)
+        controller.publish_dbus_service()
+
         self.assertTrue(service._dbusservice.register_called)
+
+    def test_register_paths_marks_service_disconnected_when_host_is_not_configured(self):
+        service = SimpleNamespace(
+            _dbusservice=_FakeDbusService(),
+            connection_name="Not configured",
+            deviceinstance=60,
+            product_name="Venus EV Charger Service",
+            custom_name="Wallbox",
+            firmware_version="1.0",
+            hardware_version="Not configured",
+            serial="unconfigured-60",
+            position=1,
+            min_current=6.0,
+            max_current=16.0,
+            virtual_set_current=16.0,
+            virtual_autostart=1,
+            virtual_mode=0,
+            virtual_startstop=1,
+            virtual_enable=1,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1",),
+            auto_start_surplus_watts=1850.0,
+            auto_stop_surplus_watts=1350.0,
+            auto_min_soc=40.0,
+            auto_resume_soc=50.0,
+            auto_start_delay_seconds=10.0,
+            auto_stop_delay_seconds=30.0,
+            auto_month_windows={},
+            auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
+            auto_scheduled_night_start_delay_seconds=3600.0,
+            auto_scheduled_latest_end_time="06:30",
+            auto_scheduled_night_current_amps=13.0,
+            auto_dbus_backoff_base_seconds=5.0,
+            auto_dbus_backoff_max_seconds=60.0,
+            auto_grid_recovery_start_seconds=14.0,
+            auto_stop_surplus_delay_seconds=45.0,
+            auto_stop_surplus_volatility_low_watts=80.0,
+            auto_stop_surplus_volatility_high_watts=240.0,
+            auto_reference_charge_power_watts=2100.0,
+            auto_learn_charge_power_enabled=True,
+            auto_learn_charge_power_min_watts=1400.0,
+            auto_learn_charge_power_alpha=0.25,
+            auto_learn_charge_power_start_delay_seconds=12.0,
+            auto_learn_charge_power_window_seconds=180.0,
+            auto_learn_charge_power_max_age_seconds=21600.0,
+            auto_phase_switching_enabled=True,
+            auto_phase_prefer_lowest_when_idle=False,
+            auto_phase_upshift_delay_seconds=120.0,
+            auto_phase_downshift_delay_seconds=30.0,
+            auto_phase_upshift_headroom_watts=250.0,
+            auto_phase_downshift_margin_watts=150.0,
+            auto_phase_mismatch_retry_seconds=300.0,
+            auto_phase_mismatch_lockout_count=3,
+            auto_phase_mismatch_lockout_seconds=1800.0,
+            runtime_overrides_path="/run/wallbox-overrides.ini",
+            _runtime_overrides_active=False,
+            backend_mode="combined",
+            meter_backend_type="shelly_combined",
+            switch_backend_type="shelly_combined",
+            charger_backend_type=None,
+            topology_configured=False,
+            host_configured=False,
+            _last_health_reason="not-configured",
+            _last_health_code=41,
+            _last_auto_state="idle",
+            _last_auto_state_code=0,
+            _handle_write=MagicMock(),
+        )
+
+        controller = self._controller(service)
+        controller.register_paths()
+
+        self.assertEqual(service._dbusservice.paths["/Connected"]["value"], 0)
+
+    def test_register_paths_marks_configured_split_topology_connected_without_legacy_host(self):
+        service = SimpleNamespace(
+            _dbusservice=_FakeDbusService(),
+            connection_name="Adapter topology",
+            deviceinstance=60,
+            product_name="Venus EV Charger Service",
+            custom_name="Wallbox",
+            firmware_version="1.0",
+            hardware_version="External adapter topology",
+            serial="topology-60",
+            position=1,
+            min_current=6.0,
+            max_current=16.0,
+            virtual_set_current=16.0,
+            virtual_autostart=1,
+            virtual_mode=0,
+            virtual_startstop=1,
+            virtual_enable=1,
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            supported_phase_selections=("P1",),
+            auto_start_surplus_watts=1850.0,
+            auto_stop_surplus_watts=1350.0,
+            auto_min_soc=40.0,
+            auto_resume_soc=50.0,
+            auto_start_delay_seconds=10.0,
+            auto_stop_delay_seconds=30.0,
+            auto_month_windows={},
+            auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
+            auto_scheduled_night_start_delay_seconds=3600.0,
+            auto_scheduled_latest_end_time="06:30",
+            auto_scheduled_night_current_amps=13.0,
+            auto_dbus_backoff_base_seconds=5.0,
+            auto_dbus_backoff_max_seconds=60.0,
+            auto_grid_recovery_start_seconds=14.0,
+            auto_stop_surplus_delay_seconds=45.0,
+            auto_stop_surplus_volatility_low_watts=80.0,
+            auto_stop_surplus_volatility_high_watts=240.0,
+            auto_reference_charge_power_watts=2100.0,
+            auto_learn_charge_power_enabled=True,
+            auto_learn_charge_power_min_watts=1400.0,
+            auto_learn_charge_power_alpha=0.25,
+            auto_learn_charge_power_start_delay_seconds=12.0,
+            auto_learn_charge_power_window_seconds=180.0,
+            auto_learn_charge_power_max_age_seconds=21600.0,
+            auto_phase_switching_enabled=True,
+            auto_phase_prefer_lowest_when_idle=False,
+            auto_phase_upshift_delay_seconds=120.0,
+            auto_phase_downshift_delay_seconds=30.0,
+            auto_phase_upshift_headroom_watts=250.0,
+            auto_phase_downshift_margin_watts=150.0,
+            auto_phase_mismatch_retry_seconds=300.0,
+            auto_phase_mismatch_lockout_count=3,
+            auto_phase_mismatch_lockout_seconds=1800.0,
+            runtime_overrides_path="/run/wallbox-overrides.ini",
+            _runtime_overrides_active=False,
+            backend_mode="split",
+            meter_backend_type="template_meter",
+            switch_backend_type="template_switch",
+            charger_backend_type=None,
+            topology_configured=True,
+            host_configured=False,
+            _last_health_reason="init",
+            _last_health_code=0,
+            _last_auto_state="idle",
+            _last_auto_state_code=0,
+            _handle_write=MagicMock(),
+        )
+
+        controller = self._controller(service)
+        controller.register_paths()
+
+        self.assertEqual(service._dbusservice.paths["/Connected"]["value"], 1)
 
     def test_initialize_controllers_uses_port_wrappers_for_bound_controllers(self):
         service = SimpleNamespace(
@@ -276,9 +432,9 @@ class TestServiceBootstrapControllerPaths(ServiceBootstrapControllerTestCase):
         self.assertIsInstance(service._auto_controller.service, AutoDecisionPort)
         self.assertIsInstance(service._write_controller.port, WriteControllerPort)
         self.assertIsInstance(service._update_controller.service, UpdateCyclePort)
-        self.assertEqual(service._backend_selection.mode, "combined")
-        self.assertEqual(service._backend_selection.meter_type, "shelly_combined")
-        self.assertEqual(service._backend_selection.switch_type, "shelly_combined")
+        self.assertEqual(service._backend_bundle.runtime.backend_mode, "combined")
+        self.assertEqual(service._backend_bundle.runtime.meter_type, "shelly_meter")
+        self.assertEqual(service._backend_bundle.runtime.switch_type, "shelly_contactor_switch")
         self.assertIsNotNone(service._meter_backend)
         self.assertIsNotNone(service._switch_backend)
         self.assertIsNone(service._charger_backend)
@@ -311,8 +467,8 @@ class TestServiceBootstrapControllerPaths(ServiceBootstrapControllerTestCase):
 
             controller.initialize_controllers()
 
-            self.assertEqual(service._backend_selection.mode, "split")
-            self.assertEqual(service._backend_selection.meter_type, "none")
+            self.assertEqual(service._backend_bundle.runtime.backend_mode, "split")
+            self.assertEqual(service._backend_bundle.runtime.meter_type, None)
             self.assertIsNone(service._meter_backend)
             self.assertIsNotNone(service._switch_backend)
             self.assertIsNotNone(service._charger_backend)
@@ -349,7 +505,7 @@ class TestServiceBootstrapControllerPaths(ServiceBootstrapControllerTestCase):
             controller.initialize_controllers()
             controller.initialize_virtual_state()
 
-            self.assertEqual(service._backend_selection.switch_type, "none")
+            self.assertEqual(service._backend_bundle.runtime.switch_type, None)
             self.assertIsNone(service._switch_backend)
             self.assertIsNotNone(service._charger_backend)
             self.assertEqual(service.supported_phase_selections, ("P1", "P1_P2"))

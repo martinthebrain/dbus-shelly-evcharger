@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Split-topology preset renderers for the setup wizard."""
+"""Legacy split-layout helpers kept only for branch-coverage tests."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from venus_evcharger.bootstrap.wizard_support import host_from_input
 
 def split_topology_files(
     *,
-    split_preset: str | None,
+    topology_preset: str | None,
     role_hosts: dict[str, str],
     meter_base_url: str,
     switch_base_url: str,
@@ -33,7 +33,7 @@ def split_topology_files(
     transport_unit_id: int,
 ) -> tuple[list[str], dict[str, str], dict[str, str]]:
     simple_variant = _simple_split_variant(
-        split_preset,
+        topology_preset,
         role_hosts,
         charger_base_url,
         charger_preset,
@@ -46,9 +46,9 @@ def split_topology_files(
     )
     if simple_variant is not None:
         return simple_variant
-    if split_preset in {"goe-external-switch-group", "template-meter-goe-switch-group", "shelly-meter-goe-switch-group"}:
+    if topology_preset in {"goe-external-switch-group", "template-meter-goe-switch-group", "shelly-meter-goe-switch-group"}:
         return _goe_switch_group_variant(
-            split_preset,
+            topology_preset,
             role_hosts,
             meter_base_url,
             switch_base_url,
@@ -61,7 +61,7 @@ def split_topology_files(
             transport_device,
             transport_unit_id,
         )
-    if split_preset == "shelly-meter-modbus-switch-group":
+    if topology_preset == "shelly-meter-modbus-switch-group":
         return _shelly_meter_modbus_switch_group(
             role_hosts,
             switch_base_url,
@@ -77,7 +77,7 @@ def split_topology_files(
 
 
 def _simple_split_variant(
-    split_preset: str | None,
+    topology_preset: str | None,
     role_hosts: dict[str, str],
     charger_base_url: str,
     charger_preset: str | None,
@@ -88,9 +88,9 @@ def _simple_split_variant(
     transport_device: str,
     transport_unit_id: int,
 ) -> tuple[list[str], dict[str, str], dict[str, str]] | None:
-    if split_preset == "shelly-io-template-charger":
+    if topology_preset == "shelly-io-template-charger":
         return _shelly_io_template_files(role_hosts, charger_base_url)
-    if split_preset == "shelly-io-modbus-charger":
+    if topology_preset == "shelly-io-modbus-charger":
         return _shelly_io_modbus_files(
             role_hosts,
             charger_preset,
@@ -100,7 +100,7 @@ def _simple_split_variant(
             transport_device,
             transport_unit_id,
         )
-    if split_preset == "shelly-meter-goe":
+    if topology_preset == "shelly-meter-goe":
         return _shelly_meter_goe_files(
             role_hosts,
             charger_base_url,
@@ -112,7 +112,7 @@ def _simple_split_variant(
             transport_device,
             transport_unit_id,
         )
-    if split_preset == "shelly-meter-modbus-charger":
+    if topology_preset == "shelly-meter-modbus-charger":
         return _shelly_meter_modbus_files(
             role_hosts,
             charger_preset,
@@ -205,7 +205,7 @@ def _shelly_meter_goe_files(
 
 
 def _goe_switch_group_variant(
-    split_preset: str,
+    topology_preset: str,
     role_hosts: dict[str, str],
     meter_base_url: str,
     switch_base_url: str,
@@ -218,7 +218,7 @@ def _goe_switch_group_variant(
     transport_device: str,
     transport_unit_id: int,
 ) -> tuple[list[str], dict[str, str], dict[str, str]]:
-    meter_type, meter_config = _goe_switch_group_meter(split_preset, role_hosts, meter_base_url)
+    meter_type, meter_config = _goe_switch_group_meter(topology_preset, role_hosts, meter_base_url)
     backend_lines = ["Mode=split", f"MeterType={meter_type}"]
     files = {
         "wizard-charger.ini": native_charger_config(
@@ -249,13 +249,13 @@ def _goe_switch_group_variant(
 
 
 def _goe_switch_group_meter(
-    split_preset: str,
+    topology_preset: str,
     role_hosts: dict[str, str],
     meter_base_url: str,
 ) -> tuple[str, str | None]:
-    if split_preset == "goe-external-switch-group":
+    if topology_preset == "goe-external-switch-group":
         return "none", None
-    if split_preset == "template-meter-goe-switch-group":
+    if topology_preset == "template-meter-goe-switch-group":
         return "template_meter", template_meter_config(meter_base_url)
     return "shelly_meter", shelly_meter_config(host_from_input(role_hosts["meter"]))
 

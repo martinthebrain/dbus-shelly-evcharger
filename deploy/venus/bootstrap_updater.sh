@@ -33,7 +33,13 @@ REPO_SLUG="${VENUS_EVCHARGER_REPO_SLUG:-$DEFAULT_REPO_SLUG}"
 CHANNEL="${VENUS_EVCHARGER_CHANNEL:-$DEFAULT_CHANNEL}"
 SOURCE_DIR_OVERRIDE="${VENUS_EVCHARGER_SOURCE_DIR:-}"
 MANIFEST_SOURCE="${VENUS_EVCHARGER_MANIFEST_SOURCE:-}"
-MANIFEST_SIG_SOURCE="${VENUS_EVCHARGER_MANIFEST_SIG_SOURCE:-${MANIFEST_SOURCE}.sig}"
+if [ -n "${VENUS_EVCHARGER_MANIFEST_SIG_SOURCE:-}" ]; then
+    MANIFEST_SIG_SOURCE="$VENUS_EVCHARGER_MANIFEST_SIG_SOURCE"
+elif [ -n "$MANIFEST_SOURCE" ]; then
+    MANIFEST_SIG_SOURCE="${MANIFEST_SOURCE}.sig"
+else
+    MANIFEST_SIG_SOURCE=""
+fi
 BOOTSTRAP_PUBKEY_OVERRIDE="${VENUS_EVCHARGER_BOOTSTRAP_PUBKEY:-}"
 REQUIRE_SIGNED_MANIFEST="${VENUS_EVCHARGER_REQUIRE_SIGNED_MANIFEST:-0}"
 ARCHIVE_URL="${VENUS_EVCHARGER_ARCHIVE_URL:-https://codeload.github.com/${REPO_SLUG}/tar.gz/refs/heads/${CHANNEL}}"
@@ -389,6 +395,13 @@ EOF
 preserve_local_config() {
     preserve_dir="$1"
     active_dir=$(current_codebase_dir)
+    local_deploy_dir=""
+    if [ -d "${active_dir}/deploy/venus" ]; then
+        local_deploy_dir="${active_dir}/deploy/venus"
+    elif [ -d "${TARGET_DIR}/deploy/venus" ]; then
+        local_deploy_dir="${TARGET_DIR}/deploy/venus"
+    fi
+
     if [ -f "${active_dir}/deploy/venus/config.venus_evcharger.ini" ]; then
         mkdir -p "${preserve_dir}/deploy/venus"
         cp "${active_dir}/deploy/venus/config.venus_evcharger.ini" "${preserve_dir}/deploy/venus/config.venus_evcharger.ini"
@@ -396,6 +409,14 @@ preserve_local_config() {
         mkdir -p "${preserve_dir}/deploy/venus"
         cp "${TARGET_DIR}/deploy/venus/config.venus_evcharger.ini" "${preserve_dir}/deploy/venus/config.venus_evcharger.ini"
     fi
+
+    if [ -n "$local_deploy_dir" ]; then
+        mkdir -p "${preserve_dir}/deploy/venus"
+        find "$local_deploy_dir" -maxdepth 1 -type f \
+            \( -name 'wizard-*.ini' -o -name 'config.venus_evcharger.ini.wizard-*' \) \
+            -exec cp {} "${preserve_dir}/deploy/venus/" \;
+    fi
+
     if [ -f "${TARGET_DIR}/noUpdate" ]; then
         cp "${TARGET_DIR}/noUpdate" "${preserve_dir}/noUpdate"
     fi
@@ -410,6 +431,12 @@ restore_local_config() {
     if [ -f "${preserve_dir}/deploy/venus/config.venus_evcharger.ini" ]; then
         mkdir -p "${destination_root}/deploy/venus"
         cp "${preserve_dir}/deploy/venus/config.venus_evcharger.ini" "${destination_root}/deploy/venus/config.venus_evcharger.ini"
+    fi
+    if [ -d "${preserve_dir}/deploy/venus" ]; then
+        mkdir -p "${destination_root}/deploy/venus"
+        find "${preserve_dir}/deploy/venus" -maxdepth 1 -type f \
+            \( -name 'wizard-*.ini' -o -name 'config.venus_evcharger.ini.wizard-*' \) \
+            -exec cp {} "${destination_root}/deploy/venus/" \;
     fi
     if [ "$DRY_RUN" != "1" ]; then
         if [ -f "${preserve_dir}/noUpdate" ]; then

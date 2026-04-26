@@ -30,6 +30,9 @@ class _UpdateCycleRuntimeMixin:
         svc._last_successful_update_at = completed_at
         svc._last_recovery_attempt_at = None
         svc.last_update = completed_at
+        publish_companion = getattr(svc, "_publish_companion_dbus_bridge", None)
+        if callable(publish_companion):
+            publish_companion(completed_at)
         logging.debug(
             "Wallbox relay=%s power=%sW current=%sA status=%s pv=%sW soc=%s%% grid=%sW mode=%s",
             relay_on,
@@ -97,6 +100,7 @@ class _UpdateCycleRuntimeMixin:
                 grid_power,
             )
         )
+        self.apply_victron_ess_balance_bias(self.service, now, auto_mode_active)
         relay_on, power, current, relay_confirmed = self.apply_relay_decision(
             desired_relay,
             relay_on,

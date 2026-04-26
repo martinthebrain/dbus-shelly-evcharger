@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import unittest
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import venus_evcharger.inputs.dbus as wallbox_dbus_inputs
 from venus_evcharger.inputs.dbus import DbusInputController
+from venus_evcharger.energy import EnergyLearningProfile, EnergySourceDefinition, EnergySourceSnapshot
 
 
 class TestDbusInputController(unittest.TestCase):
@@ -202,3 +203,251 @@ class TestDbusInputController(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "dbus down"):
             controller._scan_auto_battery_service(100.0)
+
+    def test_resolve_energy_source_service_and_battery_snapshot_cover_dynamic_sources(self) -> None:
+        service = self._make_service()
+        controller = DbusInputController(service)
+        controller_any = cast(Any, controller)
+        service.auto_energy_sources = (
+            EnergySourceDefinition(
+                source_id="primary_battery",
+                role="battery",
+                connector_type="dbus",
+                service_name="configured-primary",
+                service_prefix="com.victronenergy.battery",
+                soc_path="/Soc",
+            ),
+            EnergySourceDefinition(
+                source_id="hybrid",
+                role="hybrid-inverter",
+                connector_type="dbus",
+                service_name="configured-hybrid",
+                service_prefix="com.victronenergy.hybrid",
+                soc_path="/Soc",
+                battery_power_path="/Dc/0/Power",
+            ),
+        )
+        service._resolved_auto_energy_services = {}
+        service._auto_energy_last_scan = {}
+        service._resolve_auto_battery_service = MagicMock(return_value="resolved-primary")
+        controller_any._energy_source_has_readable_data = MagicMock(side_effect=[True, True])
+
+        self.assertEqual(controller._resolve_energy_source_service(service.auto_energy_sources[0]), "resolved-primary")
+        self.assertEqual(controller._resolve_energy_source_service(service.auto_energy_sources[1]), "configured-hybrid")
+
+        service._resolved_auto_energy_services = {"hybrid": "cached-hybrid"}
+        service._auto_energy_last_scan = {"hybrid": 100.0}
+        cached_source = EnergySourceDefinition(
+            source_id="hybrid",
+            role="hybrid-inverter",
+            connector_type="dbus",
+            service_prefix="com.victronenergy.hybrid",
+            soc_path="/Soc",
+            battery_power_path="/Dc/0/Power",
+        )
+        with patch("venus_evcharger.inputs.storage.time.time", return_value=120.0):
+            self.assertEqual(controller._resolve_energy_source_service(cached_source), "cached-hybrid")
+
+        missing_source = EnergySourceDefinition(source_id="missing", role="battery", connector_type="dbus")
+        with self.assertRaisesRegex(ValueError, "No readable DBus service configured"):
+            controller._resolve_energy_source_service(missing_source)
+
+        prefixed_source = EnergySourceDefinition(
+            source_id="prefixed",
+            role="battery",
+            connector_type="dbus",
+            service_prefix="com.victronenergy.battery",
+        )
+        service._list_dbus_services = MagicMock(return_value=["com.victronenergy.system"])
+        with self.assertRaisesRegex(ValueError, "No DBus service found"):
+            controller._resolve_energy_source_service(prefixed_source)
+
+    def test_get_battery_snapshot_returns_forecast_payload_and_failure_fallback(self) -> None:
+        service = self._make_service()
+        controller = DbusInputController(service)
+        controller_any = cast(Any, controller)
+        service.auto_energy_sources = (
+            EnergySourceDefinition(source_id="primary_battery", role="battery", connector_type="dbus"),
+        )
+        service._handle_source_failure = MagicMock(return_value=None)
+        service._source_retry_ready = MagicMock(return_value=True)
+        service._service = SimpleNamespace(_last_energy_learning_profiles={})
+        controller_any._source_retry_ready = service._source_retry_ready
+        controller_any._handle_source_failure = service._handle_source_failure
+        controller_any._mark_source_recovery = MagicMock()
+
+        with patch(
+            "venus_evcharger.inputs.storage.read_energy_source_snapshot",
+            return_value=EnergySourceSnapshot(
+                source_id="primary_battery",
+                role="battery",
+                service_name="svc",
+                soc=55.0,
+                usable_capacity_wh=5000.0,
+                net_battery_power_w=-500.0,
+                grid_interaction_w=-100.0,
+                online=True,
+                confidence=0.8,
+                captured_at=100.0,
+            ),
+        ), patch("venus_evcharger.inputs.storage.time.time", return_value=100.0):
+            snapshot = controller.get_battery_snapshot()
+
+        self.assertEqual(snapshot["battery_soc"], 55.0)
+        self.assertEqual(snapshot["battery_combined_soc"], 55.0)
+        self.assertEqual(snapshot["battery_combined_charge_power_w"], 500.0)
+        self.assertEqual(snapshot["battery_headroom_charge_w"], 0.0)
+        self.assertEqual(snapshot["expected_near_term_export_w"], 475.0)
+        self.assertEqual(snapshot["battery_source_count"], 1)
+
+        service._source_retry_ready = MagicMock(return_value=False)
+        controller_any._source_retry_ready = service._source_retry_ready
+        self.assertEqual(controller.get_battery_snapshot(), {"battery_soc": None})
+
+        service._source_retry_ready = MagicMock(return_value=True)
+        controller_any._source_retry_ready = service._source_retry_ready
+        with patch("venus_evcharger.inputs.storage.read_energy_source_snapshot", side_effect=RuntimeError("boom")):
+            failed = controller.get_battery_snapshot()
+
+        self.assertIsNone(failed["battery_soc"])
+        self.assertEqual(failed["battery_source_count"], 0)
+
+    def test_get_battery_snapshot_includes_discharge_balance_diagnostics(self) -> None:
+        service = self._make_service()
+        controller = DbusInputController(service)
+        controller_any = cast(Any, controller)
+        service.auto_energy_sources = (
+            EnergySourceDefinition(source_id="victron", profile_name="dbus-battery", role="battery", connector_type="dbus"),
+            EnergySourceDefinition(
+                source_id="huawei",
+                profile_name="huawei_ma_native_ap",
+                role="hybrid-inverter",
+                connector_type="dbus",
+            ),
+        )
+        service._source_retry_ready = MagicMock(return_value=True)
+        service._service = SimpleNamespace(
+            _last_energy_learning_profiles={
+                "victron": EnergyLearningProfile(source_id="victron", observed_min_discharge_soc=40.0),
+                "huawei": EnergyLearningProfile(source_id="huawei", observed_min_discharge_soc=20.0),
+            }
+        )
+        controller_any._source_retry_ready = service._source_retry_ready
+        controller_any._handle_source_failure = MagicMock(return_value=None)
+        controller_any._mark_source_recovery = MagicMock()
+
+        with patch(
+            "venus_evcharger.inputs.storage.read_energy_source_snapshot",
+            side_effect=[
+                EnergySourceSnapshot(
+                    source_id="victron",
+                    role="battery",
+                    service_name="svc-victron",
+                    soc=60.0,
+                    usable_capacity_wh=10000.0,
+                    net_battery_power_w=1500.0,
+                    online=True,
+                    confidence=1.0,
+                    captured_at=100.0,
+                ),
+                EnergySourceSnapshot(
+                    source_id="huawei",
+                    role="hybrid-inverter",
+                    service_name="svc-huawei",
+                    soc=60.0,
+                    usable_capacity_wh=5000.0,
+                    net_battery_power_w=0.0,
+                    online=True,
+                    confidence=1.0,
+                    captured_at=100.0,
+                ),
+            ],
+        ), patch("venus_evcharger.inputs.storage.time.time", return_value=100.0):
+            snapshot = controller.get_battery_snapshot()
+
+        battery_sources = cast(list[dict[str, Any]], snapshot["battery_sources"])
+        self.assertEqual(snapshot["battery_discharge_balance_mode"], "capacity_reserve_weighted")
+        self.assertEqual(snapshot["battery_discharge_balance_target_distribution_mode"], "capacity_reserve_weighted")
+        self.assertEqual(snapshot["battery_discharge_balance_error_w"], 500.0)
+        self.assertEqual(snapshot["battery_discharge_balance_active_source_count"], 1)
+        self.assertEqual(snapshot["battery_discharge_balance_control_candidate_count"], 1)
+        self.assertEqual(snapshot["battery_discharge_balance_control_ready_count"], 1)
+        self.assertEqual(battery_sources[0]["discharge_balance_target_power_w"], 1000.0)
+        self.assertEqual(battery_sources[1]["discharge_balance_target_power_w"], 500.0)
+        self.assertEqual(battery_sources[0]["discharge_balance_weight_basis"], "available_energy_above_reserve")
+        self.assertEqual(battery_sources[1]["discharge_balance_weight_basis"], "available_energy_above_reserve")
+        self.assertEqual(battery_sources[0]["discharge_balance_control_support"], "unsupported")
+        self.assertEqual(battery_sources[1]["discharge_balance_control_support"], "experimental")
+        self.assertFalse(battery_sources[0]["discharge_balance_control_candidate"])
+        self.assertTrue(battery_sources[1]["discharge_balance_control_candidate"])
+
+    def test_storage_helpers_cover_empty_paths_retry_and_non_primary_failure(self) -> None:
+        service = self._make_service()
+        controller = DbusInputController(service)
+        controller_any = cast(Any, controller)
+
+        self.assertIsNone(controller._read_optional_energy_value("svc", ""))
+        self.assertEqual(controller._read_optional_energy_text("svc", ""), "")
+
+        service._resolve_auto_battery_service = MagicMock(side_effect=["svc-a", "svc-b"])
+        service._get_dbus_value = MagicMock(side_effect=[RuntimeError("boom"), 44.0])
+        service._invalidate_auto_battery_service = MagicMock()
+        self.assertEqual(controller._read_battery_soc_value(), 44.0)
+        service._invalidate_auto_battery_service.assert_called_once_with()
+
+        controller_any._resolve_energy_source_service = MagicMock(return_value="svc")
+        controller_any._primary_energy_source = MagicMock(
+            return_value=EnergySourceDefinition(source_id="primary_battery", role="battery", connector_type="dbus")
+        )
+        controller_any._read_optional_energy_value = MagicMock(side_effect=RuntimeError("offline"))
+        source = EnergySourceDefinition(
+            source_id="secondary",
+            role="hybrid-inverter",
+            connector_type="dbus",
+            service_name="svc",
+            soc_path="/Soc",
+        )
+        with self.assertRaisesRegex(RuntimeError, "offline"):
+            controller._dbus_energy_source_snapshot(source, 10.0)
+
+    def test_storage_energy_resolution_text_and_soc_validation_cover_remaining_edges(self) -> None:
+        service = self._make_service()
+        controller = DbusInputController(service)
+        controller_any = cast(Any, controller)
+
+        prefixed_source = EnergySourceDefinition(
+            source_id="prefixed",
+            role="hybrid-inverter",
+            connector_type="dbus",
+            service_prefix="com.victronenergy.hybrid",
+            soc_path="/Soc",
+        )
+        service._resolved_auto_energy_services = {}
+        service._auto_energy_last_scan = {}
+        service._list_dbus_services = MagicMock(return_value=["com.victronenergy.hybrid.demo"])
+        controller_any._energy_source_has_readable_data = MagicMock(return_value=True)
+        with patch("venus_evcharger.inputs.storage.time.time", return_value=50.0):
+            self.assertEqual(controller._resolve_energy_source_service(prefixed_source), "com.victronenergy.hybrid.demo")
+
+        service._get_dbus_value = MagicMock(return_value="support")
+        self.assertEqual(controller._read_optional_energy_text("svc", "/Mode"), "support")
+        service._get_dbus_value = MagicMock(return_value=None)
+        self.assertEqual(controller._read_optional_energy_text("svc", "/Mode"), "")
+
+        invalid_soc_source = EnergySourceDefinition(
+            source_id="primary_battery",
+            role="battery",
+            connector_type="dbus",
+            soc_path="/Soc",
+            operating_mode_path="/Mode",
+        )
+        controller_any._resolve_energy_source_service = MagicMock(return_value="svc")
+        controller_any._primary_energy_source = MagicMock(return_value=invalid_soc_source)
+        values = iter([150.0, None, None, None, None])
+        def _next_value(_service_name: str, _path: str) -> float | None:
+            return next(values)
+
+        controller_any._read_optional_energy_value = MagicMock(side_effect=_next_value)
+        controller_any._read_optional_energy_text = MagicMock(return_value="idle")
+        snapshot = controller._dbus_energy_source_snapshot(invalid_soc_source, 10.0)
+        self.assertIsNone(snapshot.soc)

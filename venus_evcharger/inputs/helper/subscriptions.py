@@ -81,13 +81,28 @@ class _AutoInputHelperSubscriptionMixin:
 
     def _desired_battery_subscription_specs(self: Any) -> list[tuple[str, str, str]]:
         """Return the battery SOC path that should be monitored."""
+        desired: list[tuple[str, str, str]] = []
+        for source in tuple(getattr(self, "auto_energy_sources", ()) or (self._primary_energy_source(),)):
+            desired.extend(self._battery_subscription_specs_for_source(source))
+        return desired
+
+    def _battery_subscription_specs_for_source(self: Any, source: Any) -> list[tuple[str, str, str]]:
         try:
-            battery_service = self._resolve_auto_battery_service()
+            service_name = self._resolve_energy_source_service(source)
         except Exception:  # pylint: disable=broad-except
-            battery_service = None
-        if not battery_service:
             return []
-        return [("battery", battery_service, self.auto_battery_soc_path)]
+        return [
+            ("battery", service_name, path)
+            for path in self._battery_subscription_paths(source)
+        ]
+
+    @staticmethod
+    def _battery_subscription_paths(source: Any) -> list[str]:
+        return [
+            path
+            for path in (source.soc_path, source.battery_power_path, source.ac_power_path)
+            if path
+        ]
 
     def _desired_grid_subscription_specs(self: Any) -> list[tuple[str, str, str]]:
         """Return the configured grid power paths that should be monitored."""
@@ -164,8 +179,21 @@ class _AutoInputHelperSubscriptionMixin:
     def _matches_explicit_service_name(self: Any, name: str) -> bool:
         """Return whether one owner change matches explicit AC PV or battery services."""
         return bool(
-            (self.auto_pv_service and name == self.auto_pv_service)
-            or (self.auto_battery_service and name == self.auto_battery_service)
+            self._matches_explicit_pv_service_name(name)
+            or self._matches_explicit_battery_service_name(name)
+            or self._matches_explicit_energy_source_service_name(name)
+        )
+
+    def _matches_explicit_pv_service_name(self: Any, name: str) -> bool:
+        return bool(self.auto_pv_service and name == self.auto_pv_service)
+
+    def _matches_explicit_battery_service_name(self: Any, name: str) -> bool:
+        return bool(self.auto_battery_service and name == self.auto_battery_service)
+
+    def _matches_explicit_energy_source_service_name(self: Any, name: str) -> bool:
+        return any(
+            source.service_name and name == source.service_name
+            for source in getattr(self, "auto_energy_sources", ())
         )
 
     def _matches_discovery_prefix(self: Any, name: str) -> bool:
@@ -173,6 +201,7 @@ class _AutoInputHelperSubscriptionMixin:
         return bool(
             name.startswith(self.auto_pv_service_prefix)
             or name.startswith(self.auto_battery_service_prefix)
+            or any(source.service_prefix and name.startswith(source.service_prefix) for source in getattr(self, "auto_energy_sources", ()))
         )
 
     def _refresh_subscriptions_timer(self: Any) -> bool:

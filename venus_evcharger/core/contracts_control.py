@@ -48,6 +48,7 @@ CONTROL_API_STATE_ENDPOINTS = frozenset(
         "/v1/state/topology",
         "/v1/state/update",
         "/v1/state/version",
+        "/v1/state/victron-bias-recommendation",
     }
 )
 CONTROL_API_ENDPOINTS = frozenset(

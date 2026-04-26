@@ -10,9 +10,28 @@ from typing import Any, cast
 
 from venus_evcharger.core.contracts import non_negative_float_or_none, non_negative_int
 from venus_evcharger.core.shared import write_text_atomically
+from .state_restore_support import (
+    _StateRuntimeRestoreVictronEssMixin,
+    _victron_ess_balance_energy_ids,
+    _victron_ess_balance_runtime_string,
+)
 
 
-class _StateRuntimeRestoreMixin:
+class _StateRuntimeRestoreMixin(_StateRuntimeRestoreVictronEssMixin):
+
+    @staticmethod
+    def _victron_ess_balance_activation_mode(payload: dict[str, object], svc: Any) -> str | None:
+        activation_mode = str(
+            payload.get(
+                "activation_mode",
+                getattr(svc, "auto_battery_discharge_balance_victron_bias_activation_mode", "always"),
+            )
+            or "always"
+        ).strip().lower()
+        if activation_mode in {"always", "export_only", "above_reserve_band", "export_and_above_reserve_band"}:
+            return activation_mode
+        return None
+
     def _restore_basic_runtime_state(self, svc: Any, state: dict[str, object]) -> None:
         svc.virtual_mode = self._normalize_mode(state.get("mode", svc.virtual_mode))
         svc.virtual_autostart = self.coerce_runtime_int(state.get("autostart"), svc.virtual_autostart)
@@ -208,6 +227,7 @@ class _StateRuntimeRestoreMixin:
         self._restore_phase_switch_runtime_state(svc, state, current_time)
         self._restore_contactor_runtime_state(svc, state, current_time)
         self._restore_relay_runtime_state(svc, state, current_time)
+        self._restore_victron_ess_balance_runtime_state(svc, state)
         svc._runtime_state_serialized = self._serialized_runtime_state()
         logging.info("Restored runtime state from %s: %s", path, self.state_summary())
 

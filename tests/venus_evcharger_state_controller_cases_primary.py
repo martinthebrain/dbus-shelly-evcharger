@@ -1,10 +1,38 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import configparser
+
 from tests.venus_evcharger_state_controller_support import *
+
+
+def _with_backends_config(
+    service: SimpleNamespace,
+    *,
+    mode: str,
+    meter_type: str,
+    switch_type: str,
+    charger_type: str | None,
+    host: str = "192.168.1.20",
+) -> SimpleNamespace:
+    parser = configparser.ConfigParser()
+    parser.read_string(
+        f"""
+[DEFAULT]
+Host={host}
+
+[Backends]
+Mode={mode}
+MeterType={meter_type}
+SwitchType={switch_type}
+ChargerType={charger_type or ""}
+"""
+    )
+    service.config = parser
+    return service
 
 
 class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
     def test_config_path_and_coercion_helpers_and_state_summary(self) -> None:
-        service = SimpleNamespace(
+        service = _with_backends_config(SimpleNamespace(
             virtual_mode=1,
             virtual_enable=0,
             virtual_startstop=1,
@@ -18,10 +46,6 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
             active_phase_selection="P1_P2",
             requested_phase_selection="P1_P2_P3",
             supported_phase_selections=("P1", "P1_P2", "P1_P2_P3"),
-            backend_mode="split",
-            meter_backend_type="template_meter",
-            switch_backend_type="template_switch",
-            charger_backend_type="template_charger",
             _charger_target_current_amps=13.0,
             _last_charger_transport_reason="offline",
             _last_charger_transport_source="read",
@@ -44,7 +68,7 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
             _last_status_source="charger-fault",
             _last_auto_state="waiting",
             _last_health_reason="running",
-        )
+        ), mode="split", meter_type="template_meter", switch_type="template_switch", charger_type="template_charger")
         controller = ServiceStateController(service, self._normalize_mode)
         with patch(STATE_SUMMARY_TIME, return_value=100.0):
             summary = controller.state_summary()
@@ -99,7 +123,7 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
         self.assertIn("health=running", summary)
 
     def test_state_summary_marks_contactor_suspicions_from_health_reason(self) -> None:
-        service = SimpleNamespace(
+        service = _with_backends_config(SimpleNamespace(
             virtual_mode=1,
             virtual_enable=1,
             virtual_startstop=1,
@@ -109,10 +133,6 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
             active_phase_selection="P1",
             requested_phase_selection="P1",
             supported_phase_selections=("P1",),
-            backend_mode="split",
-            meter_backend_type="template_meter",
-            switch_backend_type="template_switch",
-            charger_backend_type=None,
             _charger_target_current_amps=None,
             _last_confirmed_pm_status={"_phase_selection": "P1", "output": False},
             _phase_switch_mismatch_active=False,
@@ -127,7 +147,7 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
             _last_health_reason="contactor-suspected-open",
             _contactor_fault_counts={},
             _contactor_lockout_reason="",
-        )
+        ), mode="split", meter_type="template_meter", switch_type="template_switch", charger_type=None)
         controller = ServiceStateController(service, self._normalize_mode)
         with patch(STATE_SUMMARY_TIME, return_value=100.0):
             open_summary = controller.state_summary()
@@ -153,6 +173,13 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
         self.assertIn("fault=1", lockout_summary)
         self.assertIn("fault_reason=contactor-lockout-open", lockout_summary)
         self.assertIn("recovery=1", lockout_summary)
+
+    def test_energy_runtime_state_ignores_non_mapping_worker_snapshot(self) -> None:
+        service = SimpleNamespace(_get_worker_snapshot=lambda: ["not-a-mapping"])
+        state = ServiceStateController._energy_runtime_state(service)
+
+        self.assertEqual(state["combined_battery_soc"], None)
+        self.assertEqual(state["combined_battery_source_count"], 0)
 
     def test_runtime_override_load_and_validation_helpers_cover_error_paths(self) -> None:
         service = SimpleNamespace(
@@ -192,7 +219,7 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
         self.assertEqual(service._runtime_overrides_pending_due_at, 102.0)
 
     def test_state_summary_includes_scheduled_v2_diagnostics(self) -> None:
-        service = SimpleNamespace(
+        service = _with_backends_config(SimpleNamespace(
             virtual_mode=2,
             virtual_enable=1,
             virtual_startstop=1,
@@ -206,10 +233,6 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
             auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
             auto_scheduled_night_start_delay_seconds=3600.0,
             auto_scheduled_latest_end_time="06:30",
-            backend_mode="split",
-            meter_backend_type="template_meter",
-            switch_backend_type="template_switch",
-            charger_backend_type=None,
             _charger_target_current_amps=None,
             _last_confirmed_pm_status={"_phase_selection": "P1", "output": False},
             _phase_switch_mismatch_active=False,
@@ -224,7 +247,7 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
             _last_health_reason="scheduled-night-charge",
             _contactor_fault_counts={},
             _contactor_lockout_reason="",
-        )
+        ), mode="split", meter_type="template_meter", switch_type="template_switch", charger_type=None)
         controller = ServiceStateController(service, self._normalize_mode)
         now = datetime(2026, 4, 20, 21, 0).timestamp()
         with patch(STATE_SUMMARY_TIME, return_value=now):
@@ -237,7 +260,7 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
         self.assertIn("scheduled_boost_until=2026-04-21 06:30", summary)
 
     def test_state_summary_fault_hierarchy_keeps_lockout_fault_visible_over_scheduled_and_retry_diagnostics(self) -> None:
-        service = SimpleNamespace(
+        service = _with_backends_config(SimpleNamespace(
             virtual_mode=2,
             virtual_enable=1,
             virtual_startstop=1,
@@ -251,10 +274,6 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
             auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
             auto_scheduled_night_start_delay_seconds=3600.0,
             auto_scheduled_latest_end_time="06:30",
-            backend_mode="split",
-            meter_backend_type="template_meter",
-            switch_backend_type="template_switch",
-            charger_backend_type="simpleevse_charger",
             _charger_target_current_amps=16.0,
             _last_confirmed_pm_status={"_phase_selection": "P1", "output": False},
             _phase_switch_mismatch_active=False,
@@ -277,7 +296,7 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
             _last_charger_transport_reason="offline",
             _last_charger_transport_source="enable",
             _last_charger_transport_at=datetime(2026, 4, 20, 20, 59).timestamp(),
-        )
+        ), mode="split", meter_type="template_meter", switch_type="template_switch", charger_type="simpleevse_charger")
         controller = ServiceStateController(service, self._normalize_mode)
         now = datetime(2026, 4, 20, 21, 0).timestamp()
         with patch(STATE_SUMMARY_TIME, return_value=now):
@@ -292,7 +311,7 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
         self.assertIn("phase_lockout=1", summary)
 
     def test_state_summary_keeps_retry_and_phase_lockout_visible_without_promoting_to_fault(self) -> None:
-        service = SimpleNamespace(
+        service = _with_backends_config(SimpleNamespace(
             virtual_mode=1,
             virtual_enable=1,
             virtual_startstop=1,
@@ -302,10 +321,6 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
             active_phase_selection="P1",
             requested_phase_selection="P1_P2",
             supported_phase_selections=("P1", "P1_P2"),
-            backend_mode="split",
-            meter_backend_type="template_meter",
-            switch_backend_type="switch_group",
-            charger_backend_type="smartevse_charger",
             _charger_target_current_amps=11.0,
             _last_confirmed_pm_status={"_phase_selection": "P1", "output": False},
             _phase_switch_mismatch_active=False,
@@ -326,7 +341,7 @@ class TestServiceStateControllerPrimary(ServiceStateControllerTestBase):
             _last_charger_transport_reason="offline",
             _last_charger_transport_source="read",
             _last_charger_transport_at=199.0,
-        )
+        ), mode="split", meter_type="template_meter", switch_type="switch_group", charger_type="smartevse_charger")
         controller = ServiceStateController(service, self._normalize_mode)
         with patch(STATE_SUMMARY_TIME, return_value=200.0):
             summary = controller.state_summary()

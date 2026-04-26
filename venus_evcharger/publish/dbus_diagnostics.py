@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, cast
 
+from venus_evcharger.backend.config import backend_mode_for_service, backend_type_for_service
 from venus_evcharger.core.common import _charger_retry_remaining_seconds, _fresh_charger_transport_timestamp
 from venus_evcharger.core.contracts import (
     displayable_confirmed_read_timestamp,
@@ -92,10 +93,22 @@ class _DbusPublishDiagnosticsMixin:
     def _backend_counter_values(self) -> dict[str, str | int]:
         """Return backend-composition and runtime-override diagnostics."""
         return {
-            "/Auto/BackendMode": self._backend_mode_value(self.service),
-            "/Auto/MeterBackend": self._backend_type_value(self.service, "meter_backend_type", "shelly_combined"),
-            "/Auto/SwitchBackend": self._backend_type_value(self.service, "switch_backend_type", "shelly_combined"),
-            "/Auto/ChargerBackend": self._backend_type_value(self.service, "charger_backend_type"),
+            "/Auto/BackendMode": backend_mode_for_service(self.service, self._backend_mode_value(self.service)),
+            "/Auto/MeterBackend": backend_type_for_service(
+                self.service,
+                "meter",
+                self._backend_type_value(self.service, "meter_backend_type", "shelly_meter"),
+            ),
+            "/Auto/SwitchBackend": backend_type_for_service(
+                self.service,
+                "switch",
+                self._backend_type_value(self.service, "switch_backend_type", "shelly_contactor_switch"),
+            ),
+            "/Auto/ChargerBackend": backend_type_for_service(
+                self.service,
+                "charger",
+                self._backend_type_value(self.service, "charger_backend_type"),
+            ),
             "/Auto/RuntimeOverridesActive": int(bool(getattr(self.service, "_runtime_overrides_active", False))),
             "/Auto/RuntimeOverridesPath": str(getattr(self.service, "runtime_overrides_path", "") or ""),
         }

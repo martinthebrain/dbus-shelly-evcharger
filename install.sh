@@ -29,8 +29,14 @@ fi
 REPO_SLUG="${VENUS_EVCHARGER_REPO_SLUG:-$DEFAULT_REPO_SLUG}"
 CHANNEL="${VENUS_EVCHARGER_CHANNEL:-$DEFAULT_CHANNEL}"
 UPDATER_PATH="${BOOTSTRAP_STATE_DIR}/bootstrap_updater.sh"
-MANIFEST_SOURCE="${VENUS_EVCHARGER_MANIFEST_SOURCE:-https://raw.githubusercontent.com/${REPO_SLUG}/${CHANNEL}/deploy/venus/bootstrap_manifest.json}"
-MANIFEST_SIG_SOURCE="${VENUS_EVCHARGER_MANIFEST_SIG_SOURCE:-${MANIFEST_SOURCE}.sig}"
+MANIFEST_SOURCE="${VENUS_EVCHARGER_MANIFEST_SOURCE:-}"
+if [ -n "${VENUS_EVCHARGER_MANIFEST_SIG_SOURCE:-}" ]; then
+    MANIFEST_SIG_SOURCE="$VENUS_EVCHARGER_MANIFEST_SIG_SOURCE"
+elif [ -n "$MANIFEST_SOURCE" ]; then
+    MANIFEST_SIG_SOURCE="${MANIFEST_SOURCE}.sig"
+else
+    MANIFEST_SIG_SOURCE=""
+fi
 UPDATER_SOURCE="${VENUS_EVCHARGER_UPDATER_SOURCE:-https://raw.githubusercontent.com/${REPO_SLUG}/${CHANNEL}/deploy/venus/bootstrap_updater.sh}"
 UPDATER_HASH_SOURCE="${VENUS_EVCHARGER_UPDATER_HASH_SOURCE:-${UPDATER_SOURCE}.sha256}"
 BOOTSTRAP_PUBKEY_OVERRIDE="${VENUS_EVCHARGER_BOOTSTRAP_PUBKEY:-}"
@@ -158,6 +164,7 @@ PY
 
 load_manifest() {
     manifest_path="$1"
+    [ -n "$MANIFEST_SOURCE" ] || return 1
     signature_path="${manifest_path}.sig"
     pubkey_path=$(resolve_pubkey_path)
     if ! download_to "$MANIFEST_SOURCE" "$manifest_path"; then

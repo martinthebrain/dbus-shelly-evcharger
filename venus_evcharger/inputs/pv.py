@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from typing import Any, cast
 
@@ -19,6 +20,16 @@ from venus_evcharger.core.split_mixins import ComposableControllerMixin as _Comp
 
 
 class _DbusInputPvMixin(_ComposableControllerMixin):
+    def _dbus_module(self) -> Any:
+        """Prefer the DBus module from the service entrypoint for legacy test patches."""
+        host = getattr(self.service, "_service", self.service)
+        module_name = getattr(type(host), "__module__", "")
+        service_module = sys.modules.get(module_name)
+        service_dbus = getattr(service_module, "dbus", None) if service_module is not None else None
+        if service_dbus is not None:
+            return service_dbus
+        return cast(Any, dbus)
+
     @staticmethod
     def _coerce_dbus_value(value: Any) -> float | int | None:
         """Convert raw DBus values to numbers where possible."""
@@ -66,7 +77,7 @@ class _DbusInputPvMixin(_ComposableControllerMixin):
         svc = self.service
         last_error: Exception | None = None
         timeout = getattr(svc, "dbus_method_timeout_seconds", 1.0)
-        dbus_module = cast(Any, dbus)
+        dbus_module = self._dbus_module()
         for attempt in range(2):
             try:
                 bus = svc._get_system_bus()
@@ -130,7 +141,7 @@ class _DbusInputPvMixin(_ComposableControllerMixin):
         svc = self.service
         bus = svc._get_system_bus()
         dbus_obj = bus.get_object("org.freedesktop.DBus", "/org/freedesktop/DBus")
-        dbus_module = cast(Any, dbus)
+        dbus_module = self._dbus_module()
         dbus_if = dbus_module.Interface(dbus_obj, "org.freedesktop.DBus")
         return [str(name) for name in dbus_if.ListNames(timeout=svc.dbus_method_timeout_seconds)]
 

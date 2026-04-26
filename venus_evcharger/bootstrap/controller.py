@@ -168,19 +168,61 @@ class ServiceBootstrapController(
 
     def initialize_service(self) -> None:
         """Fully initialize the wallbox service instance."""
-        self.load_runtime_configuration()
-        self.initialize_controllers()
-        self.initialize_virtual_state()
-        self.restore_runtime_state()
-        self.initialize_dbus_service()
-        self.apply_device_metadata()
-        self.register_paths()
-        self.start_runtime_loops()
+        bootstrap_steps = (
+            ("load-runtime-configuration", self.load_runtime_configuration),
+            ("initialize-controllers", self.initialize_controllers),
+            ("initialize-virtual-state", self.initialize_virtual_state),
+            ("restore-runtime-state", self.restore_runtime_state),
+            ("apply-device-metadata", self.apply_device_metadata),
+            ("start-runtime-loops", self.start_runtime_loops),
+            ("initialize-dbus-service", self.initialize_dbus_service),
+            ("register-dbus-paths", self.register_paths),
+            ("publish-dbus-service", self.publish_dbus_service),
+        )
+        for step_name, step_func in bootstrap_steps:
+            logging.info("Bootstrap step start: %s", step_name)
+            step_func()
+            logging.info("Bootstrap step complete: %s", step_name)
 
     def initialize_dbus_service(self) -> None:
         """Create the EV charger DBus service using the bootstrap module factory."""
         svc = self.service
         svc._dbusservice = VeDbusService(f"{svc.service_name}.http_{svc.deviceinstance}", register=False)
+
+    def publish_dbus_service(self) -> None:
+        """Publish the DBus service only after the full bootstrap sequence completed."""
+        dbus_service = self.service._dbusservice
+        try:
+            dbus_service.register()
+        except Exception as error:  # pylint: disable=broad-except
+            if error.__class__.__name__ != "NameExistsException":
+                raise
+            if not self._dbus_service_owned_by_current_process(dbus_service):
+                raise
+            logging.info(
+                "DBus service %s already belongs to pid=%s; continuing without explicit register()",
+                getattr(dbus_service, "name", "<unknown>"),
+                os.getpid(),
+            )
+
+    def _dbus_service_owned_by_current_process(self, dbus_service: Any) -> bool:
+        """Return whether the DBus service name is already owned by this process."""
+        dbus_conn = getattr(dbus_service, "_dbusconn", None)
+        service_name = str(getattr(dbus_service, "name", "") or "")
+        if dbus_conn is None or not service_name:
+            return False
+        try:
+            bus = dbus_conn.get_object("org.freedesktop.DBus", "/org/freedesktop/DBus")
+            owner = bus.GetNameOwner(service_name, dbus_interface="org.freedesktop.DBus")
+            owner_pid = int(bus.GetConnectionUnixProcessID(owner, dbus_interface="org.freedesktop.DBus"))
+        except Exception as error:  # pylint: disable=broad-except
+            logging.warning(
+                "Unable to verify DBus owner for %s after NameExistsException: %s",
+                service_name,
+                error,
+            )
+            return False
+        return owner_pid == os.getpid()
 
 
 def run_service_main(service_class: Callable[[], Any], config_path: str, gobject_module: Any) -> None:

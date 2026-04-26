@@ -152,12 +152,12 @@ def preset_specific_defaults(
     imported: ImportedWizardDefaults,
     *,
     backend: WizardChargerBackend | None,
-    split_preset: str | None,
+    topology_preset: str | None,
     charger_preset: str | None,
 ) -> tuple[float | None, str]:
     timeout = _request_timeout_seconds(namespace, imported, backend)
     phase_layout = getattr(namespace, "switch_group_phase_layout") or imported.switch_group_phase_layout or SWITCH_GROUP_PHASE_LAYOUT_VALUES[0]
-    if not _supports_phase_layout(split_preset):
+    if not _supports_phase_layout(topology_preset):
         phase_layout = SWITCH_GROUP_PHASE_LAYOUT_VALUES[0]
     return timeout, str(phase_layout)
 
@@ -175,10 +175,10 @@ def _request_timeout_seconds(
     return GOE_REQUEST_TIMEOUT_DEFAULT if backend == "goe_charger" else None
 
 
-def _supports_phase_layout(split_preset: str | None) -> bool:
-    if split_preset is None:
+def _supports_phase_layout(topology_preset: str | None) -> bool:
+    if topology_preset is None:
         return False
-    return split_preset in _PHASE_LAYOUT_PRESETS or _SWITCH_GROUP_PRESET_FRAGMENT in split_preset
+    return topology_preset in _PHASE_LAYOUT_PRESETS or _SWITCH_GROUP_PRESET_FRAGMENT in topology_preset
 
 
 def prompt_preset_specific_defaults(
@@ -187,7 +187,7 @@ def prompt_preset_specific_defaults(
     *,
     profile: WizardProfile,
     backend: WizardChargerBackend | None,
-    split_preset: str | None,
+    topology_preset: str | None,
     charger_preset: str | None,
     prompt_choice: PromptChoice,
     prompt_text: PromptText,
@@ -196,12 +196,12 @@ def prompt_preset_specific_defaults(
         namespace,
         imported,
         backend=backend,
-        split_preset=split_preset,
+        topology_preset=topology_preset,
         charger_preset=charger_preset,
     )
     if backend == "goe_charger" and getattr(namespace, "request_timeout_seconds") is None:
         request_timeout_seconds = float(prompt_text("go-e request timeout seconds", f"{request_timeout_seconds or GOE_REQUEST_TIMEOUT_DEFAULT:g}"))
-    if _should_prompt_phase_layout(profile, split_preset, namespace):
+    if _should_prompt_phase_layout(profile, topology_preset, namespace):
         phase_layout = prompt_choice(
             "Choose the external phase-switch layout:",
             SWITCH_GROUP_PHASE_LAYOUT_VALUES,
@@ -214,9 +214,9 @@ def prompt_preset_specific_defaults(
     return request_timeout_seconds, phase_layout
 
 
-def _should_prompt_phase_layout(profile: WizardProfile, split_preset: str | None, namespace: object) -> bool:
+def _should_prompt_phase_layout(profile: WizardProfile, topology_preset: str | None, namespace: object) -> bool:
     return (
-        profile in {"native-charger-phase-switch", "split-topology"}
-        and _supports_phase_layout(split_preset)
+        profile in {"hybrid_topology", "multi_adapter_topology"}
+        and _supports_phase_layout(topology_preset)
         and getattr(namespace, "switch_group_phase_layout") is None
     )

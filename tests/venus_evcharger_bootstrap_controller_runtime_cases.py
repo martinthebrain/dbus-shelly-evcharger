@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import configparser
+
 from tests.venus_evcharger_bootstrap_controller_support import (
     MagicMock,
     ServiceBootstrapController,
@@ -10,6 +12,71 @@ from tests.venus_evcharger_bootstrap_controller_support import (
 
 
 class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
+    def test_initialize_controllers_keeps_legacy_backend_attrs_unset_after_resolution(self):
+        parser = configparser.ConfigParser()
+        parser.read_dict(
+            {
+                "DEFAULT": {"Host": "192.168.1.20"},
+                "Backends": {
+                    "Mode": "split",
+                    "MeterType": "template_meter",
+                    "SwitchType": "template_switch",
+                    "ChargerType": "goe_charger",
+                    "MeterConfigPath": "/data/meter.ini",
+                    "SwitchConfigPath": "/data/switch.ini",
+                    "ChargerConfigPath": "/data/charger.ini",
+                },
+            }
+        )
+        resolved = SimpleNamespace(
+            runtime=SimpleNamespace(
+                backend_mode="split",
+                meter_type="template_meter",
+                switch_type="template_switch",
+                charger_type="goe_charger",
+                meter_config_path=None,
+                switch_config_path=None,
+                charger_config_path=None,
+                topology_configured=True,
+                primary_rpc_configured=False,
+            ),
+            meter="meter",
+            switch="switch",
+            charger="charger",
+        )
+        service = SimpleNamespace(
+            config=parser,
+            host="192.168.1.20",
+        )
+        controller = self._controller(service)
+
+        self.assertFalse(hasattr(service, "backend_mode"))
+
+        with (
+            patch("venus_evcharger.bootstrap.runtime.RuntimeSupportController") as runtime_controller,
+            patch("venus_evcharger.bootstrap.runtime.AutoDecisionController"),
+            patch("venus_evcharger.bootstrap.runtime.DbusPublishController"),
+            patch("venus_evcharger.bootstrap.runtime.ShellyIoController"),
+            patch("venus_evcharger.bootstrap.runtime.build_service_backends", return_value=resolved),
+            patch("venus_evcharger.bootstrap.runtime.ServiceStateController"),
+            patch("venus_evcharger.bootstrap.runtime.DbusWriteController"),
+            patch("venus_evcharger.bootstrap.runtime.AutoInputSupervisor"),
+            patch("venus_evcharger.bootstrap.runtime.UpdateCycleController"),
+        ):
+            runtime_controller.return_value.initialize_runtime_support = MagicMock()
+            controller.initialize_controllers()
+
+        self.assertFalse(hasattr(service, "backend_mode"))
+        self.assertFalse(hasattr(service, "meter_backend_type"))
+        self.assertFalse(hasattr(service, "switch_backend_type"))
+        self.assertFalse(hasattr(service, "charger_backend_type"))
+        self.assertFalse(hasattr(service, "_backend_selection"))
+        self.assertEqual(service._meter_backend, "meter")
+        self.assertEqual(service._switch_backend, "switch")
+        self.assertEqual(service._charger_backend, "charger")
+        self.assertTrue(service.topology_configured)
+        self.assertFalse(service.primary_rpc_configured)
+
     def test_initialize_virtual_state_uses_config_defaults(self):
         service = SimpleNamespace(
             config={
@@ -108,6 +175,7 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
             config={"DEFAULT": {"ProductName": "Configured Product"}},
             custom_name_override="My Wallbox",
             host="192.168.1.20",
+            host_configured=True,
         )
         controller = self._controller(service)
         controller.fetch_device_info_with_fallback = MagicMock(return_value={})
@@ -125,6 +193,7 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
             config={"DEFAULT": {}},
             custom_name_override="",
             host="192.168.1.20",
+            host_configured=True,
         )
         controller = self._controller(service)
         controller.fetch_device_info_with_fallback = MagicMock(
@@ -144,11 +213,92 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
         self.assertEqual(service.firmware_version, "fw-123")
         self.assertEqual(service.hardware_version, "Shelly Plus")
 
+    def test_apply_device_metadata_skips_device_lookup_when_host_is_not_configured(self):
+        service = SimpleNamespace(
+            config={"DEFAULT": {"ProductName": "Configured Product"}},
+            custom_name_override="",
+            host="",
+            topology_configured=False,
+            host_configured=False,
+            deviceinstance=60,
+        )
+        controller = self._controller(service)
+        controller.fetch_device_info_with_fallback = MagicMock(return_value={"name": "should-not-be-used"})
+
+        controller.apply_device_metadata()
+
+        controller.fetch_device_info_with_fallback.assert_not_called()
+        self.assertEqual(service.product_name, "Configured Product")
+        self.assertEqual(service.custom_name, "Venus EV Charger Service")
+        self.assertEqual(service.serial, "unconfigured-60")
+        self.assertEqual(service.firmware_version, "1.0")
+        self.assertEqual(service.hardware_version, "Not configured")
+
+    def test_apply_device_metadata_uses_generic_metadata_for_split_topology_without_legacy_rpc(self):
+        service = SimpleNamespace(
+            config={"DEFAULT": {"ProductName": "Configured Product"}},
+            custom_name_override="",
+            host="",
+            topology_configured=True,
+            primary_rpc_configured=False,
+            deviceinstance=60,
+        )
+        controller = self._controller(service)
+        controller.fetch_device_info_with_fallback = MagicMock(return_value={"name": "should-not-be-used"})
+
+        controller.apply_device_metadata()
+
+        controller.fetch_device_info_with_fallback.assert_not_called()
+        self.assertEqual(service.product_name, "Configured Product")
+        self.assertEqual(service.custom_name, "Venus EV Charger Service")
+        self.assertEqual(service.serial, "topology-60")
+        self.assertEqual(service.firmware_version, "1.0")
+        self.assertEqual(service.hardware_version, "External adapter topology")
+
     def test_start_runtime_loops_starts_worker_and_schedules_timers(self):
         gobject_module = MagicMock()
         service = SimpleNamespace(
             _start_io_worker=MagicMock(),
             _start_control_api_server=MagicMock(),
+            _start_companion_dbus_bridge=MagicMock(),
+            host_configured=True,
+            runtime_state_path="/run/state.json",
+            _state_summary=MagicMock(return_value="mode=1"),
+            poll_interval_ms=1000,
+            sign_of_life_minutes=10,
+            _update=MagicMock(),
+            _sign_of_life=MagicMock(),
+        )
+        controller = ServiceBootstrapController(
+            service,
+            normalize_phase_func=lambda value: value,
+            normalize_mode_func=lambda value: int(value),
+            mode_uses_auto_logic_func=lambda mode: int(mode) in (1, 2),
+            month_window_func=lambda *_args, **_kwargs: ((8, 0), (18, 0)),
+            age_seconds_func=lambda *_args, **_kwargs: 0,
+            health_code_func=lambda reason: {"init": 0}.get(reason, 99),
+            phase_values_func=lambda *_args, **_kwargs: {},
+            read_version_func=lambda _name: "1.0",
+            gobject_module=gobject_module,
+            script_path="/tmp/venus_evcharger_service.py",
+            formatters={"kwh": None, "a": None, "w": None, "v": None, "status": None},
+        )
+
+        controller.start_runtime_loops()
+
+        service._start_io_worker.assert_called_once_with()
+        service._start_control_api_server.assert_called_once_with()
+        service._start_companion_dbus_bridge.assert_called_once_with()
+        gobject_module.timeout_add.assert_any_call(1000, service._update)
+        gobject_module.timeout_add.assert_any_call(600000, service._sign_of_life)
+
+    def test_start_runtime_loops_skips_companion_bridge_when_hook_is_not_callable(self):
+        gobject_module = MagicMock()
+        service = SimpleNamespace(
+            _start_io_worker=MagicMock(),
+            _start_control_api_server=MagicMock(),
+            _start_companion_dbus_bridge=None,
+            host_configured=True,
             runtime_state_path="/run/state.json",
             _state_summary=MagicMock(return_value="mode=1"),
             poll_interval_ms=1000,
@@ -176,7 +326,80 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
         service._start_io_worker.assert_called_once_with()
         service._start_control_api_server.assert_called_once_with()
         gobject_module.timeout_add.assert_any_call(1000, service._update)
+
+    def test_start_runtime_loops_skips_worker_when_host_is_not_configured(self):
+        gobject_module = MagicMock()
+        service = SimpleNamespace(
+            _start_io_worker=MagicMock(),
+            _start_control_api_server=MagicMock(),
+            _start_companion_dbus_bridge=MagicMock(),
+            topology_configured=False,
+            host_configured=False,
+            runtime_state_path="/run/state.json",
+            _state_summary=MagicMock(return_value="mode=0"),
+            poll_interval_ms=1000,
+            sign_of_life_minutes=10,
+            _update=MagicMock(),
+            _sign_of_life=MagicMock(),
+        )
+        controller = ServiceBootstrapController(
+            service,
+            normalize_phase_func=lambda value: value,
+            normalize_mode_func=lambda value: int(value),
+            mode_uses_auto_logic_func=lambda mode: int(mode) in (1, 2),
+            month_window_func=lambda *_args, **_kwargs: ((8, 0), (18, 0)),
+            age_seconds_func=lambda *_args, **_kwargs: 0,
+            health_code_func=lambda reason: {"init": 0, "not-configured": 41}.get(reason, 99),
+            phase_values_func=lambda *_args, **_kwargs: {},
+            read_version_func=lambda _name: "1.0",
+            gobject_module=gobject_module,
+            script_path="/tmp/venus_evcharger_service.py",
+            formatters={"kwh": None, "a": None, "w": None, "v": None, "status": None},
+        )
+
+        controller.start_runtime_loops()
+
+        service._start_io_worker.assert_not_called()
+        service._start_control_api_server.assert_called_once_with()
+        service._start_companion_dbus_bridge.assert_called_once_with()
+        gobject_module.timeout_add.assert_any_call(1000, service._update)
         gobject_module.timeout_add.assert_any_call(600000, service._sign_of_life)
+
+    def test_start_runtime_loops_starts_worker_for_configured_split_topology_without_legacy_host(self):
+        gobject_module = MagicMock()
+        service = SimpleNamespace(
+            _start_io_worker=MagicMock(),
+            _start_control_api_server=MagicMock(),
+            _start_companion_dbus_bridge=MagicMock(),
+            topology_configured=True,
+            host_configured=False,
+            runtime_state_path="/run/state.json",
+            _state_summary=MagicMock(return_value="mode=1"),
+            poll_interval_ms=1000,
+            sign_of_life_minutes=10,
+            _update=MagicMock(),
+            _sign_of_life=MagicMock(),
+        )
+        controller = ServiceBootstrapController(
+            service,
+            normalize_phase_func=lambda value: value,
+            normalize_mode_func=lambda value: int(value),
+            mode_uses_auto_logic_func=lambda mode: int(mode) in (1, 2),
+            month_window_func=lambda *_args, **_kwargs: ((8, 0), (18, 0)),
+            age_seconds_func=lambda *_args, **_kwargs: 0,
+            health_code_func=lambda reason: {"init": 0}.get(reason, 99),
+            phase_values_func=lambda *_args, **_kwargs: {},
+            read_version_func=lambda _name: "1.0",
+            gobject_module=gobject_module,
+            script_path="/tmp/venus_evcharger_service.py",
+            formatters={"kwh": None, "a": None, "w": None, "v": None, "status": None},
+        )
+
+        controller.start_runtime_loops()
+
+        service._start_io_worker.assert_called_once_with()
+        service._start_control_api_server.assert_called_once_with()
+        service._start_companion_dbus_bridge.assert_called_once_with()
 
     def test_initialize_dbus_service_uses_device_instance_in_name(self):
         service = SimpleNamespace(service_name="com.victronenergy.evcharger", deviceinstance=60)
@@ -187,6 +410,89 @@ class TestServiceBootstrapControllerRuntime(ServiceBootstrapControllerTestCase):
 
         factory.assert_called_once_with("com.victronenergy.evcharger.http_60", register=False)
         self.assertEqual(service._dbusservice, "dbus-service")
+
+    def test_publish_dbus_service_registers_initialized_dbus_shell(self):
+        dbus_service = MagicMock()
+        service = SimpleNamespace(_dbusservice=dbus_service)
+        controller = self._controller(service)
+
+        controller.publish_dbus_service()
+
+        dbus_service.register.assert_called_once_with()
+
+    def test_publish_dbus_service_tolerates_name_exists_when_current_process_already_owns_name(self):
+        class NameExistsException(Exception):
+            pass
+
+        dbus_service = MagicMock()
+        dbus_service.register.side_effect = NameExistsException("exists")
+        dbus_service.name = "com.victronenergy.evcharger.http_60"
+        service = SimpleNamespace(_dbusservice=dbus_service)
+        controller = self._controller(service)
+        controller._dbus_service_owned_by_current_process = MagicMock(return_value=True)
+
+        controller.publish_dbus_service()
+
+        controller._dbus_service_owned_by_current_process.assert_called_once_with(dbus_service)
+
+    def test_publish_dbus_service_reraises_name_exists_for_foreign_owner(self):
+        class NameExistsException(Exception):
+            pass
+
+        dbus_service = MagicMock()
+        dbus_service.register.side_effect = NameExistsException("exists")
+        service = SimpleNamespace(_dbusservice=dbus_service)
+        controller = self._controller(service)
+        controller._dbus_service_owned_by_current_process = MagicMock(return_value=False)
+
+        with self.assertRaises(NameExistsException):
+            controller.publish_dbus_service()
+
+    def test_publish_dbus_service_reraises_non_name_exists_exception(self):
+        dbus_service = MagicMock()
+        dbus_service.register.side_effect = RuntimeError("boom")
+        service = SimpleNamespace(_dbusservice=dbus_service)
+        controller = self._controller(service)
+
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            controller.publish_dbus_service()
+
+    def test_dbus_service_owned_by_current_process_checks_bus_owner_pid(self):
+        bus_proxy = MagicMock()
+        bus_proxy.GetNameOwner.return_value = ":1.42"
+        bus_proxy.GetConnectionUnixProcessID.return_value = 1234
+        dbus_conn = MagicMock()
+        dbus_conn.get_object.return_value = bus_proxy
+        dbus_service = SimpleNamespace(_dbusconn=dbus_conn, name="com.victronenergy.evcharger.http_60")
+        controller = self._controller(SimpleNamespace())
+
+        with patch("venus_evcharger.bootstrap.controller.os.getpid", return_value=1234):
+            self.assertTrue(controller._dbus_service_owned_by_current_process(dbus_service))
+
+        bus_proxy.GetNameOwner.assert_called_once_with(
+            "com.victronenergy.evcharger.http_60",
+            dbus_interface="org.freedesktop.DBus",
+        )
+        bus_proxy.GetConnectionUnixProcessID.assert_called_once_with(
+            ":1.42",
+            dbus_interface="org.freedesktop.DBus",
+        )
+
+    def test_dbus_service_owned_by_current_process_returns_false_without_connection(self):
+        controller = self._controller(SimpleNamespace())
+        dbus_service = SimpleNamespace(name="com.victronenergy.evcharger.http_60")
+
+        self.assertFalse(controller._dbus_service_owned_by_current_process(dbus_service))
+
+    def test_dbus_service_owned_by_current_process_returns_false_when_owner_lookup_fails(self):
+        bus_proxy = MagicMock()
+        bus_proxy.GetNameOwner.side_effect = RuntimeError("dbus down")
+        dbus_conn = MagicMock()
+        dbus_conn.get_object.return_value = bus_proxy
+        dbus_service = SimpleNamespace(_dbusconn=dbus_conn, name="com.victronenergy.evcharger.http_60")
+        controller = self._controller(SimpleNamespace())
+
+        self.assertFalse(controller._dbus_service_owned_by_current_process(dbus_service))
 
     def test_register_paths_logs_and_reraises_add_path_failures(self):
         class _BrokenDbusService(_FakeDbusService):

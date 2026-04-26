@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from venus_evcharger.backend.config import backend_mode_for_service
 from venus_evcharger.backend.models import PhaseSelection
 from venus_evcharger.backend.shelly_io_types import normalize_phase_value, normalize_supported_phase_tuple
 from venus_evcharger.core.contracts import finite_float_or_none
@@ -16,8 +17,7 @@ class ShellyIoCapabilitiesMixin:
     """Expose split-backend discovery and direct-switch safety helpers."""
 
     def _uses_split_backends(self) -> bool:
-        selection = getattr(self.service, "_backend_selection", None)
-        return str(getattr(selection, "mode", "")).strip().lower() == "split"
+        return backend_mode_for_service(self.service, "combined") == "split"
 
     def _split_meter_backend(self) -> object | None:
         if not self._uses_split_backends():

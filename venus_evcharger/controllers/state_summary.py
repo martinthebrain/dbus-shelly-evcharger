@@ -9,6 +9,7 @@ from datetime import datetime
 import time
 from typing import Any
 
+from venus_evcharger.backend.config import backend_mode_for_service, backend_type_for_service
 from venus_evcharger.backend.models import effective_supported_phase_selections, normalize_phase_selection_tuple, switch_feedback_mismatch
 from venus_evcharger.core.common import (
     _charger_retry_remaining_seconds,
@@ -225,10 +226,10 @@ class _StateSummaryMixin:
     @classmethod
     def _summary_backend_parts(cls, svc: Any, current_time: float) -> tuple[str, ...]:
         return (
-            f"backend={getattr(svc, 'backend_mode', 'combined')}",
-            f"meter_backend={getattr(svc, 'meter_backend_type', 'shelly_combined')}",
-            f"switch_backend={getattr(svc, 'switch_backend_type', 'shelly_combined')}",
-            f"charger_backend={cls._summary_text(getattr(svc, 'charger_backend_type', None), 'na')}",
+            f"backend={backend_mode_for_service(svc, 'combined')}",
+            f"meter_backend={backend_type_for_service(svc, 'meter', 'shelly_meter')}",
+            f"switch_backend={backend_type_for_service(svc, 'switch', 'shelly_contactor_switch')}",
+            f"charger_backend={cls._summary_text(backend_type_for_service(svc, 'charger', ''), 'na')}",
             f"charger_target={cls._summary_float(getattr(svc, '_charger_target_current_amps', None))}",
             f"charger_status={cls._summary_text(getattr(svc, '_last_charger_state_status', ''), 'na')}",
             f"charger_fault={cls._summary_text(getattr(svc, '_last_charger_state_fault', ''), 'na')}",

@@ -26,6 +26,7 @@ __all__ = [
     "ShellyIoControllerTestBase",
     "SimpleNamespace",
     "SmartEvseChargerBackend",
+    "_runtime_bundle",
     "_phase_currents_for_selection",
     "_phase_powers_for_selection",
     "_single_phase_vector",
@@ -34,6 +35,22 @@ __all__ = [
     "threading",
 ]
 
+
+def _runtime_bundle(
+    mode: str,
+    *,
+    meter_type: str | None = None,
+    switch_type: str | None = None,
+    charger_type: str | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        runtime=SimpleNamespace(
+            backend_mode=mode,
+            meter_type=meter_type,
+            switch_type=switch_type,
+            charger_type=charger_type,
+        )
+    )
 
 
 class ShellyIoControllerTestBase(unittest.TestCase):

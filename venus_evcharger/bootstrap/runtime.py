@@ -41,6 +41,16 @@ def _backend_capabilities_unavailable(backend: Any) -> bool:
 
 class _ServiceBootstrapRuntimeMixin(_ComposableControllerMixin):
     @staticmethod
+    def _topology_configured(svc: Any) -> bool:
+        """Return whether one service has a configured runtime topology."""
+        return bool(getattr(svc, "topology_configured", getattr(svc, "host_configured", False)))
+
+    @staticmethod
+    def _primary_rpc_configured(svc: Any) -> bool:
+        """Return whether one service still has a direct legacy RPC endpoint."""
+        return bool(getattr(svc, "primary_rpc_configured", getattr(svc, "host_configured", False)))
+
+    @staticmethod
     def _switch_backend_supported_phase_selections(svc: Any) -> tuple[str, ...]:
         """Return normalized supported phase selections declared by the current switch backend."""
         backend = getattr(svc, "_switch_backend", None)
@@ -80,11 +90,13 @@ class _ServiceBootstrapRuntimeMixin(_ComposableControllerMixin):
         svc._dbus_publisher = DbusPublishController(svc, self._age_seconds)
         svc._shelly_io_controller = ShellyIoController(svc)
         resolved_backends = build_service_backends(svc)
-        svc._backend_selection = resolved_backends.selection
         svc._backend_bundle = resolved_backends
         svc._meter_backend = resolved_backends.meter
         svc._switch_backend = resolved_backends.switch
         svc._charger_backend = resolved_backends.charger
+        runtime_backends = resolved_backends.runtime
+        svc.topology_configured = runtime_backends.topology_configured
+        svc.primary_rpc_configured = runtime_backends.primary_rpc_configured
         if not hasattr(svc, "_state_controller") or svc._state_controller is None:
             svc._state_controller = ServiceStateController(svc, self._normalize_mode)
         svc._write_controller = DbusWriteController(WriteControllerPort(svc))
@@ -162,9 +174,35 @@ class _ServiceBootstrapRuntimeMixin(_ComposableControllerMixin):
     def apply_device_metadata(self) -> None:
         """Fetch Shelly metadata and apply UI-facing identity fields."""
         svc = self.service
-        device_info = self.fetch_device_info_with_fallback()
         defaults = svc.config["DEFAULT"]
         svc.product_name = defaults.get("ProductName", "Venus EV Charger Service").strip()
+        if not self._topology_configured(svc):
+            self._apply_unconfigured_device_metadata(svc)
+            return
+        if not self._primary_rpc_configured(svc):
+            self._apply_adapter_topology_device_metadata(svc)
+            return
+        self._apply_rpc_device_metadata(svc)
+
+    def _apply_unconfigured_device_metadata(self, svc: Any) -> None:
+        """Apply device metadata for an unconfigured topology."""
+        svc.custom_name = svc.custom_name_override or "Venus EV Charger Service"
+        svc.serial = f"unconfigured-{svc.deviceinstance}"
+        svc.firmware_version = self._read_version("version.txt")
+        svc.hardware_version = "Not configured"
+        logging.info("No load topology is configured yet; starting without device metadata")
+
+    def _apply_adapter_topology_device_metadata(self, svc: Any) -> None:
+        """Apply generic metadata for adapter-only topologies without direct RPC."""
+        svc.custom_name = svc.custom_name_override or "Venus EV Charger Service"
+        svc.serial = f"topology-{svc.deviceinstance}"
+        svc.firmware_version = self._read_version("version.txt")
+        svc.hardware_version = "External adapter topology"
+        logging.info("No direct legacy RPC endpoint is configured; starting with generic device metadata")
+
+    def _apply_rpc_device_metadata(self, svc: Any) -> None:
+        """Apply metadata fetched from the direct device RPC endpoint."""
+        device_info = self.fetch_device_info_with_fallback()
         svc.custom_name = svc.custom_name_override or device_info.get("name") or "Venus EV Charger Service"
         svc.serial = device_info.get("mac", svc.host.replace(".", ""))
         svc.firmware_version = device_info.get("fw_id", self._read_version("version.txt"))
@@ -173,8 +211,14 @@ class _ServiceBootstrapRuntimeMixin(_ComposableControllerMixin):
     def start_runtime_loops(self) -> None:
         """Register DBus paths, start background workers, and arm timers."""
         svc = self.service
-        svc._start_io_worker()
+        if self._topology_configured(svc):
+            svc._start_io_worker()
+        else:
+            logging.info("No load topology is configured yet; skipping runtime I/O worker startup")
         svc._start_control_api_server()
+        start_companion_bridge = getattr(svc, "_start_companion_dbus_bridge", None)
+        if callable(start_companion_bridge):
+            start_companion_bridge()
         logging.info(
             "Initialized Venus EV charger service pid=%s runtime_state=%s %s",
             os.getpid(),

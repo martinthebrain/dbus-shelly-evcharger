@@ -43,7 +43,13 @@ class TestShellyWallboxBranchMisc(unittest.TestCase):
     def test_bootstrap_runtime_reuses_existing_state_controller(self) -> None:
         existing_state_controller = object()
         service = SimpleNamespace(_state_controller=existing_state_controller)
-        resolved = SimpleNamespace(selection="sel", meter="meter", switch="switch", charger="charger")
+        resolved = SimpleNamespace(
+            runtime=SimpleNamespace(topology_configured=False, primary_rpc_configured=False),
+            selection="sel",
+            meter="meter",
+            switch="switch",
+            charger="charger",
+        )
         harness = _BootstrapRuntimeHarness(service)
 
         with (
@@ -130,6 +136,47 @@ class TestShellyWallboxBranchMisc(unittest.TestCase):
             relay_sync_timeout_seconds=0.0,
         )
         self.assertEqual(_UpdateCycleOfflineMixin._offline_confirmed_relay_max_age_seconds(service), 2.0)
+
+        service_for_cache = SimpleNamespace(
+            auto_input_cache_seconds=30.0,
+            auto_pv_poll_interval_seconds=10.0,
+            auto_grid_poll_interval_seconds=10.0,
+            auto_battery_poll_interval_seconds=10.0,
+            _last_pv_value=None,
+            _last_pv_at=None,
+            _last_grid_value=None,
+            _last_grid_at=None,
+            _last_battery_soc_value=None,
+            _last_battery_soc_at=None,
+            _last_combined_battery_charge_power_w=None,
+            _last_combined_battery_charge_power_at=None,
+            _last_combined_battery_discharge_power_w=None,
+            _last_combined_battery_discharge_power_at=None,
+            _last_combined_battery_net_power_w=None,
+            _last_combined_battery_net_power_at=None,
+            _last_combined_battery_ac_power_w=None,
+            _last_combined_battery_ac_power_at=None,
+            _auto_cached_inputs_used=False,
+            _error_state={"cache_hits": 0},
+        )
+        cache_owner = SimpleNamespace(service=service_for_cache)
+        service_for_cache._service = SimpleNamespace(_last_energy_learning_profiles={"old": 1})
+        harness = _InputCacheHarness()
+        harness.service = service_for_cache
+        harness.resolve_auto_inputs(
+            {
+                "pv_power": 7.5,
+                "pv_captured_at": 10.0,
+                "battery_soc": 55.0,
+                "battery_captured_at": 10.0,
+                "grid_power": -10.0,
+                "grid_captured_at": 10.0,
+                "battery_learning_profiles": ["not-a-dict"],
+            },
+            now=20.0,
+            auto_mode_active=True,
+        )
+        self.assertEqual(service_for_cache._service._last_energy_learning_profiles, {"old": 1})
 
         pm_status = {"apower": 1000.0}
         ShellyIoSplitMixin._apply_optional_pm_voltage(pm_status, None)

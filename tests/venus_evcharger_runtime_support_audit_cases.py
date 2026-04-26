@@ -1,10 +1,37 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import configparser
 import tempfile
 from unittest.mock import mock_open, patch
 
 from venus_evcharger.runtime.support import RuntimeSupportController
 from tests.venus_evcharger_runtime_support_support import RuntimeSupportTestCaseBase
 from tests.venus_evcharger_test_fixtures import make_auto_metrics, make_runtime_support_service
+
+
+def _with_backends_config(
+    service,
+    *,
+    mode: str,
+    meter_type: str,
+    switch_type: str,
+    charger_type: str | None,
+    host: str = "192.168.1.20",
+):
+    parser = configparser.ConfigParser()
+    parser.read_string(
+        f"""
+[DEFAULT]
+Host={host}
+
+[Backends]
+Mode={mode}
+MeterType={meter_type}
+SwitchType={switch_type}
+ChargerType={charger_type or ""}
+"""
+    )
+    service.config = parser
+    return service
 
 
 class TestRuntimeSupportControllerAudit(RuntimeSupportTestCaseBase):
@@ -37,7 +64,13 @@ class TestRuntimeSupportControllerAudit(RuntimeSupportTestCaseBase):
     def test_write_auto_audit_event_includes_stop_reason_detail(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = f"{temp_dir}/auto-reasons.log"
-            service = make_runtime_support_service(_time_now=lambda: 1000.0, auto_audit_log_path=path, _last_pm_status={"output": True}, virtual_startstop=1, backend_mode="split", meter_backend_type="template_meter", switch_backend_type="template_switch", charger_backend_type="template_charger", _charger_target_current_amps=13.0, _last_charger_transport_reason="offline", _last_charger_transport_source="read", _last_charger_transport_detail="Modbus slave 1 did not respond", _last_charger_transport_at=1000.0, _charger_retry_reason="offline", _charger_retry_source="read", _charger_retry_until=1005.0, _last_confirmed_pm_status={"_phase_selection": "P1_P2", "output": True}, _last_confirmed_pm_status_at=1000.0, _phase_switch_mismatch_active=True, _last_switch_feedback_closed=False, _last_switch_interlock_ok=True, auto_stop_condition_reason="auto-stop-surplus", _last_auto_metrics=make_auto_metrics(surplus=900.0, grid=-100.0, soc=61.0, profile="high-soc", start_threshold=1650.0, stop_threshold=800.0, learned_charge_power=2280.0, learned_charge_power_state="stable", threshold_scale=1.2, threshold_mode="adaptive", stop_alpha=0.15, stop_alpha_stage="volatile", surplus_volatility=520.0))
+            service = _with_backends_config(
+                make_runtime_support_service(_time_now=lambda: 1000.0, auto_audit_log_path=path, _last_pm_status={"output": True}, virtual_startstop=1, _charger_target_current_amps=13.0, _last_charger_transport_reason="offline", _last_charger_transport_source="read", _last_charger_transport_detail="Modbus slave 1 did not respond", _last_charger_transport_at=1000.0, _charger_retry_reason="offline", _charger_retry_source="read", _charger_retry_until=1005.0, _last_confirmed_pm_status={"_phase_selection": "P1_P2", "output": True}, _last_confirmed_pm_status_at=1000.0, _phase_switch_mismatch_active=True, _last_switch_feedback_closed=False, _last_switch_interlock_ok=True, auto_stop_condition_reason="auto-stop-surplus", _last_auto_metrics=make_auto_metrics(surplus=900.0, grid=-100.0, soc=61.0, profile="high-soc", start_threshold=1650.0, stop_threshold=800.0, learned_charge_power=2280.0, learned_charge_power_state="stable", threshold_scale=1.2, threshold_mode="adaptive", stop_alpha=0.15, stop_alpha_stage="volatile", surplus_volatility=520.0)),
+                mode="split",
+                meter_type="template_meter",
+                switch_type="template_switch",
+                charger_type="template_charger",
+            )
             controller = RuntimeSupportController(service, self._age_zero, self._health_zero)
             controller.write_auto_audit_event("auto-stop", cached=False)
             with open(path, "r", encoding="utf-8") as handle:

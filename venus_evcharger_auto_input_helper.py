@@ -22,6 +22,7 @@ from venus_evcharger.core.shared import (
     compact_json,
     write_text_atomically,
 )
+from venus_evcharger.energy import load_energy_source_settings
 
 try:
     import dbus.mainloop.glib as dbus_glib_mainloop
@@ -54,35 +55,58 @@ class AutoInputHelper(
     SNAPSHOT_SCHEMA_VERSION = AUTO_INPUT_SNAPSHOT_SCHEMA_VERSION
 
     def __init__(self, config_path: str, snapshot_path: str | None = None, parent_pid: object = None) -> None:
+        parser = self._load_helper_parser(config_path)
+        self._init_helper_base_config(config_path, parser, snapshot_path, parent_pid)
+        self._init_helper_polling()
+        self._init_helper_pv_config()
+        self._init_helper_battery_config()
+        self._init_helper_grid_config()
+        self._init_helper_runtime_config()
+        self._init_helper_runtime_state()
+
+    @staticmethod
+    def _load_helper_parser(config_path: str) -> configparser.ConfigParser:
         parser = configparser.ConfigParser()
         loaded = parser.read(config_path)
         if not loaded or "DEFAULT" not in parser:
             raise ValueError(f"Unable to read config file: {config_path}")
+        return parser
 
+    def _init_helper_base_config(
+        self,
+        config_path: str,
+        parser: configparser.ConfigParser,
+        snapshot_path: str | None,
+        parent_pid: object,
+    ) -> None:
         self.config_path = config_path
         self.config = parser["DEFAULT"]
-        parsed_parent_pid = int(parent_pid) if isinstance(parent_pid, (str, int)) else None
-        self.parent_pid: int | None = parsed_parent_pid
-        # The helper uses a shared base poll interval but allows slower battery
-        # polling to reduce unnecessary DBus traffic on systems where SOC values
-        # change much less frequently than PV or grid power.
-        auto_input_poll_interval_ms = float(
-            self.config.get(
-                "AutoInputPollIntervalMs",
-                self.config.get("PollIntervalMs", 1000),
-            )
+        self.parent_pid = self._parsed_parent_pid(parent_pid)
+        self.snapshot_path = snapshot_path or self.config.get(
+            "AutoInputSnapshotPath",
+            "/run/dbus-venus-evcharger-auto.json",
+        ).strip()
+        self.dbus_method_timeout_seconds = float(self.config.get("DbusMethodTimeoutSeconds", 1.0))
+
+    @staticmethod
+    def _parsed_parent_pid(parent_pid: object) -> int | None:
+        if isinstance(parent_pid, (str, int)):
+            return int(parent_pid)
+        return None
+
+    def _init_helper_polling(self) -> None:
+        auto_input_poll_interval_ms = self._auto_input_poll_interval_ms()
+        self.auto_pv_poll_interval_seconds = self._poll_interval_seconds(
+            "AutoPvPollIntervalMs",
+            auto_input_poll_interval_ms,
         )
-        self.auto_pv_poll_interval_seconds = max(
-            0.2,
-            float(self.config.get("AutoPvPollIntervalMs", auto_input_poll_interval_ms)) / 1000.0,
+        self.auto_grid_poll_interval_seconds = self._poll_interval_seconds(
+            "AutoGridPollIntervalMs",
+            auto_input_poll_interval_ms,
         )
-        self.auto_grid_poll_interval_seconds = max(
-            0.2,
-            float(self.config.get("AutoGridPollIntervalMs", auto_input_poll_interval_ms)) / 1000.0,
-        )
-        self.auto_battery_poll_interval_seconds = max(
-            0.2,
-            float(self.config.get("AutoBatteryPollIntervalMs", auto_input_poll_interval_ms)) / 1000.0,
+        self.auto_battery_poll_interval_seconds = self._poll_interval_seconds(
+            "AutoBatteryPollIntervalMs",
+            auto_input_poll_interval_ms,
         )
         self.poll_interval_seconds = min(
             max(0.2, auto_input_poll_interval_ms / 1000.0),
@@ -90,16 +114,19 @@ class AutoInputHelper(
             self.auto_grid_poll_interval_seconds,
             self.auto_battery_poll_interval_seconds,
         )
-        # The main service watches this snapshot file and can restart the helper
-        # if the file stops being refreshed.
-        self.snapshot_path = (
-            snapshot_path
-            or self.config.get(
-                "AutoInputSnapshotPath",
-                "/run/dbus-venus-evcharger-auto.json",
-            ).strip()
+
+    def _auto_input_poll_interval_ms(self) -> float:
+        return float(
+            self.config.get(
+                "AutoInputPollIntervalMs",
+                self.config.get("PollIntervalMs", 1000),
+            )
         )
-        self.dbus_method_timeout_seconds = float(self.config.get("DbusMethodTimeoutSeconds", 1.0))
+
+    def _poll_interval_seconds(self, key: str, fallback_ms: float) -> float:
+        return max(0.2, float(self.config.get(key, fallback_ms)) / 1000.0)
+
+    def _init_helper_pv_config(self) -> None:
         self.auto_pv_service = self.config.get("AutoPvService", "").strip()
         self.auto_pv_service_prefix = self.config.get("AutoPvServicePrefix", "com.victronenergy.pvinverter").strip()
         self.auto_pv_path = self.config.get("AutoPvPath", "/Ac/Power").strip()
@@ -108,11 +135,19 @@ class AutoInputHelper(
         self.auto_use_dc_pv = _as_bool(self.config.get("AutoUseDcPv", "1"), True)
         self.auto_dc_pv_service = self.config.get("AutoDcPvService", "com.victronenergy.system").strip()
         self.auto_dc_pv_path = self.config.get("AutoDcPvPath", "/Dc/Pv/Power").strip()
+
+    def _init_helper_battery_config(self) -> None:
         self.auto_battery_service = self.config.get(
             "AutoBatteryService",
             "com.victronenergy.battery.socketcan_can1",
         ).strip()
         self.auto_battery_soc_path = self.config.get("AutoBatterySocPath", "/Soc").strip()
+        self.auto_battery_capacity_wh = float(self.config.get("AutoBatteryCapacityWh", 0) or 0)
+        self.auto_battery_power_path = self.config.get("AutoBatteryPowerPath", "").strip()
+        self.auto_battery_ac_power_path = self.config.get("AutoBatteryAcPowerPath", "").strip()
+        self.auto_battery_pv_power_path = self.config.get("AutoBatteryPvPowerPath", "").strip()
+        self.auto_battery_grid_interaction_path = self.config.get("AutoBatteryGridInteractionPath", "").strip()
+        self.auto_battery_operating_mode_path = self.config.get("AutoBatteryOperatingModePath", "").strip()
         self.auto_battery_service_prefix = self.config.get(
             "AutoBatteryServicePrefix",
             "com.victronenergy.battery",
@@ -121,6 +156,10 @@ class AutoInputHelper(
             0.0,
             float(self.config.get("AutoBatteryScanIntervalSeconds", 60)),
         )
+        self.auto_energy_sources, self.auto_use_combined_battery_soc = load_energy_source_settings(self.config)
+        self.auto_energy_source_ids = tuple(source.source_id for source in self.auto_energy_sources)
+
+    def _init_helper_grid_config(self) -> None:
         self.auto_grid_service = self.config.get("AutoGridService", "com.victronenergy.system").strip()
         self.auto_grid_l1_path = self.config.get("AutoGridL1Path", "/Ac/Grid/L1/Power").strip()
         self.auto_grid_l2_path = self.config.get("AutoGridL2Path", "/Ac/Grid/L2/Power").strip()
@@ -129,6 +168,8 @@ class AutoInputHelper(
             self.config.get("AutoGridRequireAllPhases", "1"),
             True,
         )
+
+    def _init_helper_runtime_config(self) -> None:
         self.auto_dbus_backoff_base_seconds = max(
             0.0,
             float(self.config.get("AutoDbusBackoffBaseSeconds", 5)),
@@ -142,6 +183,8 @@ class AutoInputHelper(
             float(self.config.get("AutoInputValidationPollSeconds", 30)),
         )
         self.subscription_refresh_seconds = self._derive_subscription_refresh_seconds()
+
+    def _init_helper_runtime_state(self) -> None:
         self._system_bus = None
         self._dbus_list_backoff_until = 0.0
         self._dbus_list_failures = 0
@@ -149,10 +192,13 @@ class AutoInputHelper(
         self._auto_pv_last_scan = 0.0
         self._resolved_auto_battery_service = None
         self._auto_battery_last_scan = 0.0
+        self._resolved_auto_energy_services: dict[str, str] = {}
+        self._auto_energy_last_scan: dict[str, float] = {}
+        self._energy_learning_profiles: dict[str, Any] = {}
         self._source_retry_after: dict[str, float] = {}
         self._warning_state: dict[str, float] = {}
         self._last_payload: str | None = None
-        self._last_snapshot_state: dict[str, float | int | None] = self._empty_snapshot()
+        self._last_snapshot_state: dict[str, object] = self._empty_snapshot()
         self._next_source_poll_at = {
             "pv": 0.0,
             "battery": 0.0,
@@ -206,7 +252,7 @@ class AutoInputHelper(
             self._warning_state[key] = now
 
     @staticmethod
-    def _empty_snapshot(captured_at: float | None = None) -> dict[str, float | int | None]:
+    def _empty_snapshot(captured_at: float | None = None) -> dict[str, object]:
         """Return an empty helper snapshot payload."""
         return {
             "snapshot_version": AutoInputHelper.SNAPSHOT_SCHEMA_VERSION,
@@ -216,6 +262,17 @@ class AutoInputHelper(
             "pv_power": None,
             "battery_captured_at": None,
             "battery_soc": None,
+            "battery_combined_soc": None,
+            "battery_combined_usable_capacity_wh": None,
+            "battery_combined_charge_power_w": None,
+            "battery_combined_discharge_power_w": None,
+            "battery_combined_net_power_w": None,
+            "battery_combined_ac_power_w": None,
+            "battery_source_count": 0,
+            "battery_online_source_count": 0,
+            "battery_valid_soc_source_count": 0,
+            "battery_sources": [],
+            "battery_learning_profiles": {},
             "grid_captured_at": None,
             "grid_power": None,
         }
