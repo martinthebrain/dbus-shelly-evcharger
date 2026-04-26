@@ -1178,12 +1178,13 @@ class BranchCoverageWizardRenderCases(unittest.TestCase):
             main_path = temp_path / "config.ini"
             main_path.write_text("[DEFAULT]\n", encoding="utf-8")
 
-            selection = SimpleNamespace(
+            runtime = SimpleNamespace(
                 meter_config_path=Path("meter.ini"),
                 switch_config_path=None,
                 charger_config_path=Path("charger.ini"),
             )
-            with patch("venus_evcharger.bootstrap.wizard_render.load_backend_selection", return_value=selection), patch(
+            resolved = SimpleNamespace(runtime=runtime)
+            with patch("venus_evcharger.bootstrap.wizard_render.build_service_backends", return_value=resolved), patch(
                 "venus_evcharger.bootstrap.wizard_render.probe_meter_backend",
                 return_value={"meter": "ok"},
             ), patch(
@@ -1196,12 +1197,15 @@ class BranchCoverageWizardRenderCases(unittest.TestCase):
             self.assertEqual(payload["roles"]["meter"]["status"], "ok")
             self.assertEqual(payload["roles"]["charger"]["status"], "error")
 
-            selection = SimpleNamespace(
+            runtime = SimpleNamespace(
                 meter_config_path=None,
                 switch_config_path=None,
                 charger_config_path=None,
             )
-            with patch("venus_evcharger.bootstrap.wizard_render.load_backend_selection", return_value=selection):
+            with patch(
+                "venus_evcharger.bootstrap.wizard_render.build_service_backends",
+                return_value=SimpleNamespace(runtime=runtime),
+            ):
                 payload = live_connectivity_payload(main_path, None)
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["roles"]["meter"]["reason"], "not configured")

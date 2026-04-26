@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import configparser
 import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -163,16 +164,25 @@ class _FactoryService(ServiceControllerFactoryMixin):
 
 def _configured_control_service() -> _ControlService:
     service = _ControlService()
+    service.config = configparser.ConfigParser()
+    service.config.read_string(
+        """
+[DEFAULT]
+Host=192.168.1.20
+
+[Backends]
+Mode=split
+MeterType=template_meter
+SwitchType=switch_group
+ChargerType=goe_charger
+"""
+    )
     service.virtual_mode = 1
     service.virtual_enable = 1
     service.virtual_startstop = 0
     service.virtual_autostart = 1
     service.active_phase_selection = "P1"
     service.requested_phase_selection = "P1_P2"
-    service.backend_mode = "split"
-    service.meter_backend_type = "template_meter"
-    service.switch_backend_type = "switch_group"
-    service.charger_backend_type = "goe_charger"
     service._last_auto_state = "charging"
     service._last_auto_state_code = 3
     service._last_health_reason = ""

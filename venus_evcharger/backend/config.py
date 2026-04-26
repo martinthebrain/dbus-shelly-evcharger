@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Helpers for normalized backend selection from wallbox configuration."""
+"""Helpers for normalized runtime backend summaries from wallbox configuration."""
 
 from __future__ import annotations
 
@@ -7,7 +7,30 @@ import configparser
 from pathlib import Path
 from typing import Any
 
-from .models import BackendMode, BackendSelection
+from venus_evcharger.topology.config import legacy_topology_from_config, parse_topology_config
+from venus_evcharger.topology.schema import EvChargerTopologyConfig
+
+from .models import BackendMode, BackendRuntimeSummary
+
+
+DEFAULT_COMBINED_METER_TYPE = "shelly_meter"
+DEFAULT_COMBINED_SWITCH_TYPE = "shelly_contactor_switch"
+
+
+def _combined_role_fallback(role: str) -> str:
+    """Return the normalized combined fallback label for one backend role."""
+    return DEFAULT_COMBINED_METER_TYPE if role == "meter" else DEFAULT_COMBINED_SWITCH_TYPE
+
+
+def _role_field_name(role: str) -> str:
+    """Return the normalized runtime-summary field name for one backend role."""
+    return f"{role.strip().lower()}_type"
+
+
+def _normalized_text_or_default(value: object, default: str = "") -> str:
+    """Return trimmed text or the provided default."""
+    normalized = str(value).strip() if value is not None else ""
+    return normalized or default
 
 
 def normalize_backend_mode(value: object) -> BackendMode:
@@ -36,36 +59,81 @@ def normalize_config_path(value: object) -> Path | None:
     return Path(normalized)
 
 
+def _configured_text(value: object) -> str:
+    """Return one normalized non-empty text payload or an empty string."""
+    return str(value).strip() if value is not None else ""
+
+
+def _topology_sections_present(config: configparser.ConfigParser) -> bool:
+    """Return whether one config includes normalized topology sections."""
+    return config.has_section("Topology")
+
+
 def _backends_section(config: configparser.ConfigParser) -> configparser.SectionProxy:
-    """Return the preferred config section for backend selection."""
+    """Return the preferred legacy config section for backend settings."""
     return config["Backends"] if config.has_section("Backends") else config["DEFAULT"]
 
 
-def validate_backend_selection(selection: BackendSelection) -> BackendSelection:
-    """Return one validated backend selection or raise on unsupported combinations.
-
-    This is the normative topology gate for the service. Runtime overrides may
-    tune policy and behavior, but they must not widen this structural backend
-    space implicitly. If a topology should stay forbidden in the product, it
-    should be rejected here explicitly.
-    """
-    for message in _backend_selection_validation_errors(selection):
-        raise ValueError(message)
-    return selection
+def _topology_path(value: str | None) -> Path | None:
+    """Return one normalized optional topology config path."""
+    if value is None:
+        return None
+    text = value.strip()
+    return Path(text) if text else None
 
 
-def _backend_selection_validation_errors(selection: BackendSelection) -> tuple[str, ...]:
-    """Return all structural backend validation errors for one selection."""
-    errors: list[str] = []
-    if selection.meter_type == "none":
-        errors.extend(_missing_backend_errors(selection.mode, selection.charger_type, "MeterType"))
-    if selection.switch_type == "none":
-        errors.extend(_missing_backend_errors(selection.mode, selection.charger_type, "SwitchType"))
-    return tuple(errors)
+def _adapter_type_from_config_path(config_path: str | None) -> str | None:
+    """Return the adapter type declared by one backend role config path."""
+    path = _topology_path(config_path)
+    if path is None:
+        return None
+    return _adapter_type_from_path(path)
 
 
-def _missing_backend_errors(mode: BackendMode, charger_type: str | None, field_name: str) -> list[str]:
-    """Return validation errors for one backend field set to ``none``."""
+def _adapter_type_from_path(path: Path) -> str | None:
+    """Return the adapter type declared in one parsed adapter config path."""
+    parser = configparser.ConfigParser()
+    read_files = parser.read(path)
+    if not read_files:
+        return None
+    return _adapter_type_from_parser(parser)
+
+
+def _adapter_type_from_parser(parser: configparser.ConfigParser) -> str | None:
+    """Return the normalized adapter type from one loaded adapter parser."""
+    if parser.has_section("Adapter"):
+        return _optional_lower_text(parser["Adapter"].get("Type", ""))
+    return _optional_lower_text(parser["DEFAULT"].get("Type", ""))
+
+
+def _optional_lower_text(value: object) -> str | None:
+    """Return trimmed lowercase text or ``None``."""
+    normalized = str(value).strip().lower() if value is not None else ""
+    return normalized or None
+
+
+def _runtime_role_from_legacy(mode: BackendMode, role: str, value: object) -> str | None:
+    """Return one runtime backend role reconstructed from legacy config values."""
+    normalized = normalize_backend_type(value, _combined_role_fallback(role))
+    if _split_none_role(mode, normalized):
+        return None
+    return _runtime_role_alias(role, normalized)
+
+
+def _split_none_role(mode: BackendMode, normalized: str) -> bool:
+    """Return whether one split runtime role explicitly disables a backend."""
+    return mode == "split" and normalized == "none"
+
+
+def _runtime_role_alias(role: str, normalized: str) -> str | None:
+    """Return one normalized runtime backend role after alias expansion."""
+    if normalized == "shelly_combined":
+        return _combined_role_fallback(role)
+    return normalized or None
+
+
+def _legacy_none_backend_errors(mode: BackendMode, charger_type: str | None, field_name: str) -> list[str]:
+    """Return legacy validation errors for one backend field set to ``none``."""
     errors: list[str] = []
     if mode != "split":
         errors.append(f"{field_name}=none is only supported in split backend mode")
@@ -74,32 +142,397 @@ def _missing_backend_errors(mode: BackendMode, charger_type: str | None, field_n
     return errors
 
 
-def load_backend_selection(config: configparser.ConfigParser) -> BackendSelection:
-    """Return normalized backend selection from wallbox config."""
+def _validate_legacy_backend_values(mode: BackendMode, meter_type: str, switch_type: str, charger_type: str | None) -> None:
+    """Raise when legacy backend settings express one unsupported topology."""
+    errors: list[str] = []
+    if meter_type == "none":
+        errors.extend(_legacy_none_backend_errors(mode, charger_type, "MeterType"))
+    if switch_type == "none":
+        errors.extend(_legacy_none_backend_errors(mode, charger_type, "SwitchType"))
+    for message in errors:
+        raise ValueError(message)
+
+
+def _legacy_view_role_from_runtime(mode: BackendMode, role: str, value: object) -> str:
+    """Return one compatibility backend label reconstructed from runtime data."""
+    fallback = _combined_role_fallback(role)
+    if value is None:
+        return "none" if mode == "split" else fallback
+    normalized = _normalized_text_or_default(str(value).lower())
+    return normalized or ("none" if mode == "split" else fallback)
+
+
+def _build_runtime_summary(
+    *,
+    backend_mode: BackendMode,
+    meter_type: str | None,
+    meter_config_path: Path | None,
+    switch_type: str | None,
+    switch_config_path: Path | None,
+    charger_type: str | None,
+    charger_config_path: Path | None,
+    legacy_host: object = "",
+    primary_rpc_configured: bool | None = None,
+) -> BackendRuntimeSummary:
+    """Return one normalized runtime summary with derived configured flags."""
+    if primary_rpc_configured is None:
+        primary_rpc_configured = _legacy_primary_rpc_configured(backend_mode, legacy_host)
+    topology_configured = _topology_configured(
+        backend_mode=backend_mode,
+        meter_type=meter_type,
+        meter_config_path=meter_config_path,
+        switch_type=switch_type,
+        switch_config_path=switch_config_path,
+        charger_type=charger_type,
+        charger_config_path=charger_config_path,
+        legacy_host=legacy_host,
+    )
+    return BackendRuntimeSummary(
+        backend_mode=backend_mode,
+        meter_type=meter_type,
+        meter_config_path=meter_config_path,
+        switch_type=switch_type,
+        switch_config_path=switch_config_path,
+        charger_type=charger_type,
+        charger_config_path=charger_config_path,
+        topology_configured=topology_configured,
+        primary_rpc_configured=bool(primary_rpc_configured),
+    )
+
+
+def _legacy_primary_rpc_configured(backend_mode: BackendMode, legacy_host: object) -> bool:
+    """Return whether one combined-style setup still exposes a primary RPC host."""
+    return backend_mode != "split" and bool(_configured_text(legacy_host))
+
+
+def _topology_configured(
+    *,
+    backend_mode: BackendMode,
+    meter_type: str | None,
+    meter_config_path: Path | None,
+    switch_type: str | None,
+    switch_config_path: Path | None,
+    charger_type: str | None,
+    charger_config_path: Path | None,
+    legacy_host: object,
+) -> bool:
+    """Return whether runtime role information represents a configured topology."""
+    if backend_mode != "split":
+        return bool(_configured_text(legacy_host))
+    return any(
+        (
+            _configured_role(meter_type, meter_config_path),
+            _configured_role(switch_type, switch_config_path),
+            _configured_role(charger_type, charger_config_path),
+        )
+    )
+
+
+def _configured_role(role_type: str | None, config_path: Path | None) -> bool:
+    """Return whether one runtime backend role is fully configured."""
+    return role_type is not None and config_path is not None
+
+
+def _native_meter_type_for_actuator(actuator_type: str | None) -> str | None:
+    """Return one native meter backend type implied by a switch actuator."""
+    if actuator_type in {"shelly_switch", "shelly_contactor_switch"}:
+        return DEFAULT_COMBINED_METER_TYPE
+    return None
+
+
+def _runtime_summary_from_topology(topology: EvChargerTopologyConfig) -> BackendRuntimeSummary:
+    """Return one runtime backend summary from a normalized topology config."""
+    switch_type = _topology_actuator_type(topology)
+    switch_config_path = _topology_actuator_path(topology)
+    charger_type = _topology_charger_type(topology)
+    charger_config_path = _topology_charger_path(topology)
+    meter_type, meter_config_path = _topology_measurement_role(topology, switch_type)
+    return _build_runtime_summary(
+        backend_mode="split",
+        meter_type=meter_type,
+        meter_config_path=meter_config_path,
+        switch_type=switch_type,
+        switch_config_path=switch_config_path,
+        charger_type=charger_type,
+        charger_config_path=charger_config_path,
+        primary_rpc_configured=False,
+    )
+
+
+def _topology_actuator_type(topology: EvChargerTopologyConfig) -> str | None:
+    """Return one normalized actuator type from topology data."""
+    return None if topology.actuator is None else topology.actuator.type
+
+
+def _topology_actuator_path(topology: EvChargerTopologyConfig) -> Path | None:
+    """Return one normalized actuator config path from topology data."""
+    return None if topology.actuator is None else _topology_path(topology.actuator.config_path)
+
+
+def _topology_charger_type(topology: EvChargerTopologyConfig) -> str | None:
+    """Return one normalized charger type from topology data."""
+    return None if topology.charger is None else topology.charger.type
+
+
+def _topology_charger_path(topology: EvChargerTopologyConfig) -> Path | None:
+    """Return one normalized charger config path from topology data."""
+    return None if topology.charger is None else _topology_path(topology.charger.config_path)
+
+
+def _topology_measurement_role(
+    topology: EvChargerTopologyConfig,
+    switch_type: str | None,
+) -> tuple[str | None, Path | None]:
+    """Return runtime meter role data derived from the normalized measurement role."""
+    measurement = topology.measurement
+    if measurement is None:
+        return None, None
+    if measurement.type == "external_meter":
+        return (
+            _adapter_type_from_config_path(measurement.config_path),
+            _topology_path(measurement.config_path),
+        )
+    if measurement.type == "actuator_native":
+        return _native_meter_type_for_actuator(switch_type), None
+    if measurement.type == "charger_native":
+        return None, None
+    return None, None
+
+
+def _topology_backend_label(topology: EvChargerTopologyConfig, role: str) -> str | None:
+    """Return one outward-facing backend label from a normalized topology."""
+    normalized_role = role.strip().lower()
+    if normalized_role == "meter":
+        return _measurement_backend_label(topology)
+    if normalized_role == "switch":
+        return _topology_actuator_type(topology)
+    if normalized_role == "charger":
+        return _topology_charger_type(topology)
+    return None
+
+
+def _measurement_backend_label(topology: EvChargerTopologyConfig) -> str | None:
+    """Return the outward-facing measurement backend label for one topology."""
+    measurement = topology.measurement
+    if measurement is None:
+        return None
+    simple_label = _simple_measurement_backend_label(measurement.type)
+    if simple_label is not None:
+        return simple_label
+    return _dynamic_measurement_backend_label(topology, measurement)
+
+
+def _simple_measurement_backend_label(measurement_type: str) -> str | None:
+    """Return direct backend labels for measurement modes without role lookups."""
+    if measurement_type in {"fixed_reference", "learned_reference", "none"}:
+        return measurement_type
+    return None
+
+
+def _dynamic_measurement_backend_label(
+    topology: EvChargerTopologyConfig,
+    measurement: Any,
+) -> str | None:
+    """Return backend labels for measurement modes that depend on role wiring."""
+    if measurement.type == "external_meter":
+        return _adapter_type_from_config_path(measurement.config_path)
+    if measurement.type == "actuator_native":
+        return _native_meter_type_for_actuator(_topology_actuator_type(topology))
+    if measurement.type == "charger_native":
+        return _topology_charger_type(topology)
+    return None
+
+
+def _runtime_summary_from_legacy_config(config: configparser.ConfigParser) -> BackendRuntimeSummary:
+    """Return one runtime backend summary from legacy combined/split config sections."""
     section = _backends_section(config)
-    return validate_backend_selection(
-        BackendSelection(
-            mode=normalize_backend_mode(section.get("Mode", "combined")),
-            meter_type=normalize_backend_type(section.get("MeterType", "shelly_combined"), "shelly_combined"),
-            switch_type=normalize_backend_type(section.get("SwitchType", "shelly_combined"), "shelly_combined"),
-            charger_type=normalize_optional_backend_type(section.get("ChargerType", "")),
-            meter_config_path=normalize_config_path(section.get("MeterConfigPath", "")),
-            switch_config_path=normalize_config_path(section.get("SwitchConfigPath", "")),
-            charger_config_path=normalize_config_path(section.get("ChargerConfigPath", "")),
+    legacy_host = config["DEFAULT"].get("Host", "") if "DEFAULT" in config else ""
+    mode = normalize_backend_mode(section.get("Mode", "combined"))
+    raw_meter_type = normalize_backend_type(section.get("MeterType", DEFAULT_COMBINED_METER_TYPE), DEFAULT_COMBINED_METER_TYPE)
+    raw_switch_type = normalize_backend_type(section.get("SwitchType", DEFAULT_COMBINED_SWITCH_TYPE), DEFAULT_COMBINED_SWITCH_TYPE)
+    charger_type = normalize_optional_backend_type(section.get("ChargerType", ""))
+    _validate_legacy_backend_values(mode, raw_meter_type, raw_switch_type, charger_type)
+    return _build_runtime_summary(
+        backend_mode=mode,
+        meter_type=_runtime_role_from_legacy(mode, "meter", raw_meter_type),
+        meter_config_path=normalize_config_path(section.get("MeterConfigPath", "")),
+        switch_type=_runtime_role_from_legacy(mode, "switch", raw_switch_type),
+        switch_config_path=normalize_config_path(section.get("SwitchConfigPath", "")),
+        charger_type=charger_type,
+        charger_config_path=normalize_config_path(section.get("ChargerConfigPath", "")),
+        legacy_host=legacy_host,
+    )
+
+
+def _runtime_summary_from_legacy_service_attrs(service: Any) -> BackendRuntimeSummary:
+    """Return one normalized runtime summary from explicit legacy service attrs."""
+    mode = normalize_backend_mode(getattr(service, "backend_mode", "combined"))
+    raw_meter_type = normalize_backend_type(getattr(service, "meter_backend_type", DEFAULT_COMBINED_METER_TYPE), DEFAULT_COMBINED_METER_TYPE)
+    raw_switch_type = normalize_backend_type(getattr(service, "switch_backend_type", DEFAULT_COMBINED_SWITCH_TYPE), DEFAULT_COMBINED_SWITCH_TYPE)
+    charger_type = normalize_optional_backend_type(getattr(service, "charger_backend_type", None))
+    _validate_legacy_backend_values(mode, raw_meter_type, raw_switch_type, charger_type)
+    return _build_runtime_summary(
+        backend_mode=mode,
+        meter_type=_runtime_role_from_legacy(mode, "meter", raw_meter_type),
+        meter_config_path=normalize_config_path(getattr(service, "meter_backend_config_path", "")),
+        switch_type=_runtime_role_from_legacy(mode, "switch", raw_switch_type),
+        switch_config_path=normalize_config_path(getattr(service, "switch_backend_config_path", "")),
+        charger_type=charger_type,
+        charger_config_path=normalize_config_path(getattr(service, "charger_backend_config_path", "")),
+        legacy_host=getattr(service, "host", ""),
+    )
+
+
+def _service_has_legacy_backend_attrs(service: Any) -> bool:
+    """Return whether one service explicitly carries legacy backend attrs."""
+    return any(
+        hasattr(service, attribute_name)
+        for attribute_name in (
+            "backend_mode",
+            "meter_backend_type",
+            "switch_backend_type",
+            "charger_backend_type",
+            "meter_backend_config_path",
+            "switch_backend_config_path",
+            "charger_backend_config_path",
         )
     )
 
 
-def selection_from_service(service: Any) -> BackendSelection:
-    """Return normalized backend selection from service attributes."""
-    return validate_backend_selection(
-        BackendSelection(
-            mode=normalize_backend_mode(getattr(service, "backend_mode", "combined")),
-            meter_type=normalize_backend_type(getattr(service, "meter_backend_type", "shelly_combined"), "shelly_combined"),
-            switch_type=normalize_backend_type(getattr(service, "switch_backend_type", "shelly_combined"), "shelly_combined"),
-            charger_type=normalize_optional_backend_type(getattr(service, "charger_backend_type", None)),
-            meter_config_path=normalize_config_path(getattr(service, "meter_backend_config_path", "")),
-            switch_config_path=normalize_config_path(getattr(service, "switch_backend_config_path", "")),
-            charger_config_path=normalize_config_path(getattr(service, "charger_backend_config_path", "")),
+def _runtime_backend_summary_from_service(service: Any) -> BackendRuntimeSummary | None:
+    """Return one runtime-facing backend summary already attached to the service."""
+    bundle = getattr(service, "_backend_bundle", None)
+    runtime = getattr(bundle, "runtime", None)
+    return runtime if isinstance(runtime, BackendRuntimeSummary) else runtime if runtime is not None else None
+
+
+def _topology_from_service_runtime(service: Any) -> EvChargerTopologyConfig | None:
+    """Return one normalized topology config already attached to the service."""
+    topology = getattr(service, "_topology_config", None)
+    return topology if isinstance(topology, EvChargerTopologyConfig) else None
+
+
+def backend_mode_for_service(service: Any, default: str = "combined") -> str:
+    """Return one outward backend mode preferring resolved runtime state."""
+    runtime = _runtime_backend_summary_from_service(service)
+    if runtime is not None:
+        return _normalized_text_or_default(getattr(runtime, "backend_mode", default), default)
+    topology = _topology_from_service_runtime(service)
+    if topology is not None:
+        return _runtime_summary_from_topology(topology).backend_mode
+    service_config = getattr(service, "config", None)
+    if isinstance(service_config, configparser.ConfigParser):
+        return load_runtime_backend_summary(service_config).backend_mode
+    return _normalized_text_or_default(getattr(service, "backend_mode", default), default)
+
+
+def backend_type_for_service(service: Any, role: str, default: str = "") -> str:
+    """Return one outward backend type preferring resolved runtime state."""
+    normalized_role = role.strip().lower()
+    runtime = _runtime_backend_summary_from_service(service)
+    if runtime is not None:
+        return _summary_role_value(runtime, normalized_role, default)
+    topology = _topology_from_service_runtime(service)
+    if topology is not None:
+        return _label_or_default(_topology_backend_label(topology, normalized_role), default)
+    service_config = getattr(service, "config", None)
+    if isinstance(service_config, configparser.ConfigParser):
+        return _type_from_service_config(service_config, normalized_role, default)
+    return _legacy_service_role_value(service, normalized_role, default)
+
+
+def _summary_role_value(summary: BackendRuntimeSummary, role: str, default: str) -> str:
+    """Return one normalized backend role value from a runtime summary."""
+    return _label_or_default(getattr(summary, _role_field_name(role), default), default)
+
+
+def _label_or_default(label: object, default: str) -> str:
+    """Return trimmed label text or the provided default."""
+    if label is None:
+        return default
+    return _normalized_text_or_default(label, default)
+
+
+def _type_from_service_config(
+    service_config: configparser.ConfigParser,
+    role: str,
+    default: str,
+) -> str:
+    """Return one backend type value derived from service config state."""
+    if _topology_sections_present(service_config):
+        return _label_or_default(
+            _topology_backend_label(parse_topology_config(service_config), role),
+            default,
         )
+    return _summary_role_value(load_runtime_backend_summary(service_config), role, default)
+
+
+def _legacy_service_role_value(service: Any, role: str, default: str) -> str:
+    """Return one backend role value from explicit legacy service attrs."""
+    attribute_name = f"{role}_backend_type"
+    return _label_or_default(getattr(service, attribute_name, default), default)
+
+
+def runtime_summary_is_configured(summary: BackendRuntimeSummary, *, legacy_host: object = "") -> bool:
+    """Return whether one runtime summary represents a configured load topology."""
+    if summary.backend_mode != "split":
+        return bool(_configured_text(legacy_host)) or summary.topology_configured
+    return bool(summary.topology_configured)
+
+
+def runtime_summary_uses_legacy_primary_rpc(summary: BackendRuntimeSummary, *, legacy_host: object = "") -> bool:
+    """Return whether one runtime summary still uses the legacy direct Shelly RPC host."""
+    return bool(summary.primary_rpc_configured) or (summary.backend_mode != "split" and bool(_configured_text(legacy_host)))
+
+
+def load_runtime_backend_summary(config: configparser.ConfigParser) -> BackendRuntimeSummary:
+    """Return one normalized runtime backend summary from wallbox config."""
+    if _topology_sections_present(config):
+        return _runtime_summary_from_topology(parse_topology_config(config))
+    return _runtime_summary_from_legacy_config(config)
+
+
+def runtime_summary_from_service(service: Any) -> BackendRuntimeSummary:
+    """Return one normalized runtime summary from the service's current truth source."""
+    runtime = _runtime_backend_summary_from_service(service)
+    if runtime is not None:
+        return runtime
+    topology = _topology_from_service_runtime(service)
+    if topology is not None:
+        return _runtime_summary_from_topology(topology)
+    service_config = getattr(service, "config", None)
+    if isinstance(service_config, configparser.ConfigParser):
+        return load_runtime_backend_summary(service_config)
+    if _service_has_legacy_backend_attrs(service):
+        return _runtime_summary_from_legacy_service_attrs(service)
+    return _build_runtime_summary(
+        backend_mode="combined",
+        meter_type=DEFAULT_COMBINED_METER_TYPE,
+        meter_config_path=None,
+        switch_type=DEFAULT_COMBINED_SWITCH_TYPE,
+        switch_config_path=None,
+        charger_type=None,
+        charger_config_path=None,
+        legacy_host=getattr(service, "host", ""),
     )
+
+
+def compat_legacy_backend_view_from_runtime(runtime: BackendRuntimeSummary | Any) -> dict[str, object] | None:
+    """Return one legacy-shaped backend view reconstructed from runtime data."""
+    if runtime is None or not hasattr(runtime, "backend_mode"):
+        return None
+    mode = normalize_backend_mode(getattr(runtime, "backend_mode", "combined"))
+    return {
+        "mode": mode,
+        "meter_type": _legacy_view_role_from_runtime(mode, "meter", getattr(runtime, "meter_type", None)),
+        "switch_type": _legacy_view_role_from_runtime(mode, "switch", getattr(runtime, "switch_type", None)),
+        "charger_type": normalize_optional_backend_type(getattr(runtime, "charger_type", None)),
+        "meter_config_path": normalize_config_path(getattr(runtime, "meter_config_path", "")),
+        "switch_config_path": normalize_config_path(getattr(runtime, "switch_config_path", "")),
+        "charger_config_path": normalize_config_path(getattr(runtime, "charger_config_path", "")),
+    }
+
+
+def compat_legacy_backend_view_from_config(config: configparser.ConfigParser) -> dict[str, object]:
+    """Return one legacy-shaped backend view reconstructed from config."""
+    return compat_legacy_backend_view_from_runtime(load_runtime_backend_summary(config)) or {}

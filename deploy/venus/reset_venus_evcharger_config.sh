@@ -57,6 +57,7 @@ remove_generated_device_files() {
     rm -f "$CONFIG_PATH".wizard-result.json
     rm -f "$CONFIG_PATH".wizard-audit.jsonl
     rm -f "$CONFIG_PATH".wizard-topology.txt
+    rm -f "$CONFIG_PATH".wizard-inventory.ini
 }
 
 restart_service_if_registered() {

@@ -6,13 +6,13 @@ class _WizardBranchCoverageOutputCases:
     def test_result_text_covers_optional_sections_and_live_check_rendering(self) -> None:
         preview_text = wizard_cli_output.result_text(_result(dry_run=True))
         self.assertIn("Config preview for: /tmp/config.ini", preview_text)
-        self.assertIn("Role hosts:\n  - none", preview_text)
+        self.assertIn("Role endpoints:\n  - none", preview_text)
         self.assertIn("Live connectivity: not run", preview_text)
 
         persisted_text = wizard_cli_output.result_text(
             _result(
                 imported_from="/tmp/source.ini",
-                split_preset="goe-external-switch-group",
+                topology_preset="goe-external-switch-group",
                 charger_backend="goe_charger",
                 transport_kind="serial_rtu",
                 role_hosts={"switch": "switch.local"},

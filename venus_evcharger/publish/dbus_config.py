@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 from typing import Any, Mapping, cast
 
+from venus_evcharger.backend.config import backend_mode_for_service, backend_type_for_service
 from venus_evcharger.backend.models import effective_supported_phase_selections, switch_feedback_mismatch
 from venus_evcharger.core.common import (
     DEFAULT_SCHEDULED_ENABLED_DAYS,
@@ -113,16 +114,22 @@ class _DbusPublishConfigMixin:
     @staticmethod
     def _backend_mode_value(service: Any) -> str:
         """Return one stable backend-mode label for diagnostics."""
-        raw_value = getattr(service, "backend_mode", "combined")
-        normalized = str(raw_value).strip()
-        return normalized or "combined"
+        return backend_mode_for_service(service, "combined")
 
     @staticmethod
     def _backend_type_value(service: Any, attribute_name: str, default: str = "") -> str:
         """Return one stable backend-type label for diagnostics."""
-        raw_value = getattr(service, attribute_name, default)
-        normalized = str(raw_value).strip() if raw_value is not None else ""
-        return normalized or default
+        role_map = {
+            "meter_backend_type": "meter",
+            "switch_backend_type": "switch",
+            "charger_backend_type": "charger",
+        }
+        role = role_map.get(attribute_name)
+        if role is None:
+            raw_value = getattr(service, attribute_name, default)
+            normalized = str(raw_value).strip() if raw_value is not None else ""
+            return normalized or default
+        return backend_type_for_service(service, role, default)
 
     @staticmethod
     def _charger_current_target_value(service: Any) -> float:

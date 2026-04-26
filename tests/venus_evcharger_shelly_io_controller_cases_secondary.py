@@ -26,7 +26,7 @@ class TestShellyIoControllerSecondary(ShellyIoControllerTestBase):
             )
         )
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _meter_backend=None,
             _switch_backend=switch_backend,
             _charger_backend=charger_backend,
@@ -80,7 +80,7 @@ class TestShellyIoControllerSecondary(ShellyIoControllerTestBase):
             settings=SimpleNamespace(supported_phase_selections=("P1_P2_P3",)),
         )
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _meter_backend=None,
             _switch_backend=None,
             _charger_backend=charger_backend,
@@ -134,7 +134,7 @@ class TestShellyIoControllerSecondary(ShellyIoControllerTestBase):
             settings=SimpleNamespace(supported_phase_selections=("P1_P2_P3",)),
         )
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _meter_backend=None,
             _switch_backend=None,
             _charger_backend=charger_backend,
@@ -169,7 +169,7 @@ class TestShellyIoControllerSecondary(ShellyIoControllerTestBase):
         )
         charger_backend = SimpleNamespace(read_charger_state=MagicMock(side_effect=RuntimeError("charger down")))
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _meter_backend=None,
             _switch_backend=switch_backend,
             _charger_backend=charger_backend,
@@ -204,7 +204,7 @@ class TestShellyIoControllerSecondary(ShellyIoControllerTestBase):
     def test_set_relay_uses_split_switch_backend(self):
         switch_backend = SimpleNamespace(set_enabled=MagicMock())
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _switch_backend=switch_backend,
             rpc_call=MagicMock(),
         )
@@ -219,7 +219,7 @@ class TestShellyIoControllerSecondary(ShellyIoControllerTestBase):
     def test_set_relay_uses_split_charger_backend_when_no_switch_backend_exists(self):
         charger_backend = SimpleNamespace(set_enabled=MagicMock())
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _switch_backend=None,
             _charger_backend=charger_backend,
             rpc_call=MagicMock(),

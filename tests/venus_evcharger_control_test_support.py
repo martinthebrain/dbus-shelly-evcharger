@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import configparser
 from contextlib import contextmanager
 from tempfile import TemporaryDirectory
 from typing import Any, Iterator
 
+from venus_evcharger.backend.config import backend_mode_for_service, backend_type_for_service
 from venus_evcharger.control import (
     ControlApiAuditTrail,
     CONTROL_API_COMMAND_SCOPE_REQUIREMENTS,
@@ -44,10 +46,19 @@ class LiveControlApiTestService:
         self.product_name = "Venus EV Charger Service"
         self.service_name = "com.victronenergy.evcharger.http.test"
         self.connection_name = "test-connection"
-        self.backend_mode = "combined"
-        self.meter_backend_type = "na"
-        self.switch_backend_type = "na"
-        self.charger_backend_type = "na"
+        self.config = configparser.ConfigParser()
+        self.config.read_string(
+            """
+[DEFAULT]
+Host=
+
+[Backends]
+Mode=combined
+MeterType=na
+SwitchType=na
+ChargerType=na
+"""
+        )
         self.supported_phase_selections = ("P1", "P1_P2", "P1_P2_P3")
         self.control_api_enabled = True
         self.control_api_localhost_only = True
@@ -157,10 +168,10 @@ class LiveControlApiTestService:
             "api_version": "v1",
             "kind": "topology",
             "state": {
-                "backend_mode": self.backend_mode,
-                "meter_backend": self.meter_backend_type,
-                "switch_backend": self.switch_backend_type,
-                "charger_backend": self.charger_backend_type,
+                "backend_mode": backend_mode_for_service(self, "combined"),
+                "meter_backend": backend_type_for_service(self, "meter", "na"),
+                "switch_backend": backend_type_for_service(self, "switch", "na"),
+                "charger_backend": backend_type_for_service(self, "charger", "na"),
                 "supported_phase_selections": list(self.supported_phase_selections),
             },
         }
@@ -253,7 +264,7 @@ class LiveControlApiTestService:
             "available_modes": [0, 1, 2],
             "supported_phase_selections": list(self.supported_phase_selections),
             "features": {"event_stream": True, "optimistic_concurrency": True},
-            "topology": {"backend_mode": self.backend_mode},
+            "topology": {"backend_mode": backend_mode_for_service(self, "combined")},
             "versioning": {"stable_endpoints": ["/v1/control/command"], "experimental_endpoints": ["/v1/events"]},
         }
 

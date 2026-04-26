@@ -3,10 +3,13 @@ source = .
 omit =
     tests/*
     .github/*
+    examples/*
+    scripts/*
 
 [report]
 omit =
     tests/*
     .github/*
     */__pycache__/*
-
+    examples/*
+    scripts/*

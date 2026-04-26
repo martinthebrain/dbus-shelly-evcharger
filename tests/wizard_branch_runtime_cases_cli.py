@@ -69,13 +69,13 @@ class _WizardBranchRuntimeCliCases:
         with patch("venus_evcharger.bootstrap.wizard_cli.prompt_yes_no", return_value=True):
             self.assertTrue(wizard_cli._interactive_digest_auth(_namespace(), imported))
         self.assertTrue(wizard_cli._interactive_digest_auth(_namespace(digest_auth=True), imported))
-        self.assertEqual(wizard_cli._interactive_backend_choice("advanced-manual", "template_charger"), "template_charger")
+        self.assertEqual(wizard_cli._interactive_backend_choice("advanced_manual", "template_charger"), "template_charger")
         with patch("venus_evcharger.bootstrap.wizard_cli._prompt_choice", return_value="goe_charger"):
-            self.assertEqual(wizard_cli._interactive_backend_choice("native-charger", None), "goe_charger")
+            self.assertEqual(wizard_cli._interactive_backend_choice("native_device", None), "goe_charger")
         with patch("venus_evcharger.bootstrap.wizard_cli._prompt_choice", return_value="simpleevse_charger"):
-            self.assertEqual(wizard_cli._interactive_backend_choice("native-charger-phase-switch", None), "simpleevse_charger")
+            self.assertEqual(wizard_cli._interactive_backend_choice("hybrid_topology", None), "simpleevse_charger")
         self.assertEqual(
-            wizard_cli._interactive_backend(_namespace(charger_backend="modbus_charger"), "native-charger", imported, None),
+            wizard_cli._interactive_backend(_namespace(charger_backend="modbus_charger"), "native_device", imported, None),
             "modbus_charger",
         )
         self.assertEqual(
@@ -124,10 +124,10 @@ class _WizardBranchRuntimeCliCases:
                 wizard_cli._interactive_transport_inputs("modbus_charger", "abb-terra-ac-modbus", "modbus.local", imported),
                 ("tcp", "modbus.local", 1502, "/dev/ttyUSB0", 3),
             )
-        self.assertEqual(wizard_cli._interactive_split_preset(_namespace(), _imported_defaults(), "native-charger"), None)
-        with patch("venus_evcharger.bootstrap.wizard_cli.prompt_split_preset", return_value="template-stack"):
+        self.assertEqual(wizard_cli._interactive_topology_preset(_namespace(), _imported_defaults(), "native_device"), None)
+        with patch("venus_evcharger.bootstrap.wizard_cli.prompt_topology_preset", return_value="template-stack"):
             self.assertEqual(
-                wizard_cli._interactive_split_preset(_namespace(), _imported_defaults(), "split-topology"),
+                wizard_cli._interactive_topology_preset(_namespace(), _imported_defaults(), "multi_adapter_topology"),
                 "template-stack",
             )
         self.assertEqual(wizard_cli._interactive_username(_namespace(username="user"), imported, True), "user")
@@ -137,9 +137,9 @@ class _WizardBranchRuntimeCliCases:
 
         stdout = io.StringIO()
         with (
-            patch("venus_evcharger.bootstrap.wizard_cli._interactive_profile", return_value="split-topology"),
+            patch("venus_evcharger.bootstrap.wizard_cli._interactive_profile", return_value="multi_adapter_topology"),
             patch("venus_evcharger.bootstrap.wizard_cli._prompt_text", side_effect=["shared.local", "81"]),
-            patch("venus_evcharger.bootstrap.wizard_cli._interactive_split_preset", return_value="template-stack"),
+            patch("venus_evcharger.bootstrap.wizard_cli._interactive_topology_preset", return_value="template-stack"),
             patch("venus_evcharger.bootstrap.wizard_cli._interactive_backend", return_value="template_charger"),
             patch("venus_evcharger.bootstrap.wizard_cli.prompt_role_hosts", return_value=("meter.local", "switch.local", "charger.local")),
             patch("venus_evcharger.bootstrap.wizard_cli._interactive_transport_inputs", return_value=("serial_rtu", "shared.local", 502, "/dev/ttyUSB0", 1)),

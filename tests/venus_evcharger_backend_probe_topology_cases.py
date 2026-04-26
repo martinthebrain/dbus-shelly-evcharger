@@ -21,8 +21,14 @@ class TestShellyWallboxBackendProbeTopology(BackendProbeTestCase):
             )
 
             payload = validate_wallbox_config(wallbox_path)
+            runtime = cast(dict[str, object], payload["runtime"])
             selection = cast(dict[str, object], payload["selection"])
 
+            self.assertEqual(runtime["backend_mode"], "split")
+            self.assertIsNone(runtime["meter_type"])
+            self.assertEqual(runtime["charger_type"], "template_charger")
+            self.assertTrue(cast(bool, runtime["topology_configured"]))
+            self.assertFalse(cast(bool, runtime["primary_rpc_configured"]))
             self.assertEqual(selection["mode"], "split")
             self.assertEqual(selection["meter_type"], "none")
             self.assertEqual(selection["charger_type"], "template_charger")
@@ -195,7 +201,7 @@ class TestShellyWallboxBackendProbeTopology(BackendProbeTestCase):
                 (
                     "combined-default",
                     "[DEFAULT]\nHost=192.168.1.20\n",
-                    {"mode": "combined", "meter_type": "shelly_combined", "switch_type": "shelly_combined"},
+                    {"mode": "combined", "meter_type": "shelly_meter", "switch_type": "shelly_contactor_switch"},
                     {"meter": True, "switch": True, "charger": False},
                 ),
                 (

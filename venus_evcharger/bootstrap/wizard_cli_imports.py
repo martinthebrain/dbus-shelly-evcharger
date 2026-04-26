@@ -23,7 +23,7 @@ def empty_imported_defaults() -> ImportedWizardDefaults:
         digest_auth=None,
         username=None,
         password=None,
-        split_preset=None,
+        topology_preset=None,
         charger_backend=None,
         charger_preset=None,
         request_timeout_seconds=None,
@@ -40,6 +40,7 @@ def empty_imported_defaults() -> ImportedWizardDefaults:
         transport_port=None,
         transport_device=None,
         transport_unit_id=None,
+        inventory_path=None,
     )
 
 

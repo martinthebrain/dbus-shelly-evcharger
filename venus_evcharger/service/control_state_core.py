@@ -8,6 +8,7 @@ from __future__ import annotations
 import time
 from typing import Any, cast
 
+from venus_evcharger.backend.config import backend_mode_for_service, backend_type_for_service
 from venus_evcharger.control import ControlCommand
 from venus_evcharger.core.contracts import (
     normalized_state_api_dbus_diagnostics_fields,
@@ -75,10 +76,10 @@ class _ControlApiStateCoreMixin:
                 "api_version": "v1",
                 "kind": "topology",
                 "state": {
-                    "backend_mode": getattr(self, "backend_mode", "combined"),
-                    "meter_backend": getattr(self, "meter_backend_type", "na"),
-                    "switch_backend": getattr(self, "switch_backend_type", "na"),
-                    "charger_backend": getattr(self, "charger_backend_type", "na"),
+                    "backend_mode": backend_mode_for_service(self, "combined"),
+                    "meter_backend": backend_type_for_service(self, "meter", "na"),
+                    "switch_backend": backend_type_for_service(self, "switch", "na"),
+                    "charger_backend": backend_type_for_service(self, "charger", "na"),
                     "active_phase_selection": getattr(self, "active_phase_selection", "P1"),
                     "requested_phase_selection": getattr(self, "requested_phase_selection", "P1"),
                     "supported_phase_selections": list(supported),

@@ -104,7 +104,7 @@ class TestShellyIoControllerPrimary(ShellyIoControllerTestBase):
             set_enabled=MagicMock(),
         )
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _meter_backend=meter_backend,
             _switch_backend=switch_backend,
             rpc_call=MagicMock(),
@@ -164,7 +164,7 @@ class TestShellyIoControllerPrimary(ShellyIoControllerTestBase):
             set_enabled=MagicMock(),
         )
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _meter_backend=meter_backend,
             _switch_backend=switch_backend,
             rpc_call=MagicMock(),
@@ -191,7 +191,7 @@ class TestShellyIoControllerPrimary(ShellyIoControllerTestBase):
             )
         )
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _switch_backend=switch_backend,
             _ensure_worker_state=MagicMock(),
             _time_now=MagicMock(return_value=100.0),
@@ -226,7 +226,7 @@ class TestShellyIoControllerPrimary(ShellyIoControllerTestBase):
             )
         )
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _switch_backend=switch_backend,
             _ensure_worker_state=MagicMock(),
             _time_now=MagicMock(return_value=100.0),
@@ -271,7 +271,7 @@ class TestShellyIoControllerPrimary(ShellyIoControllerTestBase):
             set_enabled=MagicMock(),
         )
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _meter_backend=meter_backend,
             _switch_backend=switch_backend,
             supported_phase_selections=("P1",),
@@ -305,7 +305,7 @@ class TestShellyIoControllerPrimary(ShellyIoControllerTestBase):
             set_enabled=MagicMock(),
         )
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _meter_backend=meter_backend,
             _switch_backend=switch_backend,
             supported_phase_selections=("P1",),

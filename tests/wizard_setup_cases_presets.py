@@ -11,7 +11,7 @@ class _WizardSetupPresetCases:
             config_path = Path(temp_dir) / "config.ini"
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="native-charger-phase-switch",
+                    profile="hybrid_topology",
                     host_input="192.168.1.80",
                     meter_host_input=None,
                     switch_host_input="switch.local",
@@ -22,7 +22,7 @@ class _WizardSetupPresetCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset=None,
+                    topology_preset=None,
                     charger_backend="simpleevse_charger",
                     transport_kind="serial_rtu",
                     transport_host="192.168.1.80",
@@ -42,13 +42,17 @@ class _WizardSetupPresetCases:
             self.assertIn("BaseUrl=http://switch.local\n", phase1_text)
             self.assertEqual(result.role_hosts, {"charger": "charger.local", "switch": "switch.local"})
             self.assertEqual(result.validation["resolved_roles"], {"meter": False, "switch": True, "charger": True})
+            self.assertEqual(result.topology_config["topology"]["type"], "hybrid_topology")
+            self.assertEqual(result.topology_config["actuator"]["type"], "switch_group")
+            self.assertEqual(result.topology_config["measurement"]["type"], "charger_native")
+            self.assertEqual(result.topology_config["charger"]["type"], "simpleevse_charger")
 
     def test_configure_wallbox_generates_native_modbus_tcp_profile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.ini"
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="native-charger",
+                    profile="native_device",
                     host_input="192.168.1.90",
                     meter_host_input=None,
                     switch_host_input=None,
@@ -59,7 +63,7 @@ class _WizardSetupPresetCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset=None,
+                    topology_preset=None,
                     charger_backend="modbus_charger",
                     transport_kind="tcp",
                     transport_host="192.168.1.91",
@@ -85,7 +89,7 @@ class _WizardSetupPresetCases:
             config_path = Path(temp_dir) / "config.ini"
             configure_wallbox(
                 WizardAnswers(
-                    profile="native-charger",
+                    profile="native_device",
                     host_input="terra.local",
                     meter_host_input=None,
                     switch_host_input=None,
@@ -96,7 +100,7 @@ class _WizardSetupPresetCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset=None,
+                    topology_preset=None,
                     charger_backend="modbus_charger",
                     charger_preset="abb-terra-ac-modbus",
                     transport_kind="tcp",
@@ -122,7 +126,7 @@ class _WizardSetupPresetCases:
             config_path = Path(temp_dir) / "config.ini"
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="native-charger",
+                    profile="native_device",
                     host_input="cfos.local",
                     meter_host_input=None,
                     switch_host_input=None,
@@ -133,7 +137,7 @@ class _WizardSetupPresetCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset=None,
+                    topology_preset=None,
                     charger_backend="modbus_charger",
                     charger_preset="cfos-power-brain-modbus",
                     transport_kind="tcp",
@@ -160,7 +164,7 @@ class _WizardSetupPresetCases:
             config_path = Path(temp_dir) / "config.ini"
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="native-charger",
+                    profile="native_device",
                     host_input="openwb.local",
                     meter_host_input=None,
                     switch_host_input=None,
@@ -171,7 +175,7 @@ class _WizardSetupPresetCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset=None,
+                    topology_preset=None,
                     charger_backend="modbus_charger",
                     charger_preset="openwb-modbus-secondary",
                     transport_kind="tcp",
@@ -196,12 +200,12 @@ class _WizardSetupPresetCases:
                 "The openWB Modbus preset expects the charger in secondary Modbus mode. If you enable the openWB heartbeat, keep this service polling continuously so the heartbeat does not expire.",
             )
 
-    def test_configure_wallbox_generates_split_preset_with_shelly_io_and_modbus(self) -> None:
+    def test_configure_wallbox_generates_topology_preset_with_shelly_io_and_modbus(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.ini"
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="split-topology",
+                    profile="multi_adapter_topology",
                     host_input="192.168.1.92",
                     meter_host_input="192.168.1.20",
                     switch_host_input="192.168.1.21",
@@ -212,7 +216,7 @@ class _WizardSetupPresetCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset="shelly-io-modbus-charger",
+                    topology_preset="shelly-io-modbus-charger",
                     charger_backend="modbus_charger",
                     transport_kind="tcp",
                     transport_host="192.168.1.93",
@@ -234,15 +238,19 @@ class _WizardSetupPresetCases:
             self.assertIn("Host=192.168.1.20\n", meter_text)
             self.assertIn("Host=192.168.1.21\n", switch_text)
             self.assertEqual(result.role_hosts, {"meter": "192.168.1.20", "switch": "192.168.1.21"})
-            self.assertEqual(result.split_preset, "shelly-io-modbus-charger")
+            self.assertEqual(result.topology_preset, "shelly-io-modbus-charger")
             self.assertEqual(result.validation["resolved_roles"], {"meter": True, "switch": True, "charger": True})
+            self.assertEqual(result.topology_config["topology"]["type"], "hybrid_topology")
+            self.assertEqual(result.topology_config["actuator"]["type"], "shelly_switch")
+            self.assertEqual(result.topology_config["measurement"]["type"], "external_meter")
+            self.assertEqual(result.topology_config["charger"]["type"], "modbus_charger")
 
-    def test_configure_wallbox_generates_split_preset_with_shelly_meter_and_goe(self) -> None:
+    def test_configure_wallbox_generates_topology_preset_with_shelly_meter_and_goe(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.ini"
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="split-topology",
+                    profile="multi_adapter_topology",
                     host_input="goe.local",
                     meter_host_input="meter.local",
                     switch_host_input=None,
@@ -253,7 +261,7 @@ class _WizardSetupPresetCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset="shelly-meter-goe",
+                    topology_preset="shelly-meter-goe",
                     charger_backend="goe_charger",
                     transport_kind="serial_rtu",
                     transport_host="goe.local",
@@ -276,15 +284,18 @@ class _WizardSetupPresetCases:
             self.assertIn("Host=meter.local\n", meter_text)
             self.assertIn("Type=goe_charger\nBaseUrl=http://charger.local\n", charger_text)
             self.assertEqual(result.role_hosts, {"charger": "charger.local", "meter": "meter.local"})
-            self.assertEqual(result.split_preset, "shelly-meter-goe")
+            self.assertEqual(result.topology_preset, "shelly-meter-goe")
             self.assertEqual(result.validation["resolved_roles"], {"meter": True, "switch": False, "charger": True})
+            self.assertEqual(result.topology_config["topology"]["type"], "native_device")
+            self.assertEqual(result.topology_config["measurement"]["type"], "external_meter")
+            self.assertEqual(result.topology_config["charger"]["type"], "goe_charger")
 
-    def test_configure_wallbox_generates_split_preset_with_shelly_meter_and_modbus_preset(self) -> None:
+    def test_configure_wallbox_generates_topology_preset_with_shelly_meter_and_modbus_preset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.ini"
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="split-topology",
+                    profile="multi_adapter_topology",
                     host_input="shared.local",
                     meter_host_input="meter.local",
                     switch_host_input=None,
@@ -295,7 +306,7 @@ class _WizardSetupPresetCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset="shelly-meter-modbus-charger",
+                    topology_preset="shelly-meter-modbus-charger",
                     charger_backend="modbus_charger",
                     charger_preset="cfos-power-brain-modbus",
                     transport_kind="tcp",
@@ -318,14 +329,14 @@ class _WizardSetupPresetCases:
             self.assertIn("Type=shelly_meter\n", meter_text)
             self.assertIn("Preset=cfos-power-brain-modbus\n", charger_text)
             self.assertEqual(result.role_hosts, {"charger": "cfos.local", "meter": "meter.local"})
-            self.assertEqual(result.split_preset, "shelly-meter-modbus-charger")
+            self.assertEqual(result.topology_preset, "shelly-meter-modbus-charger")
 
-    def test_configure_wallbox_generates_split_preset_with_goe_and_switch_group(self) -> None:
+    def test_configure_wallbox_generates_topology_preset_with_goe_and_switch_group(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.ini"
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="split-topology",
+                    profile="multi_adapter_topology",
                     host_input="goe.local",
                     meter_host_input=None,
                     switch_host_input="switch.local",
@@ -336,7 +347,7 @@ class _WizardSetupPresetCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset="goe-external-switch-group",
+                    topology_preset="goe-external-switch-group",
                     charger_backend="goe_charger",
                     transport_kind="serial_rtu",
                     transport_host="goe.local",
@@ -361,15 +372,19 @@ class _WizardSetupPresetCases:
             self.assertIn("BaseUrl=http://switch.local\n", phase1_text)
             self.assertIn("BaseUrl=http://charger.local\n", charger_text)
             self.assertEqual(result.role_hosts, {"charger": "charger.local", "switch": "switch.local"})
-            self.assertEqual(result.split_preset, "goe-external-switch-group")
+            self.assertEqual(result.topology_preset, "goe-external-switch-group")
             self.assertEqual(result.validation["resolved_roles"], {"meter": False, "switch": True, "charger": True})
+            self.assertEqual(result.topology_config["topology"]["type"], "hybrid_topology")
+            self.assertEqual(result.topology_config["actuator"]["type"], "switch_group")
+            self.assertEqual(result.topology_config["measurement"]["type"], "charger_native")
+            self.assertEqual(result.topology_config["charger"]["type"], "goe_charger")
 
-    def test_configure_wallbox_generates_split_preset_with_template_meter_goe_and_switch_group(self) -> None:
+    def test_configure_wallbox_generates_topology_preset_with_template_meter_goe_and_switch_group(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.ini"
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="split-topology",
+                    profile="multi_adapter_topology",
                     host_input="adapter.local",
                     meter_host_input="meter.local",
                     switch_host_input="switch.local",
@@ -380,7 +395,7 @@ class _WizardSetupPresetCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset="template-meter-goe-switch-group",
+                    topology_preset="template-meter-goe-switch-group",
                     charger_backend="goe_charger",
                     transport_kind="serial_rtu",
                     transport_host="adapter.local",
@@ -401,15 +416,15 @@ class _WizardSetupPresetCases:
             self.assertIn("Type=goe_charger\nBaseUrl=http://charger.local\n", charger_text)
             self.assertIn("BaseUrl=http://switch.local\n", phase1_text)
             self.assertEqual(result.role_hosts, {"charger": "charger.local", "meter": "meter.local", "switch": "switch.local"})
-            self.assertEqual(result.split_preset, "template-meter-goe-switch-group")
+            self.assertEqual(result.topology_preset, "template-meter-goe-switch-group")
             self.assertEqual(result.validation["resolved_roles"], {"meter": True, "switch": True, "charger": True})
 
-    def test_configure_wallbox_generates_split_preset_with_shelly_meter_modbus_and_switch_group(self) -> None:
+    def test_configure_wallbox_generates_topology_preset_with_shelly_meter_modbus_and_switch_group(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.ini"
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="split-topology",
+                    profile="multi_adapter_topology",
                     host_input="192.168.1.94",
                     meter_host_input="192.168.1.24",
                     switch_host_input="switch.local",
@@ -420,7 +435,7 @@ class _WizardSetupPresetCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset="shelly-meter-modbus-switch-group",
+                    topology_preset="shelly-meter-modbus-switch-group",
                     charger_backend="modbus_charger",
                     transport_kind="tcp",
                     transport_host="192.168.1.95",
@@ -444,6 +459,6 @@ class _WizardSetupPresetCases:
             self.assertIn("Host=192.168.1.24\n", meter_text)
             self.assertIn("BaseUrl=http://switch.local\n", phase1_text)
             self.assertEqual(result.role_hosts, {"meter": "192.168.1.24", "switch": "switch.local"})
-            self.assertEqual(result.split_preset, "shelly-meter-modbus-switch-group")
+            self.assertEqual(result.topology_preset, "shelly-meter-modbus-switch-group")
             self.assertEqual(result.transport_kind, "tcp")
             self.assertEqual(result.validation["resolved_roles"], {"meter": True, "switch": True, "charger": True})

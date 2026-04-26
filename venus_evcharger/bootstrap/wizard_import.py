@@ -22,15 +22,15 @@ from venus_evcharger.bootstrap.wizard_support import (
 )
 
 _PROFILE_DEFAULTS_BY_BACKENDS: dict[tuple[str, str, str], tuple[WizardProfile, str | None, WizardChargerBackend | None]] = {
-    ("template_meter", "template_switch", "template_charger"): ("split-topology", "template-stack", "template_charger"),
-    ("shelly_meter", "shelly_switch", "template_charger"): ("split-topology", "shelly-io-template-charger", "template_charger"),
-    ("shelly_meter", "shelly_switch", "modbus_charger"): ("split-topology", "shelly-io-modbus-charger", "modbus_charger"),
-    ("shelly_meter", "none", "goe_charger"): ("split-topology", "shelly-meter-goe", "goe_charger"),
-    ("shelly_meter", "none", "modbus_charger"): ("split-topology", "shelly-meter-modbus-charger", "modbus_charger"),
-    ("none", "switch_group", "goe_charger"): ("split-topology", "goe-external-switch-group", "goe_charger"),
-    ("template_meter", "switch_group", "goe_charger"): ("split-topology", "template-meter-goe-switch-group", "goe_charger"),
-    ("shelly_meter", "switch_group", "goe_charger"): ("split-topology", "shelly-meter-goe-switch-group", "goe_charger"),
-    ("shelly_meter", "switch_group", "modbus_charger"): ("split-topology", "shelly-meter-modbus-switch-group", "modbus_charger"),
+    ("template_meter", "template_switch", "template_charger"): ("multi_adapter_topology", "template-stack", "template_charger"),
+    ("shelly_meter", "shelly_switch", "template_charger"): ("multi_adapter_topology", "shelly-io-template-charger", "template_charger"),
+    ("shelly_meter", "shelly_switch", "modbus_charger"): ("multi_adapter_topology", "shelly-io-modbus-charger", "modbus_charger"),
+    ("shelly_meter", "none", "goe_charger"): ("multi_adapter_topology", "shelly-meter-goe", "goe_charger"),
+    ("shelly_meter", "none", "modbus_charger"): ("multi_adapter_topology", "shelly-meter-modbus-charger", "modbus_charger"),
+    ("none", "switch_group", "goe_charger"): ("multi_adapter_topology", "goe-external-switch-group", "goe_charger"),
+    ("template_meter", "switch_group", "goe_charger"): ("multi_adapter_topology", "template-meter-goe-switch-group", "goe_charger"),
+    ("shelly_meter", "switch_group", "goe_charger"): ("multi_adapter_topology", "shelly-meter-goe-switch-group", "goe_charger"),
+    ("shelly_meter", "switch_group", "modbus_charger"): ("multi_adapter_topology", "shelly-meter-modbus-switch-group", "modbus_charger"),
 }
 
 
@@ -48,7 +48,7 @@ class ImportedWizardDefaults:
     digest_auth: bool | None
     username: str | None
     password: str | None
-    split_preset: str | None
+    topology_preset: str | None
     charger_backend: WizardChargerBackend | None
     charger_preset: str | None
     request_timeout_seconds: float | None
@@ -65,6 +65,12 @@ class ImportedWizardDefaults:
     transport_port: int | None
     transport_device: str | None
     transport_unit_id: int | None
+    inventory_path: str | None = None
+
+
+def _sibling_inventory_path(config_path: Path) -> str | None:
+    candidate = config_path.with_name(f"{config_path.name}.wizard-inventory.ini")
+    return str(candidate) if candidate.exists() else None
 
 
 def _config_parser(path: Path) -> configparser.ConfigParser:
@@ -145,7 +151,7 @@ def _policy_mode(value: str | None) -> WizardPolicyMode | None:
 
 def _profile_defaults(backends: configparser.SectionProxy | None) -> tuple[WizardProfile | None, str | None, WizardChargerBackend | None]:
     if backends is None:
-        return "simple-relay", None, None
+        return "simple_relay", None, None
     return _profile_defaults_from_types(*_backend_types(backends))
 
 
@@ -161,7 +167,7 @@ def _profile_defaults_from_types(
     preset_match = _PROFILE_DEFAULTS_BY_BACKENDS.get((meter_type, switch_type, charger_type))
     if preset_match is not None:
         return preset_match
-    return ("advanced-manual", None, backend) if any((meter_type, switch_type, charger_type)) else (None, None, None)
+    return ("advanced_manual", None, backend) if any((meter_type, switch_type, charger_type)) else (None, None, None)
 
 
 def _backend_types(backends: configparser.SectionProxy) -> tuple[str, str, str]:
@@ -179,9 +185,9 @@ def _native_profile_defaults(
     backend: WizardChargerBackend | None,
 ) -> tuple[WizardProfile, str | None, WizardChargerBackend | None] | None:
     if (meter_type, switch_type) == ("none", "none") and charger_type in NATIVE_CHARGER_VALUES:
-        return "native-charger", None, backend
+        return "native_device", None, backend
     if switch_type == "switch_group" and charger_type in PHASE_SWITCH_CHARGER_VALUES:
-        return "native-charger-phase-switch", None, backend
+        return "hybrid_topology", None, backend
     return None
 
 
@@ -272,7 +278,7 @@ def _load_from_result_json(config_path: Path) -> ImportedWizardDefaults:
         digest_auth=cast(bool | None, defaults.get("digest_auth")),
         username=cast(str | None, defaults.get("username")),
         password=None,
-        split_preset=cast(str | None, defaults.get("split_preset")),
+        topology_preset=cast(str | None, defaults.get("topology_preset")),
         charger_backend=cast(WizardChargerBackend | None, defaults.get("charger_backend")),
         charger_preset=cast(str | None, defaults.get("charger_preset")),
         request_timeout_seconds=cast(float | None, defaults.get("request_timeout_seconds")),
@@ -289,6 +295,7 @@ def _load_from_result_json(config_path: Path) -> ImportedWizardDefaults:
         transport_port=cast(int | None, defaults.get("transport_port")),
         transport_device=cast(str | None, defaults.get("transport_device")),
         transport_unit_id=cast(int | None, defaults.get("transport_unit_id")),
+        inventory_path=cast(str | None, payload.get("inventory_path")) or _sibling_inventory_path(config_path),
     )
 
 
@@ -300,7 +307,7 @@ def load_imported_defaults(config_path: Path) -> ImportedWizardDefaults:
     parser = _config_parser(config_path)
     defaults = parser["DEFAULT"] if "DEFAULT" in parser else parser.defaults()
     backends = parser["Backends"] if parser.has_section("Backends") else None
-    profile, split_preset, charger_backend = _profile_defaults(backends)
+    profile, topology_preset, charger_backend = _profile_defaults(backends)
     meter_host_input = _adapter_host_value(_adapter_path(config_path, backends, "MeterConfigPath"))
     switch_host_input = _switch_group_host_value(_adapter_path(config_path, backends, "SwitchConfigPath"))
     charger_host_input = _adapter_host_value(_adapter_path(config_path, backends, "ChargerConfigPath"))
@@ -322,7 +329,7 @@ def load_imported_defaults(config_path: Path) -> ImportedWizardDefaults:
         digest_auth=_as_bool(defaults.get("DigestAuth")),
         username=defaults.get("Username"),
         password=defaults.get("Password"),
-        split_preset=split_preset,
+        topology_preset=topology_preset,
         charger_backend=charger_backend,
         charger_preset=_charger_preset(config_path, backends),
         request_timeout_seconds=_request_timeout_seconds(config_path, backends, charger_backend),
@@ -339,4 +346,5 @@ def load_imported_defaults(config_path: Path) -> ImportedWizardDefaults:
         transport_port=transport_port,
         transport_device=transport_device,
         transport_unit_id=transport_unit_id,
+        inventory_path=_sibling_inventory_path(config_path),
     )

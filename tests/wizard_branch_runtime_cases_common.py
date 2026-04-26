@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from venus_evcharger.bootstrap import wizard, wizard_cli
-from venus_evcharger.bootstrap.wizard_guidance import prompt_split_preset, resolved_primary_host
+from venus_evcharger.bootstrap.wizard_guidance import prompt_topology_preset, resolved_primary_host
 from venus_evcharger.bootstrap.wizard_import import (
     ImportedWizardDefaults,
     _adapter_path,
@@ -46,7 +46,7 @@ def _imported_defaults(**overrides: object) -> ImportedWizardDefaults:
         "digest_auth": None,
         "username": None,
         "password": None,
-        "split_preset": None,
+        "topology_preset": None,
         "charger_backend": None,
         "charger_preset": None,
         "request_timeout_seconds": None,
@@ -63,6 +63,7 @@ def _imported_defaults(**overrides: object) -> ImportedWizardDefaults:
         "transport_port": None,
         "transport_device": None,
         "transport_unit_id": None,
+        "inventory_path": None,
     }
     values.update(overrides)
     return ImportedWizardDefaults(**values)
@@ -71,7 +72,7 @@ def _imported_defaults(**overrides: object) -> ImportedWizardDefaults:
 def _namespace(**overrides: object) -> argparse.Namespace:
     values = {
         "profile": None,
-        "split_preset": None,
+        "topology_preset": None,
         "charger_backend": None,
         "charger_preset": None,
         "host": None,
@@ -119,9 +120,9 @@ def _result() -> WizardResult:
         created_at="2026-04-20T02:53:57",
         config_path="/tmp/config.ini",
         imported_from=None,
-        profile="simple-relay",
+        profile="simple_relay",
         policy_mode="manual",
-        split_preset=None,
+        topology_preset=None,
         charger_backend=None,
         charger_preset=None,
         transport_kind=None,

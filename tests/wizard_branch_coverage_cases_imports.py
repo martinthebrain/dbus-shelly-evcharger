@@ -58,13 +58,13 @@ class _WizardBranchCoverageImportCases:
         self.assertEqual(prompted_defaults, (2100.0, 1500.0, 35.0, 39.0, "Mon,Wed", "07:45", 8.0))
 
     def test_import_helpers_cover_adapter_paths_profiles_and_timeouts(self) -> None:
-        self.assertEqual(_profile_defaults(None), ("simple-relay", None, None))
+        self.assertEqual(_profile_defaults(None), ("simple_relay", None, None))
         self.assertEqual(_profile_defaults_from_types("", "", ""), (None, None, None))
-        self.assertEqual(_profile_defaults_from_types("template_meter", "custom_switch", ""), ("advanced-manual", None, None))
-        self.assertEqual(_native_profile_defaults("none", "none", "goe_charger", "goe_charger"), ("native-charger", None, "goe_charger"))
+        self.assertEqual(_profile_defaults_from_types("template_meter", "custom_switch", ""), ("advanced_manual", None, None))
+        self.assertEqual(_native_profile_defaults("none", "none", "goe_charger", "goe_charger"), ("native_device", None, "goe_charger"))
         self.assertEqual(
             _native_profile_defaults("none", "switch_group", "simpleevse_charger", "simpleevse_charger"),
-            ("native-charger-phase-switch", None, "simpleevse_charger"),
+            ("hybrid_topology", None, "simpleevse_charger"),
         )
         self.assertIsNone(_native_profile_defaults("shelly_meter", "none", "goe_charger", "goe_charger"))
 
@@ -88,8 +88,8 @@ class _WizardBranchCoverageImportCases:
         summary = _topology_summary_text(
             {
                 "config_path": "/tmp/config.ini",
-                "profile": "simple-relay",
-                "split_preset": None,
+                "profile": "simple_relay",
+                "topology_preset": None,
                 "charger_backend": None,
                 "charger_preset": None,
                 "policy_mode": "manual",
@@ -105,7 +105,7 @@ class _WizardBranchCoverageImportCases:
         self.assertIn("warnings:\n  - careful", summary)
 
         backend_lines, files, role_hosts = split_topology_files(
-            split_preset="shelly-io-template-charger",
+            topology_preset="shelly-io-template-charger",
             role_hosts={"meter": "meter.local", "switch": "switch.local", "charger": "charger.local"},
             meter_base_url="http://meter.local",
             switch_base_url="http://switch.local",
@@ -219,7 +219,7 @@ class _WizardBranchCoverageImportCases:
         ))
 
         modbus_backend_lines, modbus_files, _ = split_topology_files(
-            split_preset="shelly-meter-modbus-charger",
+            topology_preset="shelly-meter-modbus-charger",
             role_hosts={"meter": "meter.local"},
             meter_base_url="http://meter.local",
             switch_base_url="http://switch.local",

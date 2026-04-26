@@ -57,6 +57,20 @@ class _BootstrapInstallScriptsSyncCases(_BootstrapInstallScriptsBase):
                 "Type=custom\n"
             )
             (target_dir / "deploy/venus/config.venus_evcharger.ini").write_text(original_config, encoding="utf-8")
+            (target_dir / "deploy/venus/config.venus_evcharger.ini.wizard-inventory.ini").write_text(
+                "[Profile:custom-device]\n"
+                "Label=Custom Device\n",
+                encoding="utf-8",
+            )
+            (target_dir / "deploy/venus/config.venus_evcharger.ini.wizard-topology.txt").write_text(
+                "Measurement -> device-a\n",
+                encoding="utf-8",
+            )
+            (target_dir / "deploy/venus/wizard-meter.ini").write_text(
+                "[Adapter]\n"
+                "Type=template_meter\n",
+                encoding="utf-8",
+            )
             (target_dir / "tests").mkdir(parents=True, exist_ok=True)
             (target_dir / "tests/stale.txt").write_text("stale\n", encoding="utf-8")
 
@@ -79,6 +93,18 @@ class _BootstrapInstallScriptsSyncCases(_BootstrapInstallScriptsBase):
             self.assertIn("# keep this local backend comment\n", merged_config)
             self.assertIn("Type=custom\n", merged_config)
             self.assertIn("ExtraSetting=42\n", merged_config)
+            self.assertEqual(
+                (target_dir / "deploy/venus/config.venus_evcharger.ini.wizard-inventory.ini").read_text(encoding="utf-8"),
+                "[Profile:custom-device]\nLabel=Custom Device\n",
+            )
+            self.assertEqual(
+                (target_dir / "deploy/venus/config.venus_evcharger.ini.wizard-topology.txt").read_text(encoding="utf-8"),
+                "Measurement -> device-a\n",
+            )
+            self.assertEqual(
+                (target_dir / "deploy/venus/wizard-meter.ini").read_text(encoding="utf-8"),
+                "[Adapter]\nType=template_meter\n",
+            )
             self.assertFalse((target_dir / "tests").exists())
             self.assertFalse((target_dir / "docs").exists())
             backup_candidates = sorted((target_dir / "deploy/venus").glob("config.venus_evcharger.ini.bak-*"))

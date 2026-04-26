@@ -104,6 +104,16 @@ class BranchCoverageNextClusterFiveWizardPersistenceTests(unittest.TestCase):
         self.assertEqual(wizard_persistence_mod._suggested_energy_merge_lines({"suggested_energy_merge": {}}), [])
         self.assertEqual(wizard_persistence_mod._merged_source_ids({"merged_source_ids": "bad"}), [])
         self.assertIsNone(wizard_persistence_mod._suggested_energy_merge_applied_line({}))
+        self.assertEqual(wizard_persistence_mod._inventory_lines({"device_inventory": {}}), [])
+        self.assertEqual(
+            wizard_persistence_mod._inventory_lines(
+                {
+                    "device_inventory": {"profiles": [], "devices": [], "bindings": []},
+                    "inventory_path": "",
+                }
+            ),
+            ["inventory_counts: profiles=0 devices=0 bindings=0"],
+        )
         self.assertEqual(
             wizard_persistence_mod._suggested_energy_source_ids([{"source_id": "alpha"}, "bad", {"source_id": "beta"}]),
             ["alpha", "beta"],
@@ -114,7 +124,7 @@ class BranchCoverageNextClusterFiveWizardPersistenceTests(unittest.TestCase):
             config_path = Path(temp_dir) / "config.ini"
             payload = {
                 "config_path": str(config_path),
-                "profile": "simple-relay",
+                "profile": "simple_relay",
                 "charger_backend": "none",
                 "charger_preset": None,
                 "policy_mode": "manual",
@@ -133,8 +143,8 @@ class BranchCoverageNextClusterFiveWizardPersistenceTests(unittest.TestCase):
     def test_topology_summary_text_covers_optional_sections(self) -> None:
         payload = {
             "config_path": "/tmp/config.ini",
-            "profile": "split-topology",
-            "split_preset": "preset-a",
+            "profile": "multi_adapter_topology",
+            "topology_preset": "preset-a",
             "charger_backend": "goe_charger",
             "charger_preset": "goe",
             "policy_mode": "auto",
@@ -150,7 +160,7 @@ class BranchCoverageNextClusterFiveWizardPersistenceTests(unittest.TestCase):
 
         summary = wizard_persistence_mod._topology_summary_text(payload)
 
-        self.assertIn("role_hosts:\n  - charger: charger.local", summary)
+        self.assertIn("role_endpoints:\n  - charger: charger.local", summary)
         self.assertIn("resolved_roles:", summary)
         self.assertIn("live_check_ok: True", summary)
         self.assertIn("suggested_energy_sources: hybrid", summary)

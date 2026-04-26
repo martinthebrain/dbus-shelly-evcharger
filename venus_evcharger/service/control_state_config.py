@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from venus_evcharger.backend.config import backend_mode_for_service, backend_type_for_service
 from venus_evcharger.core.contracts import normalized_state_api_config_effective_fields
 from venus_evcharger.energy import energy_source_profile_details
 
@@ -41,10 +42,10 @@ class _ControlApiStateConfigMixin:
             "connection_name": getattr(self, "connection_name", ""),
             "runtime_state_path": getattr(self, "runtime_state_path", ""),
             "runtime_overrides_path": getattr(self, "runtime_overrides_path", ""),
-            "backend_mode": getattr(self, "backend_mode", "combined"),
-            "meter_backend": getattr(self, "meter_backend_type", "na"),
-            "switch_backend": getattr(self, "switch_backend_type", "na"),
-            "charger_backend": getattr(self, "charger_backend_type", "na"),
+            "backend_mode": backend_mode_for_service(self, "combined"),
+            "meter_backend": backend_type_for_service(self, "meter", "na"),
+            "switch_backend": backend_type_for_service(self, "switch", "na"),
+            "charger_backend": backend_type_for_service(self, "charger", "na"),
             "max_current": getattr(self, "max_current", 0.0),
             "min_current": getattr(self, "min_current", 0.0),
             "auto_daytime_only": bool(getattr(self, "auto_daytime_only", False)),

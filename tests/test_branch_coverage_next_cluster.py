@@ -15,7 +15,7 @@ class BranchCoverageNextWizardCliOutputCases(unittest.TestCase):
             wizard_cli_output._result_live_check_lines(
                 _result(live_check={"roles": {}})
             ),
-            ["Live connectivity roles:"],
+            ["Live connectivity by role:"],
         )
         self.assertEqual(
             wizard_cli_output._result_suggested_block_lines(

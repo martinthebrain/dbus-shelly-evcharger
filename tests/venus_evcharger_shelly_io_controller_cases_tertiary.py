@@ -242,7 +242,7 @@ class TestShellyIoControllerTertiary(ShellyIoControllerTestBase):
     def test_worker_apply_pending_relay_command_uses_split_switch_backend(self):
         switch_backend = SimpleNamespace(set_enabled=MagicMock())
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _switch_backend=switch_backend,
             _peek_pending_relay_command=MagicMock(return_value=(True, 90.0)),
             _clear_pending_relay_command=MagicMock(),
@@ -268,7 +268,7 @@ class TestShellyIoControllerTertiary(ShellyIoControllerTestBase):
     def test_worker_apply_pending_relay_command_uses_split_charger_backend_without_switch(self):
         charger_backend = SimpleNamespace(set_enabled=MagicMock())
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _switch_backend=None,
             _charger_backend=charger_backend,
             _peek_pending_relay_command=MagicMock(return_value=(True, 90.0)),

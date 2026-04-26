@@ -14,7 +14,7 @@ from venus_evcharger.bootstrap.wizard_charger_presets import (
     render_charger_preset_config,
 )
 from venus_evcharger.bootstrap.wizard_guidance import (
-    apply_split_preset_backend,
+    apply_topology_preset_backend,
     compatibility_warnings,
     default_backend,
     probe_roles,
@@ -36,7 +36,6 @@ from venus_evcharger.bootstrap.wizard_import import (
 from venus_evcharger.bootstrap.wizard_models import WizardResult
 from venus_evcharger.bootstrap.wizard_persistence import _topology_summary_text
 from venus_evcharger.bootstrap.wizard_policy_guidance import policy_defaults, prompt_policy_defaults
-from venus_evcharger.bootstrap.wizard_split_layouts import split_topology_files
 from venus_evcharger.bootstrap.wizard_support import (
     base_url_from_input,
     default_transport_kind,
@@ -48,6 +47,7 @@ from venus_evcharger.bootstrap.wizard_transport_guidance import (
     prompt_preset_specific_defaults,
     prompt_transport_inputs,
 )
+from tests.wizard_legacy_split_layouts import split_topology_files
 
 
 def _imported_defaults(**overrides: object) -> ImportedWizardDefaults:
@@ -64,7 +64,7 @@ def _imported_defaults(**overrides: object) -> ImportedWizardDefaults:
         "digest_auth": None,
         "username": None,
         "password": None,
-        "split_preset": None,
+        "topology_preset": None,
         "charger_backend": None,
         "charger_preset": None,
         "request_timeout_seconds": None,
@@ -89,7 +89,7 @@ def _imported_defaults(**overrides: object) -> ImportedWizardDefaults:
 def _namespace(**overrides: object) -> argparse.Namespace:
     values = {
         "profile": None,
-        "split_preset": None,
+        "topology_preset": None,
         "charger_backend": None,
         "charger_preset": None,
         "host": None,
@@ -137,9 +137,9 @@ def _result(**overrides: object) -> WizardResult:
         "created_at": "2026-04-20T02:53:57",
         "config_path": "/tmp/config.ini",
         "imported_from": None,
-        "profile": "simple-relay",
+        "profile": "simple_relay",
         "policy_mode": "manual",
-        "split_preset": None,
+        "topology_preset": None,
         "charger_backend": None,
         "charger_preset": None,
         "transport_kind": None,

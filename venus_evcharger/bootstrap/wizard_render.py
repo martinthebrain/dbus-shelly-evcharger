@@ -6,19 +6,23 @@ import shutil
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable
 
-from venus_evcharger.backend.config import load_backend_selection
+from venus_evcharger.backend.factory import build_service_backends
 from venus_evcharger.backend.probe import (
     probe_meter_backend,
     probe_switch_backend,
     read_charger_backend,
     validate_wallbox_config,
 )
-from venus_evcharger.bootstrap.wizard_layouts import generated_adapter_files
+from venus_evcharger.bootstrap.wizard_layouts import resolve_role_hosts
 from venus_evcharger.bootstrap.wizard_models import WizardAnswers
 from venus_evcharger.bootstrap.wizard_support import host_from_input
+from venus_evcharger.bootstrap.wizard_topology import build_wizard_topology_config
+from venus_evcharger.bootstrap.wizard_topology_render import render_adapter_files_from_topology
 from venus_evcharger.core.common_values import normalize_phase
+from venus_evcharger.topology import EvChargerTopologyConfig, MeasurementConfig
 
 
 def repo_root() -> Path:
@@ -179,24 +183,79 @@ def render_wizard_config(template_text: str, answers: WizardAnswers) -> tuple[st
     config_text = replace_optional_assignment(config_text, "AutoScheduledEnabledDays", answers.scheduled_enabled_days)
     config_text = replace_optional_assignment(config_text, "AutoScheduledLatestEndTime", answers.scheduled_latest_end_time)
     config_text = replace_optional_assignment(config_text, "AutoScheduledNightCurrentAmps", answers.scheduled_night_current_amps)
-    backend_lines, adapter_files, role_hosts = generated_adapter_files(
+    role_hosts = resolve_role_hosts(
         profile=answers.profile,
         primary_host_input=answers.host_input,
         meter_host_input=answers.meter_host_input,
         switch_host_input=answers.switch_host_input,
         charger_host_input=answers.charger_host_input,
-        split_preset=answers.split_preset,
-        charger_backend=answers.charger_backend,
-        charger_preset=answers.charger_preset,
-        request_timeout_seconds=answers.request_timeout_seconds,
-        switch_group_supported_phase_selections=answers.switch_group_supported_phase_selections,
-        transport_kind=answers.transport_kind,
-        transport_host=answers.transport_host,
-        transport_port=answers.transport_port,
-        transport_device=answers.transport_device,
-        transport_unit_id=answers.transport_unit_id,
+        topology_preset=answers.topology_preset,
     )
+    topology_config = build_wizard_topology_config(answers)
+    adapter_files = render_adapter_files_from_topology(topology_config, answers, role_hosts)
+    backend_lines = render_legacy_backends_from_topology(topology_config, adapter_files)
     return append_backends(config_text, backend_lines), adapter_files, role_hosts
+
+
+def render_legacy_backends_from_topology(
+    topology_config: EvChargerTopologyConfig,
+    adapter_files: dict[str, str],
+) -> list[str]:
+    if topology_config.topology.type == "simple_relay":
+        return []
+    lines = ["Mode=split"]
+    lines.extend(_measurement_backend_lines(topology_config.measurement, adapter_files))
+    lines.extend(_actuator_backend_lines(topology_config))
+    lines.extend(_charger_backend_lines(topology_config))
+    return lines
+
+
+def _measurement_backend_lines(
+    measurement: MeasurementConfig | None,
+    adapter_files: dict[str, str],
+) -> list[str]:
+    if measurement is None or measurement.type in {"none", "charger_native", "actuator_native", "fixed_reference", "learned_reference"}:
+        return ["MeterType=none"]
+    if measurement.type != "external_meter" or measurement.config_path is None:
+        raise ValueError(f"unsupported legacy meter mapping for measurement type '{measurement.type}'")
+    return [
+        f"MeterType={_adapter_type_from_file(adapter_files, measurement.config_path)}",
+        f"MeterConfigPath={measurement.config_path}",
+    ]
+
+
+def _actuator_backend_lines(topology_config: EvChargerTopologyConfig) -> list[str]:
+    actuator = topology_config.actuator
+    if actuator is None:
+        return ["SwitchType=none"]
+    lines = [f"SwitchType={actuator.type}"]
+    if actuator.config_path:
+        lines.append(f"SwitchConfigPath={actuator.config_path}")
+    return lines
+
+
+def _charger_backend_lines(topology_config: EvChargerTopologyConfig) -> list[str]:
+    charger = topology_config.charger
+    if charger is None:
+        return ["ChargerType="]
+    lines = [f"ChargerType={charger.type}"]
+    if charger.config_path:
+        lines.append(f"ChargerConfigPath={charger.config_path}")
+    return lines
+
+
+def _adapter_type_from_file(adapter_files: dict[str, str], relative_path: str) -> str:
+    content = adapter_files.get(relative_path)
+    if content is None:
+        raise ValueError(f"missing adapter file '{relative_path}' while rendering legacy backends")
+    parser = configparser.ConfigParser()
+    parser.read_string(content)
+    if not parser.has_section("Adapter"):
+        raise ValueError(f"adapter file '{relative_path}' is missing required [Adapter] section")
+    adapter_type = str(parser["Adapter"].get("Type", "")).strip()
+    if not adapter_type:
+        raise ValueError(f"adapter file '{relative_path}' is missing Adapter.Type")
+    return adapter_type
 
 
 def materialized_config_text(config_text: str, output_dir: Path, adapter_files: dict[str, str]) -> str:
@@ -217,10 +276,28 @@ def validate_rendered_setup(config_text: str, adapter_files: dict[str, str], con
         return validate_wallbox_config(str(main_path))
 
 
+def _probe_service_from_wallbox_config(parser: configparser.ConfigParser) -> object:
+    defaults = parser["DEFAULT"]
+    return SimpleNamespace(
+        config=parser,
+        session=None,
+        host=defaults.get("Host", "").strip(),
+        username=defaults.get("Username", "").strip(),
+        password=defaults.get("Password", "").strip(),
+        use_digest_auth=defaults.get("DigestAuth", "0").strip().lower() in ("1", "true", "yes", "on"),
+        shelly_request_timeout_seconds=float(defaults.get("ShellyRequestTimeoutSeconds", "2.0") or 2.0),
+        pm_component=defaults.get("ShellyComponent", "Switch").strip(),
+        pm_id=int(defaults.get("ShellyId", "0") or 0),
+        phase=defaults.get("Phase", "L1").strip(),
+        max_current=float(defaults.get("MaxCurrent", "16.0") or 16.0),
+        _last_voltage=None,
+    )
+
+
 def live_connectivity_payload(main_path: Path, selected_roles: tuple[str, ...] | None) -> dict[str, object]:
     parser = configparser.ConfigParser()
     parser.read(main_path, encoding="utf-8")
-    selection = load_backend_selection(parser)
+    runtime = build_service_backends(_probe_service_from_wallbox_config(parser)).runtime
     role_results: dict[str, dict[str, object]] = {}
     ok = True
 
@@ -243,9 +320,9 @@ def live_connectivity_payload(main_path: Path, selected_roles: tuple[str, ...] |
             ok = False
             role_results[role] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
 
-    run_role("meter", selection.meter_config_path, probe_meter_backend)
-    run_role("switch", selection.switch_config_path, probe_switch_backend)
-    run_role("charger", selection.charger_config_path, read_charger_backend)
+    run_role("meter", runtime.meter_config_path, probe_meter_backend)
+    run_role("switch", runtime.switch_config_path, probe_switch_backend)
+    run_role("charger", runtime.charger_config_path, read_charger_backend)
     checked_roles = tuple(role for role, payload in role_results.items() if payload.get("status") != "skipped")
     return {
         "ok": ok,
@@ -283,7 +360,7 @@ def answer_defaults(answers: WizardAnswers) -> dict[str, object]:
         "digest_auth": answers.digest_auth,
         "username": answers.username,
         "password_present": bool(answers.password),
-        "split_preset": answers.split_preset,
+        "topology_preset": answers.topology_preset,
         "charger_backend": answers.charger_backend,
         "charger_preset": answers.charger_preset,
         "request_timeout_seconds": answers.request_timeout_seconds,

@@ -19,7 +19,7 @@ from venus_evcharger.bootstrap.wizard_cli_parser import build_parser
 from venus_evcharger.bootstrap.wizard_guidance import (
     default_backend,
     prompt_role_hosts,
-    prompt_split_preset,
+    prompt_topology_preset,
     resolved_primary_host,
     role_host_defaults,
     role_prompt_intro,
@@ -49,7 +49,7 @@ from venus_evcharger.bootstrap.wizard_cli_non_interactive import (
     non_interactive_phase as _non_interactive_phase_impl,
     non_interactive_policy_mode as _non_interactive_policy_mode_impl,
     non_interactive_profile as _non_interactive_profile_impl,
-    non_interactive_split_preset as _non_interactive_split_preset_impl,
+    non_interactive_topology_preset as _non_interactive_topology_preset_impl,
     non_interactive_string as _non_interactive_string_impl,
     resolved_backend as _resolved_backend_impl,
 )
@@ -59,7 +59,7 @@ from venus_evcharger.bootstrap.wizard_support import (
     POLICY_VALUES,
     PROFILE_LABELS,
     PROFILE_VALUES,
-    SPLIT_PRESET_VALUES,
+    TOPOLOGY_PRESET_VALUES,
     TRANSPORT_VALUES,
     backend_requires_transport,
     host_from_input,
@@ -144,7 +144,7 @@ def _interactive_profile(namespace: argparse.Namespace, imported: ImportedWizard
     labels: dict[str, str] = {key: value for key, value in PROFILE_LABELS}
     return cast(
         WizardProfile,
-        namespace.profile or imported.profile or _prompt_choice("Choose the setup type:", PROFILE_VALUES, labels, "simple-relay"),
+        namespace.profile or imported.profile or _prompt_choice("Choose the setup topology:", PROFILE_VALUES, labels, "simple_relay"),
     )
 
 
@@ -152,7 +152,7 @@ def _interactive_backend(
     namespace: argparse.Namespace,
     profile: WizardProfile,
     imported: ImportedWizardDefaults,
-    split_preset: str | None,
+    topology_preset: str | None,
 ) -> WizardChargerBackend | None:
     backend = cast(WizardChargerBackend | None, namespace.charger_backend or default_backend(profile, imported))
     if namespace.charger_backend is None:
@@ -161,9 +161,9 @@ def _interactive_backend(
 
 
 def _interactive_backend_choice(profile: WizardProfile, backend: WizardChargerBackend | None) -> WizardChargerBackend | None:
-    if profile == "native-charger":
+    if profile == "native_device":
         return cast(WizardChargerBackend, _prompt_choice("Choose the charger backend:", NATIVE_CHARGER_VALUES, default=backend or "goe_charger"))
-    if profile == "native-charger-phase-switch":
+    if profile == "hybrid_topology":
         return cast(
             WizardChargerBackend,
             _prompt_choice("Choose the charger backend:", PHASE_SWITCH_CHARGER_VALUES, default=backend or "simpleevse_charger"),
@@ -223,18 +223,18 @@ def _interactive_answers(namespace: argparse.Namespace, imported: ImportedWizard
     imported = imported or _empty_imported_defaults()
     profile = _interactive_profile(namespace, imported)
     shared_host = namespace.host or imported.host_input or _prompt_text("Primary host or IP", "192.168.1.50")
-    split_preset = _interactive_split_preset(namespace, imported, profile)
-    backend = _interactive_backend(namespace, profile, imported, split_preset)
+    topology_preset = _interactive_topology_preset(namespace, imported, profile)
+    backend = _interactive_backend(namespace, profile, imported, topology_preset)
     charger_preset = _interactive_charger_preset(namespace, imported, backend)
-    backend = _resolved_backend(split_preset, charger_preset, backend)
-    intro = role_prompt_intro(profile, split_preset)
+    backend = _resolved_backend(topology_preset, charger_preset, backend)
+    intro = role_prompt_intro(profile, topology_preset)
     if intro:
         print(intro)
     meter_host, switch_host, charger_host = prompt_role_hosts(
         namespace,
         imported,
         profile,
-        split_preset,
+        topology_preset,
         shared_host,
         prompt_text=_prompt_text,
     )
@@ -252,7 +252,7 @@ def _interactive_answers(namespace: argparse.Namespace, imported: ImportedWizard
         imported,
         profile=profile,
         backend=backend,
-        split_preset=split_preset,
+        topology_preset=topology_preset,
         charger_preset=charger_preset,
         prompt_choice=_prompt_choice,
         prompt_text=_prompt_text,
@@ -278,7 +278,7 @@ def _interactive_answers(namespace: argparse.Namespace, imported: ImportedWizard
         digest_auth=digest_auth,
         username=username,
         password=password,
-        split_preset=split_preset,
+        topology_preset=topology_preset,
         charger_backend=backend,
         charger_preset=charger_preset,
         request_timeout_seconds=request_timeout_seconds,
@@ -298,11 +298,11 @@ def _interactive_answers(namespace: argparse.Namespace, imported: ImportedWizard
     )
 
 
-def _interactive_split_preset(namespace: argparse.Namespace, imported: ImportedWizardDefaults, profile: WizardProfile) -> str | None:
-    split_preset = namespace.split_preset or imported.split_preset
-    if profile == "split-topology" and split_preset is None:
-        return prompt_split_preset(_prompt_choice, imported.split_preset or "template-stack")
-    return split_preset
+def _interactive_topology_preset(namespace: argparse.Namespace, imported: ImportedWizardDefaults, profile: WizardProfile) -> str | None:
+    topology_preset = namespace.topology_preset or imported.topology_preset
+    if profile == "multi_adapter_topology" and topology_preset is None:
+        return prompt_topology_preset(_prompt_choice, imported.topology_preset or "template-stack")
+    return topology_preset
 
 
 def _interactive_transport_inputs(
@@ -339,25 +339,25 @@ def _non_interactive_answers(namespace: argparse.Namespace, imported: ImportedWi
     return _non_interactive_answers_impl(namespace, imported or _empty_imported_defaults())
 
 
-def _non_interactive_split_preset(namespace: argparse.Namespace, imported_defaults: ImportedWizardDefaults, profile: WizardProfile) -> str | None:
-    return _non_interactive_split_preset_impl(namespace, imported_defaults, profile)
+def _non_interactive_topology_preset(namespace: argparse.Namespace, imported_defaults: ImportedWizardDefaults, profile: WizardProfile) -> str | None:
+    return _non_interactive_topology_preset_impl(namespace, imported_defaults, profile)
 
 
 def _non_interactive_backend(
     namespace: argparse.Namespace,
     imported: ImportedWizardDefaults | None,
     profile: WizardProfile,
-    split_preset: str | None,
+    topology_preset: str | None,
 ) -> WizardChargerBackend | None:
-    return _non_interactive_backend_impl(namespace, imported, profile, split_preset)
+    return _non_interactive_backend_impl(namespace, imported, profile, topology_preset)
 
 
 def _resolved_backend(
-    split_preset: str | None,
+    topology_preset: str | None,
     charger_preset: str | None,
     backend: WizardChargerBackend | None,
 ) -> WizardChargerBackend | None:
-    return _resolved_backend_impl(split_preset, charger_preset, backend)
+    return _resolved_backend_impl(topology_preset, charger_preset, backend)
 
 
 def _interactive_charger_preset(

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Unit tests for the Venus EV charger service helper logic."""
 
+import configparser
 import json
 import sys
 import tempfile
@@ -27,6 +28,19 @@ class ShellyWallboxHelpersTestBase(unittest.TestCase):
     @staticmethod
     def _make_update_service():
         service = ShellyWallboxService.__new__(ShellyWallboxService)
+        service.config = configparser.ConfigParser()
+        service.config.read_string(
+            """
+[DEFAULT]
+Host=192.168.1.20
+
+[Backends]
+Mode=combined
+MeterType=shelly_combined
+SwitchType=shelly_combined
+ChargerType=
+"""
+        )
         service.poll_interval_ms = 1000
         service.phase = "L1"
         service.voltage_mode = "phase"
@@ -91,10 +105,6 @@ class ShellyWallboxHelpersTestBase(unittest.TestCase):
         service._last_battery_allow_warning = None
         service._last_dbus_ok_at = None
         service._last_voltage = None
-        service.backend_mode = "combined"
-        service.meter_backend_type = "shelly_combined"
-        service.switch_backend_type = "shelly_combined"
-        service.charger_backend_type = None
         service._charger_target_current_amps = None
         service._charger_target_current_applied_at = None
         service._last_auto_metrics = {"surplus": None, "grid": None, "soc": None}

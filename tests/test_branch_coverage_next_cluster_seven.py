@@ -24,7 +24,7 @@ class BranchCoverageNextClusterSevenTests(unittest.TestCase):
         imported = _imported_defaults(
             imported_from="/tmp/import.json",
             policy_mode="scheduled",
-            split_preset="template-stack",
+            topology_preset="template-stack",
             charger_backend="goe_charger",
             device_instance=77,
             phase="L1",
@@ -50,8 +50,8 @@ class BranchCoverageNextClusterSevenTests(unittest.TestCase):
 
         self.assertEqual(wizard_cli._resolve_import_path(namespace), Path("/tmp/import.json"))
         self.assertEqual(wizard_cli._non_interactive_policy_mode(namespace, imported), "manual")
-        self.assertEqual(wizard_cli._non_interactive_split_preset(_namespace(), imported, "split-topology"), "template-stack")
-        self.assertEqual(wizard_cli._non_interactive_backend(namespace, imported, "native-charger", None), "modbus_charger")
+        self.assertEqual(wizard_cli._non_interactive_topology_preset(_namespace(), imported, "multi_adapter_topology"), "template-stack")
+        self.assertEqual(wizard_cli._non_interactive_backend(namespace, imported, "native_device", None), "modbus_charger")
         self.assertEqual(wizard_cli._non_interactive_device_instance(namespace, imported), 81)
         self.assertEqual(wizard_cli._non_interactive_phase(namespace, imported), "L2")
         self.assertEqual(wizard_cli._non_interactive_string("cli.local", "imported.local"), "cli.local")

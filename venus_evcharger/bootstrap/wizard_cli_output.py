@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from venus_evcharger.bootstrap.wizard_models import WizardResult
+from venus_evcharger.bootstrap.wizard_support import profile_label, topology_preset_label
 
 
 def result_text(result: WizardResult) -> str:
@@ -27,8 +28,8 @@ def _result_header_lines(result: WizardResult) -> list[str]:
     return [
         f"Config written to: {result.config_path}" if not result.dry_run else f"Config preview for: {result.config_path}",
         _optional_header_line("Imported defaults", result.imported_from, "none"),
-        _optional_header_line("Selected profile", result.profile, ""),
-        _optional_header_line("Selected split preset", result.split_preset, "n/a"),
+        _optional_header_line("Selected setup", profile_label(result.profile), ""),
+        _optional_header_line("Selected topology preset", topology_preset_label(result.topology_preset), "n/a"),
         _optional_header_line("Selected charger backend", result.charger_backend, "none"),
         _optional_header_line("Transport", result.transport_kind, "n/a"),
         "Validation: ok",
@@ -47,7 +48,7 @@ def _live_connectivity_label(result: WizardResult) -> str:
 
 
 def _result_role_host_lines(result: WizardResult) -> list[str]:
-    lines = ["Role hosts:"]
+    lines = ["Role endpoints:"]
     if result.role_hosts:
         lines.extend(f"  - {role}: {value}" for role, value in sorted(result.role_hosts.items()))
     else:
@@ -70,6 +71,8 @@ def _result_artifact_lines(result: WizardResult) -> list[str]:
         lines.append(f"Wizard audit: {result.audit_path}")
     if result.topology_summary_path is not None:
         lines.append(f"Topology summary: {result.topology_summary_path}")
+    if result.inventory_path is not None:
+        lines.append(f"Device inventory: {result.inventory_path}")
     return lines
 
 
@@ -82,7 +85,7 @@ def _result_warning_lines(result: WizardResult) -> list[str]:
 def _result_live_check_lines(result: WizardResult) -> list[str]:
     if result.live_check is None:
         return []
-    lines = ["Live connectivity roles:"]
+    lines = ["Live connectivity by role:"]
     roles = result.live_check.get("roles")
     if isinstance(roles, dict) and roles:
         lines.extend(filter(None, (_result_live_check_role_line(role, payload) for role, payload in sorted(roles.items()))))

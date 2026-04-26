@@ -2,7 +2,8 @@
 # mypy: disable-error-code="attr-defined"
 from __future__ import annotations
 
-from venus_evcharger.backend.config import load_backend_selection
+from venus_evcharger.backend.config import load_runtime_backend_summary
+from venus_evcharger.topology.config import parse_topology_config
 from venus_evcharger.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
 
 
@@ -16,11 +17,8 @@ class _ServiceBootstrapBackendConfigMixin(_ComposableControllerMixin):
         switch, and charger roles.
         """
         svc = self.service
-        selection = load_backend_selection(svc.config)
-        svc.backend_mode = selection.mode
-        svc.meter_backend_type = selection.meter_type
-        svc.switch_backend_type = selection.switch_type
-        svc.charger_backend_type = selection.charger_type
-        svc.meter_backend_config_path = selection.meter_config_path
-        svc.switch_backend_config_path = selection.switch_config_path
-        svc.charger_backend_config_path = selection.charger_config_path
+        if svc.config.has_section("Topology"):
+            svc._topology_config = parse_topology_config(svc.config)
+        # Validate backend topology early, but do not mirror any compat view
+        # onto the service object anymore.
+        load_runtime_backend_summary(svc.config)

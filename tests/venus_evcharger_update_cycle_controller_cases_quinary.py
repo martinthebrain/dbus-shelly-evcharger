@@ -110,7 +110,7 @@ class TestUpdateCycleControllerQuinary(UpdateCycleControllerTestBase):
             )
 
             resolved = build_service_backends(service)
-            service._backend_selection = resolved.selection
+            service._backend_bundle = resolved
             service._meter_backend = resolved.meter
             service._switch_backend = resolved.switch
             service._charger_backend = resolved.charger
@@ -254,7 +254,7 @@ class TestUpdateCycleControllerQuinary(UpdateCycleControllerTestBase):
             )
 
             resolved = build_service_backends(service)
-            service._backend_selection = resolved.selection
+            service._backend_bundle = resolved
             service._meter_backend = resolved.meter
             service._switch_backend = resolved.switch
             service._charger_backend = resolved.charger

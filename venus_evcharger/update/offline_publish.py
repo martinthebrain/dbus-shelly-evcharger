@@ -14,7 +14,8 @@ class _UpdateCycleOfflineMixin:
     @staticmethod
     def _offline_health_reason(svc: Any) -> str:
         """Return the health reason used for one offline publish."""
-        return "shelly-offline" if bool(getattr(svc, "host_configured", True)) else "not-configured"
+        configured = getattr(svc, "topology_configured", getattr(svc, "host_configured", True))
+        return "shelly-offline" if bool(configured) else "not-configured"
 
     @staticmethod
     def _offline_confirmed_relay_max_age_seconds(svc: Any) -> float:

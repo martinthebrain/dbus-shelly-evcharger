@@ -11,7 +11,7 @@ from venus_evcharger.bootstrap.wizard_support import (
     NATIVE_CHARGER_VALUES,
     POLICY_VALUES,
     PROFILE_VALUES,
-    SPLIT_PRESET_VALUES,
+    TOPOLOGY_PRESET_VALUES,
     TRANSPORT_VALUES,
 )
 from venus_evcharger.bootstrap.wizard_transport_guidance import SWITCH_GROUP_PHASE_LAYOUT_VALUES
@@ -22,7 +22,46 @@ def build_parser(default_config_path: str, default_template_path: str) -> argpar
     parser.add_argument("--config-path", default=default_config_path)
     parser.add_argument("--template-path", default=default_template_path)
     parser.add_argument("--profile", choices=PROFILE_VALUES)
-    parser.add_argument("--split-preset", choices=SPLIT_PRESET_VALUES)
+    parser.add_argument(
+        "--inventory-action",
+        choices=(
+            "show",
+            "show-bindings",
+            "guided-add-profile",
+            "guided-edit-binding",
+            "add-device",
+            "remove-device",
+            "set-endpoint",
+            "add-profile",
+            "add-capability",
+            "set-binding-member",
+            "remove-binding-member",
+        ),
+    )
+    parser.add_argument("--inventory-path")
+    parser.add_argument("--inventory-profile-id")
+    parser.add_argument("--inventory-device-id")
+    parser.add_argument("--inventory-label")
+    parser.add_argument("--inventory-endpoint")
+    parser.add_argument("--inventory-capability-id")
+    parser.add_argument("--inventory-kind", choices=("switch", "meter", "charger"))
+    parser.add_argument("--inventory-adapter-type")
+    parser.add_argument("--inventory-supported-phases")
+    parser.add_argument("--inventory-vendor")
+    parser.add_argument("--inventory-model")
+    parser.add_argument("--inventory-description")
+    parser.add_argument("--inventory-channel")
+    parser.add_argument("--inventory-measures-power", action="store_true")
+    parser.add_argument("--inventory-measures-energy", action="store_true")
+    parser.add_argument("--inventory-switching-mode", choices=("direct", "contactor"))
+    parser.add_argument("--inventory-supports-feedback", action="store_true")
+    parser.add_argument("--inventory-supports-phase-selection", action="store_true")
+    parser.add_argument("--inventory-binding-id")
+    parser.add_argument("--inventory-binding-role", choices=("actuation", "measurement", "charger"))
+    parser.add_argument("--inventory-binding-label")
+    parser.add_argument("--inventory-binding-phase-scope")
+    parser.add_argument("--inventory-member-phases")
+    parser.add_argument("--topology-preset", choices=TOPOLOGY_PRESET_VALUES)
     parser.add_argument("--charger-backend", choices=NATIVE_CHARGER_VALUES)
     parser.add_argument("--charger-preset", choices=CHARGER_PRESET_VALUES)
     parser.add_argument("--host")

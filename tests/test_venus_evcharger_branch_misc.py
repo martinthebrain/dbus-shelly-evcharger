@@ -43,7 +43,13 @@ class TestShellyWallboxBranchMisc(unittest.TestCase):
     def test_bootstrap_runtime_reuses_existing_state_controller(self) -> None:
         existing_state_controller = object()
         service = SimpleNamespace(_state_controller=existing_state_controller)
-        resolved = SimpleNamespace(selection="sel", meter="meter", switch="switch", charger="charger")
+        resolved = SimpleNamespace(
+            runtime=SimpleNamespace(topology_configured=False, primary_rpc_configured=False),
+            selection="sel",
+            meter="meter",
+            switch="switch",
+            charger="charger",
+        )
         harness = _BootstrapRuntimeHarness(service)
 
         with (

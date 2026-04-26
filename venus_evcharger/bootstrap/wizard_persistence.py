@@ -19,6 +19,10 @@ def topology_summary_path(target: Path) -> Path:
     return target.with_name(f"{target.name}.wizard-topology.txt")
 
 
+def inventory_path(target: Path) -> Path:
+    return target.with_name(f"{target.name}.wizard-inventory.ini")
+
+
 def _summary_value(payload: dict[str, object], key: str, fallback: str) -> str:
     value = payload.get(key)
     return fallback if value in (None, "") else str(value)
@@ -55,11 +59,39 @@ def _summary_optional_lines(payload: dict[str, object]) -> list[str]:
     return [
         *_optional_scalar_lines(payload),
         *_optional_live_check_lines(payload),
+        *_inventory_lines(payload),
         *_suggested_energy_source_lines(payload),
         *_suggested_energy_merge_lines(payload),
         *_suggested_block_lines(payload),
         *_warning_lines(payload),
     ]
+
+
+def _inventory_lines(payload: dict[str, object]) -> list[str]:
+    inventory = payload.get("device_inventory")
+    if not isinstance(inventory, dict) or not inventory:
+        return []
+    lines = [_inventory_counts_line(inventory)]
+    inventory_file = payload.get("inventory_path")
+    if isinstance(inventory_file, str) and inventory_file:
+        lines.append(f"inventory_path: {inventory_file}")
+    return lines
+
+
+def _inventory_counts_line(inventory: dict[str, object]) -> str:
+    """Return one summary line with rendered inventory counts."""
+    return (
+        "inventory_counts: "
+        f"profiles={_inventory_list_count(inventory, 'profiles')} "
+        f"devices={_inventory_list_count(inventory, 'devices')} "
+        f"bindings={_inventory_list_count(inventory, 'bindings')}"
+    )
+
+
+def _inventory_list_count(inventory: dict[str, object], key: str) -> int:
+    """Return the length of one list value in the inventory payload."""
+    value = inventory.get(key)
+    return len(value) if isinstance(value, list) else 0
 
 
 def _suggested_block_lines(payload: dict[str, object]) -> list[str]:
@@ -115,13 +147,13 @@ def _suggested_energy_merge_applied_line(merge: dict[str, object]) -> str | None
 def _topology_summary_text(payload: dict[str, object]) -> str:
     lines = [
         f"config_path: {_summary_value(payload, 'config_path', '')}",
-        f"profile: {_summary_value(payload, 'profile', '')}",
-        f"split_preset: {_summary_value(payload, 'split_preset', 'n/a')}",
+        f"setup: {_summary_value(payload, 'profile', '')}",
+        f"topology_preset: {_summary_value(payload, 'topology_preset', 'n/a')}",
         f"charger_backend: {_summary_value(payload, 'charger_backend', 'none')}",
         f"charger_preset: {_summary_value(payload, 'charger_preset', 'n/a')}",
         f"policy_mode: {_summary_value(payload, 'policy_mode', '')}",
         f"transport_kind: {_summary_value(payload, 'transport_kind', 'n/a')}",
-        "role_hosts:",
+        "role_endpoints:",
     ]
     lines.extend(_role_host_lines(payload.get("role_hosts")))
     lines.extend(_summary_optional_lines(payload))
@@ -141,3 +173,9 @@ def persist_wizard_state(config_path: Path, payload: dict[str, object]) -> tuple
         handle.write(json.dumps(persisted_payload, sort_keys=True) + "\n")
     current_topology_summary_path.write_text(_topology_summary_text(persisted_payload), encoding="utf-8")
     return str(current_result_path), str(current_audit_path), str(current_topology_summary_path)
+
+
+def persist_inventory_sidecar(config_path: Path, content: str) -> str:
+    current_inventory_path = inventory_path(config_path)
+    current_inventory_path.write_text(content, encoding="utf-8")
+    return str(current_inventory_path)

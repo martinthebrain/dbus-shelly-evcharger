@@ -11,6 +11,7 @@ import json
 import time
 from typing import Any
 
+from venus_evcharger.backend.config import backend_mode_for_service, backend_type_for_service
 from venus_evcharger.core.common import evse_fault_reason
 from venus_evcharger.control import CONTROL_API_COMMAND_SCOPE_REQUIREMENTS
 from venus_evcharger.core.contracts import (
@@ -135,10 +136,10 @@ class _ControlApiStateMetaMixin:
     def _control_api_capabilities_payload(self) -> dict[str, Any]:
         supported_phase_selections = tuple(getattr(self, "supported_phase_selections", ("P1",)) or ("P1",))
         topology = {
-            "backend_mode": getattr(self, "backend_mode", "combined"),
-            "meter_backend": getattr(self, "meter_backend_type", "na"),
-            "switch_backend": getattr(self, "switch_backend_type", "na"),
-            "charger_backend": getattr(self, "charger_backend_type", "na"),
+            "backend_mode": backend_mode_for_service(self, "combined"),
+            "meter_backend": backend_type_for_service(self, "meter", "na"),
+            "switch_backend": backend_type_for_service(self, "switch", "na"),
+            "charger_backend": backend_type_for_service(self, "charger", "na"),
         }
         features = {
             "command_audit_trail": True,

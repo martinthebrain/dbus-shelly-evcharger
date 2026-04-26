@@ -9,7 +9,7 @@ logic, and GX-friendly deployment.
 
 It is meant for real-world setups that are not a single fixed wallbox:
 portable EVSEs behind relays, Shelly-based switching, native chargers such as
-go-e, split meter/switch/charger topologies, and external energy sources such
+go-e, multi-device meter/switch/charger topologies, and external energy sources such
 as hybrid inverters.
 
 ## What You Get
@@ -177,3 +177,32 @@ make check
 make typecheck
 make stress
 ```
+
+## Local Shelly Emulator
+
+For Venus-OS smoke tests without a real Shelly relay, you can run a small RPC
+emulator on another machine in the same LAN:
+
+```bash
+python3 ./scripts/dev/mock_shelly_rpc.py --bind 0.0.0.0 --port 8080
+```
+
+Then point the Venus config to that host including the port, for example:
+
+```ini
+Host=192.168.1.25:8080
+```
+
+The emulator currently supports:
+
+- `GET /rpc/Shelly.GetDeviceInfo`
+- `GET /rpc/Switch.GetStatus?id=0`
+- `GET /rpc/Switch.Set?id=0&on=true|false`
+
+For fault injection and state changes during live tests:
+
+- `GET /__admin/state?relay=1&apower=2300&current=10&voltage=230&total_energy_wh=12500`
+- `GET /__admin/fault?mode=http500`
+- `GET /__admin/fault?mode=timeout&seconds=5`
+- `GET /__admin/fault?mode=badjson`
+- `GET /__admin/reset`

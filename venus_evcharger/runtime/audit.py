@@ -91,9 +91,9 @@ class _RuntimeSupportAuditMixin(_RuntimeSupportAuditFieldsMixin, _ComposableCont
             cls._bucket_metric(metrics.get("stop_threshold"), step=50.0),
             cls._bucket_metric(metrics.get("threshold_scale"), step=0.02),
             cls._backend_value(svc, "backend_mode", "combined"),
-            cls._backend_value(svc, "meter_backend_type", "shelly_combined"),
-            cls._backend_value(svc, "switch_backend_type", "shelly_combined"),
-            cls._string_metric(getattr(svc, "charger_backend_type", None)),
+            cls._backend_value(svc, "meter_backend_type", "shelly_meter"),
+            cls._backend_value(svc, "switch_backend_type", "shelly_contactor_switch"),
+            cls._backend_value(svc, "charger_backend_type", "na"),
             cls._bucket_metric(cls._charger_target_for_audit(svc), step=1.0),
             cls._string_metric(cls._charger_transport_reason_for_audit(svc)),
             cls._string_metric(cls._charger_transport_source_for_audit(svc)),
@@ -232,14 +232,18 @@ class _RuntimeSupportAuditMixin(_RuntimeSupportAuditFieldsMixin, _ComposableCont
         metrics["meter_backend"] = _RuntimeSupportAuditMixin._backend_value(
             svc,
             "meter_backend_type",
-            "shelly_combined",
+            "shelly_meter",
         )
         metrics["switch_backend"] = _RuntimeSupportAuditMixin._backend_value(
             svc,
             "switch_backend_type",
-            "shelly_combined",
+            "shelly_contactor_switch",
         )
-        metrics["charger_backend"] = getattr(svc, "charger_backend_type", None) or "na"
+        metrics["charger_backend"] = _RuntimeSupportAuditMixin._backend_value(
+            svc,
+            "charger_backend_type",
+            "na",
+        )
         metrics["charger_target"] = _RuntimeSupportAuditMixin._charger_target_for_audit(svc)
         metrics["charger_transport_reason"] = _RuntimeSupportAuditMixin._charger_transport_reason_for_audit(svc)
         metrics["charger_transport_source"] = _RuntimeSupportAuditMixin._charger_transport_source_for_audit(svc)

@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import configparser
+
 from tests.venus_evcharger_publisher_support import (
     DbusPublishController,
     DbusPublishControllerTestCase,
@@ -224,6 +226,28 @@ class TestDbusPublishControllerConfig(DbusPublishControllerTestCase):
         self.assertEqual(controller._backend_type_value(service, "meter_backend_type", "meter"), "meter")
         self.assertEqual(controller._fault_reason(service), "contactor-lockout-open")
         self.assertEqual(controller._contactor_fault_count(service), 0)
+
+    def test_backend_helpers_prefer_config_over_conflicting_legacy_attributes(self) -> None:
+        config = configparser.ConfigParser()
+        config["Backends"] = {
+            "Mode": "split",
+            "MeterType": "template_meter",
+            "SwitchType": "switch_group",
+            "ChargerType": "goe_charger",
+        }
+        service = SimpleNamespace(
+            config=config,
+            backend_mode="combined",
+            meter_backend_type="shelly_combined",
+            switch_backend_type="shelly_combined",
+            charger_backend_type=None,
+        )
+        controller = DbusPublishController(service, self._age_seconds)
+
+        self.assertEqual(controller._backend_mode_value(service), "split")
+        self.assertEqual(controller._backend_type_value(service, "meter_backend_type", "meter"), "template_meter")
+        self.assertEqual(controller._backend_type_value(service, "switch_backend_type", "switch"), "switch_group")
+        self.assertEqual(controller._backend_type_value(service, "charger_backend_type", "na"), "goe_charger")
 
     def test_config_values_convert_stable_three_phase_line_voltage_to_display_current(self) -> None:
         service = SimpleNamespace(

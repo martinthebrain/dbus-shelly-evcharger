@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import configparser
+
 from tests.venus_evcharger_shelly_io_controller_support import *
 
 
@@ -44,7 +46,7 @@ class TestShellyIoControllerQuaternary(ShellyIoControllerTestBase):
             username="user",
             password="pass",
             shelly_request_timeout_seconds=2.5,
-            _backend_selection=SimpleNamespace(mode="combined"),
+            _backend_bundle=_runtime_bundle("combined"),
             _switch_backend=SimpleNamespace(capabilities=MagicMock(side_effect=RuntimeError("boom"))),
             supported_phase_selections=("P1", "P1_P2"),
             requested_phase_selection="P1",
@@ -150,6 +152,42 @@ class TestShellyIoControllerQuaternary(ShellyIoControllerTestBase):
         self.assertEqual(controller._relay_state_from_split_switch(True), True)
         self.assertIsNone(controller._runtime_cached_charger_state())
 
+        config = configparser.ConfigParser()
+        config.read_string(
+            """
+[Topology]
+Type=simple_relay
+
+[Actuator]
+Type=template_switch
+ConfigPath=/data/etc/wallbox-actuator.ini
+
+[Measurement]
+Type=fixed_reference
+ReferenceWatts=2300
+"""
+        )
+        config_backed_service = SimpleNamespace(
+            config=config,
+            _switch_backend=None,
+            supported_phase_selections=("P1",),
+            requested_phase_selection="P1",
+            active_phase_selection="P1",
+            _last_pm_status_confirmed=False,
+            _last_pm_status="bad",
+            _last_voltage=400.0,
+            voltage_mode="line",
+            auto_shelly_soft_fail_seconds=15.0,
+            _time_now=lambda: 100.0,
+            _source_retry_after={},
+            virtual_mode=0,
+            virtual_enable=1,
+            virtual_startstop=1,
+            virtual_set_current=16.0,
+        )
+        config_backed_controller = ShellyIoController(config_backed_service)
+        self.assertTrue(config_backed_controller._uses_split_backends())
+
         service._last_pm_status_confirmed = True
         service._last_pm_status = "bad"
         self.assertIsNone(controller._current_confirmed_switch_load_power_w())
@@ -184,7 +222,7 @@ class TestShellyIoControllerQuaternary(ShellyIoControllerTestBase):
 
     def test_helper_edges_cover_runtime_sync_and_switch_state_fallbacks(self):
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _switch_backend=SimpleNamespace(read_switch_state=MagicMock(side_effect=RuntimeError("switch down"))),
             _charger_backend=SimpleNamespace(settings=SimpleNamespace(supported_phase_selections=("P1_P2_P3",))),
             supported_phase_selections=("P1",),
@@ -267,7 +305,7 @@ class TestShellyIoControllerQuaternary(ShellyIoControllerTestBase):
 
     def test_read_split_pm_status_without_meter_requires_recent_charger_state(self):
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _meter_backend=None,
             _switch_backend=None,
             _charger_backend=None,
@@ -285,7 +323,7 @@ class TestShellyIoControllerQuaternary(ShellyIoControllerTestBase):
     def test_worker_apply_pending_relay_command_skips_and_tracks_charger_transport_retry(self):
         charger_backend = SimpleNamespace(set_enabled=MagicMock(side_effect=ModbusSlaveOfflineError("offline")))
         service = SimpleNamespace(
-            _backend_selection=SimpleNamespace(mode="split"),
+            _backend_bundle=_runtime_bundle("split"),
             _switch_backend=None,
             _charger_backend=charger_backend,
             _peek_pending_relay_command=MagicMock(return_value=(True, 90.0)),

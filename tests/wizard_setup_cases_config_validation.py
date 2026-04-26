@@ -23,7 +23,7 @@ class _WizardSetupConfigValidationCases:
             with self.assertRaisesRegex(ValueError, "same source id: huawei"):
                 configure_wallbox(
                     WizardAnswers(
-                        profile="simple-relay",
+                        profile="simple_relay",
                         host_input="192.168.1.44",
                         meter_host_input=None,
                         switch_host_input=None,
@@ -34,7 +34,7 @@ class _WizardSetupConfigValidationCases:
                         digest_auth=False,
                         username="",
                         password="",
-                        split_preset=None,
+                        topology_preset=None,
                         charger_backend=None,
                         transport_kind="serial_rtu",
                         transport_host="192.168.1.44",
@@ -63,7 +63,7 @@ class _WizardSetupConfigValidationCases:
             with self.assertRaisesRegex(ValueError, "unknown source ids: huawei_b"):
                 configure_wallbox(
                     WizardAnswers(
-                        profile="simple-relay",
+                        profile="simple_relay",
                         host_input="192.168.1.44",
                         meter_host_input=None,
                         switch_host_input=None,
@@ -74,7 +74,7 @@ class _WizardSetupConfigValidationCases:
                         digest_auth=False,
                         username="",
                         password="",
-                        split_preset=None,
+                        topology_preset=None,
                         charger_backend=None,
                         transport_kind="serial_rtu",
                         transport_host="192.168.1.44",

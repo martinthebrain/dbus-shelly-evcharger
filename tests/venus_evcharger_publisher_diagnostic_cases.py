@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import configparser
 from tests.venus_evcharger_publisher_support import (
     DbusPublishController,
     DbusPublishControllerTestCase,
@@ -7,10 +8,36 @@ from tests.venus_evcharger_publisher_support import (
 )
 
 
+def _with_backends_config(
+    service: SimpleNamespace,
+    *,
+    mode: str,
+    meter_type: str,
+    switch_type: str,
+    charger_type: str | None,
+    host: str = "192.168.1.20",
+) -> SimpleNamespace:
+    parser = configparser.ConfigParser()
+    parser.read_string(
+        f"""
+[DEFAULT]
+Host={host}
+
+[Backends]
+Mode={mode}
+MeterType={meter_type}
+SwitchType={switch_type}
+ChargerType={charger_type or ""}
+"""
+    )
+    service.config = parser
+    return service
+
+
 class TestDbusPublishControllerDiagnostics(DbusPublishControllerTestCase):
     def test_diagnostic_values_include_backend_and_charger_visibility(self) -> None:
         current_time = 1776718800.0
-        service = SimpleNamespace(
+        service = _with_backends_config(SimpleNamespace(
             _error_state={
                 "dbus": 1,
                 "shelly": 0,
@@ -31,10 +58,6 @@ class TestDbusPublishControllerDiagnostics(DbusPublishControllerTestCase):
             auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
             auto_scheduled_night_start_delay_seconds=3600.0,
             auto_scheduled_latest_end_time="06:30",
-            backend_mode="split",
-            meter_backend_type="template_meter",
-            switch_backend_type="template_switch",
-            charger_backend_type="smartevse_charger",
             _charger_backend=SimpleNamespace(set_current=MagicMock()),
             _charger_target_current_amps=13.0,
             _charger_target_current_applied_at=current_time - 4.0,
@@ -95,7 +118,7 @@ class TestDbusPublishControllerDiagnostics(DbusPublishControllerTestCase):
             _software_update_last_check_at=current_time - 60.0,
             _software_update_last_run_at=current_time - 3600.0,
             started_at=current_time - 10.0,
-        )
+        ), mode="split", meter_type="template_meter", switch_type="template_switch", charger_type="smartevse_charger")
         controller = DbusPublishController(service, self._real_age_seconds)
 
         counter_values = controller._diagnostic_counter_values(current_time)
@@ -208,6 +231,52 @@ class TestDbusPublishControllerDiagnostics(DbusPublishControllerTestCase):
         self.assertEqual(lockout_counter_values["/Auto/ContactorLockoutSource"], "count-threshold")
         self.assertEqual(lockout_age_values["/Auto/ContactorLockoutAge"], 6.0)
 
+    def test_diagnostic_values_prefer_resolved_backend_selection_over_legacy_attrs(self) -> None:
+        current_time = 1776718800.0
+        service = SimpleNamespace(
+            _dbusservice={},
+            _dbus_publish_state={},
+            _dbus_live_publish_interval_seconds=1.0,
+            _dbus_slow_publish_interval_seconds=5.0,
+            _error_state={"dbus": 0, "shelly": 0, "charger": 0, "pv": 0, "battery": 0, "grid": 0, "cache_hits": 0},
+            last_status=0,
+            virtual_mode=0,
+            _last_health_reason="init",
+            _last_health_code=0,
+            _last_auto_state="idle",
+            _last_auto_state_code=0,
+            _last_status_source="unknown",
+            auto_month_windows={},
+            auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri,Sat,Sun",
+            auto_scheduled_night_start_delay_seconds=3600.0,
+            auto_scheduled_latest_end_time="06:30",
+            backend_mode="combined",
+            meter_backend_type="shelly_combined",
+            switch_backend_type="shelly_combined",
+            charger_backend_type=None,
+            _backend_bundle=SimpleNamespace(
+                runtime=SimpleNamespace(
+                    backend_mode="split",
+                    meter_type="template_meter",
+                    switch_type="switch_group",
+                    charger_type="smartevse_charger",
+                    meter_config_path=None,
+                    switch_config_path=None,
+                    charger_config_path=None,
+                )
+            ),
+            _is_update_stale=self._never_stale,
+            _recovery_attempts=0,
+            started_at=current_time - 10.0,
+        )
+
+        counter_values = DbusPublishController(service, self._real_age_seconds)._diagnostic_counter_values(current_time)
+
+        self.assertEqual(counter_values["/Auto/BackendMode"], "split")
+        self.assertEqual(counter_values["/Auto/MeterBackend"], "template_meter")
+        self.assertEqual(counter_values["/Auto/SwitchBackend"], "switch_group")
+        self.assertEqual(counter_values["/Auto/ChargerBackend"], "smartevse_charger")
+
     def test_software_update_age_values_are_negative_one_before_any_check_or_run(self) -> None:
         service = SimpleNamespace(
             _dbusservice={},
@@ -248,7 +317,7 @@ class TestDbusPublishControllerDiagnostics(DbusPublishControllerTestCase):
 
     def test_diagnostic_values_keep_fault_and_recovery_visible_while_scheduled_and_retry_are_also_active(self) -> None:
         current_time = 1776718800.0
-        service = SimpleNamespace(
+        service = _with_backends_config(SimpleNamespace(
             _error_state={"dbus": 0, "shelly": 0, "charger": 1, "pv": 0, "battery": 0, "grid": 0, "cache_hits": 0},
             last_status=0,
             virtual_mode=2,
@@ -261,10 +330,6 @@ class TestDbusPublishControllerDiagnostics(DbusPublishControllerTestCase):
             auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
             auto_scheduled_night_start_delay_seconds=3600.0,
             auto_scheduled_latest_end_time="06:30",
-            backend_mode="split",
-            meter_backend_type="template_meter",
-            switch_backend_type="switch_group",
-            charger_backend_type="simpleevse_charger",
             _charger_backend=SimpleNamespace(set_current=MagicMock()),
             _last_charger_state_status="charging",
             _last_charger_state_fault="overcurrent error",
@@ -302,7 +367,7 @@ class TestDbusPublishControllerDiagnostics(DbusPublishControllerTestCase):
             _last_dbus_ok_at=current_time - 1.0,
             _last_successful_update_at=current_time - 3.0,
             started_at=current_time - 10.0,
-        )
+        ), mode="split", meter_type="template_meter", switch_type="switch_group", charger_type="simpleevse_charger")
         controller = DbusPublishController(service, self._real_age_seconds)
 
         counter_values = controller._diagnostic_counter_values(current_time)
@@ -321,7 +386,7 @@ class TestDbusPublishControllerDiagnostics(DbusPublishControllerTestCase):
 
     def test_diagnostic_values_keep_retry_visible_after_transport_detail_has_gone_stale(self) -> None:
         current_time = 200.0
-        service = SimpleNamespace(
+        service = _with_backends_config(SimpleNamespace(
             _error_state={"dbus": 0, "shelly": 0, "charger": 1, "pv": 0, "battery": 0, "grid": 0, "cache_hits": 0},
             last_status=6,
             virtual_mode=1,
@@ -334,10 +399,6 @@ class TestDbusPublishControllerDiagnostics(DbusPublishControllerTestCase):
             auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
             auto_scheduled_night_start_delay_seconds=3600.0,
             auto_scheduled_latest_end_time="06:30",
-            backend_mode="split",
-            meter_backend_type="template_meter",
-            switch_backend_type="switch_group",
-            charger_backend_type="smartevse_charger",
             _last_charger_state_status="ready",
             _last_charger_state_fault="",
             _last_charger_fault_active=0,
@@ -375,7 +436,7 @@ class TestDbusPublishControllerDiagnostics(DbusPublishControllerTestCase):
             _last_dbus_ok_at=199.0,
             _last_successful_update_at=199.0,
             started_at=100.0,
-        )
+        ), mode="split", meter_type="template_meter", switch_type="switch_group", charger_type="smartevse_charger")
         controller = DbusPublishController(service, self._real_age_seconds)
 
         counter_values = controller._diagnostic_counter_values(current_time)
@@ -394,7 +455,7 @@ class TestDbusPublishControllerDiagnostics(DbusPublishControllerTestCase):
 
     def test_diagnostic_values_prefer_confirmed_switch_group_phase_over_native_charger_phase(self) -> None:
         current_time = 200.0
-        service = SimpleNamespace(
+        service = _with_backends_config(SimpleNamespace(
             _error_state={"dbus": 0, "shelly": 0, "charger": 0, "pv": 0, "battery": 0, "grid": 0, "cache_hits": 0},
             last_status=2,
             virtual_mode=1,
@@ -407,10 +468,6 @@ class TestDbusPublishControllerDiagnostics(DbusPublishControllerTestCase):
             auto_scheduled_enabled_days="Mon,Tue,Wed,Thu,Fri",
             auto_scheduled_night_start_delay_seconds=3600.0,
             auto_scheduled_latest_end_time="06:30",
-            backend_mode="split",
-            meter_backend_type="template_meter",
-            switch_backend_type="switch_group",
-            charger_backend_type="smartevse_charger",
             _last_charger_state_status="charging",
             _last_charger_state_fault="",
             _last_charger_fault_active=0,
@@ -441,7 +498,7 @@ class TestDbusPublishControllerDiagnostics(DbusPublishControllerTestCase):
             _last_dbus_ok_at=199.0,
             _last_successful_update_at=199.0,
             started_at=100.0,
-        )
+        ), mode="split", meter_type="template_meter", switch_type="switch_group", charger_type="smartevse_charger")
         controller = DbusPublishController(service, self._real_age_seconds)
 
         counter_values = controller._diagnostic_counter_values(current_time)

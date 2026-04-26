@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 from venus_evcharger.bootstrap.wizard import WizardAnswers, configure_wallbox, default_template_path
+from venus_evcharger.inventory import parse_device_inventory_config
 
 
 class _WizardSetupConfigCases:
@@ -12,7 +13,7 @@ class _WizardSetupConfigCases:
             config_path = Path(temp_dir) / "config.ini"
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="simple-relay",
+                    profile="simple_relay",
                     host_input="192.168.1.44",
                     meter_host_input=None,
                     switch_host_input=None,
@@ -23,7 +24,7 @@ class _WizardSetupConfigCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset=None,
+                    topology_preset=None,
                     charger_backend=None,
                     transport_kind="serial_rtu",
                     transport_host="192.168.1.44",
@@ -47,17 +48,27 @@ class _WizardSetupConfigCases:
             self.assertTrue((config_path.parent / "config.ini.wizard-result.json").exists())
             self.assertTrue((config_path.parent / "config.ini.wizard-audit.jsonl").exists())
             self.assertTrue((config_path.parent / "config.ini.wizard-topology.txt").exists())
-            self.assertIn("profile: simple-relay\n", topology_text)
-            self.assertIn("role_hosts:\n  - none\n", topology_text)
-            self.assertEqual(result.role_hosts, {})
+            self.assertTrue((config_path.parent / "config.ini.wizard-inventory.ini").exists())
+            self.assertIn("setup: simple_relay\n", topology_text)
+            self.assertIn("role_endpoints:\n  - meter: 192.168.1.44\n  - switch: 192.168.1.44\n", topology_text)
+            self.assertEqual(result.role_hosts, {"meter": "192.168.1.44", "switch": "192.168.1.44"})
             self.assertEqual(result.validation["resolved_roles"], {"meter": True, "switch": True, "charger": False})
+            self.assertEqual(result.topology_config["topology"]["type"], "simple_relay")
+            self.assertEqual(result.topology_config["actuator"]["type"], "shelly_contactor_switch")
+            self.assertEqual(result.topology_config["measurement"]["type"], "actuator_native")
+            self.assertTrue(str(result.inventory_path).endswith(".wizard-inventory.ini"))
+            inventory_parser = configparser.ConfigParser()
+            inventory_parser.read(config_path.parent / "config.ini.wizard-inventory.ini", encoding="utf-8")
+            inventory = parse_device_inventory_config(inventory_parser)
+            self.assertEqual(len(inventory.devices), 1)
+            self.assertEqual(len(inventory.bindings), 2)
 
     def test_configure_wallbox_generates_native_goe_profile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.ini"
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="native-charger",
+                    profile="native_device",
                     host_input="goe.local",
                     meter_host_input=None,
                     switch_host_input=None,
@@ -68,7 +79,7 @@ class _WizardSetupConfigCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset=None,
+                    topology_preset=None,
                     charger_backend="goe_charger",
                     transport_kind="serial_rtu",
                     transport_host="goe.local",
@@ -88,6 +99,9 @@ class _WizardSetupConfigCases:
             self.assertIn("Type=goe_charger\nBaseUrl=http://goe.local\n", charger_text)
             self.assertEqual(result.role_hosts, {"charger": "goe.local"})
             self.assertEqual(result.validation["resolved_roles"], {"meter": False, "switch": False, "charger": True})
+            self.assertEqual(result.topology_config["topology"]["type"], "native_device")
+            self.assertEqual(result.topology_config["measurement"]["type"], "charger_native")
+            self.assertEqual(result.topology_config["charger"]["type"], "goe_charger")
 
     def test_configure_wallbox_can_include_huawei_recommendation_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -109,7 +123,7 @@ class _WizardSetupConfigCases:
             config_path = temp_path / "config.ini"
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="simple-relay",
+                    profile="simple_relay",
                     host_input="192.168.1.44",
                     meter_host_input=None,
                     switch_host_input=None,
@@ -120,7 +134,7 @@ class _WizardSetupConfigCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset=None,
+                    topology_preset=None,
                     charger_backend=None,
                     transport_kind="serial_rtu",
                     transport_host="192.168.1.44",
@@ -181,7 +195,7 @@ class _WizardSetupConfigCases:
 
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="simple-relay",
+                    profile="simple_relay",
                     host_input="192.168.1.44",
                     meter_host_input=None,
                     switch_host_input=None,
@@ -192,7 +206,7 @@ class _WizardSetupConfigCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset=None,
+                    topology_preset=None,
                     charger_backend=None,
                     transport_kind="serial_rtu",
                     transport_host="192.168.1.44",
@@ -230,7 +244,7 @@ class _WizardSetupConfigCases:
 
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="simple-relay",
+                    profile="simple_relay",
                     host_input="192.168.1.44",
                     meter_host_input=None,
                     switch_host_input=None,
@@ -241,7 +255,7 @@ class _WizardSetupConfigCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset=None,
+                    topology_preset=None,
                     charger_backend=None,
                     transport_kind="serial_rtu",
                     transport_host="192.168.1.44",
@@ -305,7 +319,7 @@ class _WizardSetupConfigCases:
 
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="simple-relay",
+                    profile="simple_relay",
                     host_input="192.168.1.44",
                     meter_host_input=None,
                     switch_host_input=None,
@@ -316,7 +330,7 @@ class _WizardSetupConfigCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset=None,
+                    topology_preset=None,
                     charger_backend=None,
                     transport_kind="serial_rtu",
                     transport_host="192.168.1.44",
@@ -355,7 +369,7 @@ class _WizardSetupConfigCases:
 
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="simple-relay",
+                    profile="simple_relay",
                     host_input="192.168.1.44",
                     meter_host_input=None,
                     switch_host_input=None,
@@ -366,7 +380,7 @@ class _WizardSetupConfigCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset=None,
+                    topology_preset=None,
                     charger_backend=None,
                     transport_kind="serial_rtu",
                     transport_host="192.168.1.44",
@@ -413,7 +427,7 @@ class _WizardSetupConfigCases:
 
             result = configure_wallbox(
                 WizardAnswers(
-                    profile="simple-relay",
+                    profile="simple_relay",
                     host_input="192.168.1.44",
                     meter_host_input=None,
                     switch_host_input=None,
@@ -424,7 +438,7 @@ class _WizardSetupConfigCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset=None,
+                    topology_preset=None,
                     charger_backend=None,
                     transport_kind="serial_rtu",
                     transport_host="192.168.1.44",

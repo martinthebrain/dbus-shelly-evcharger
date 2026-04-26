@@ -25,7 +25,7 @@ class _WizardSetupCliCases:
                         "--config-path",
                         str(config_path),
                         "--profile",
-                        "split-topology",
+                        "multi_adapter_topology",
                         "--host",
                         "adapter.local",
                     ]
@@ -34,7 +34,7 @@ class _WizardSetupCliCases:
             payload = json.loads(stdout.getvalue())
             self.assertEqual(rc, 0)
             self.assertFalse(config_path.exists())
-            self.assertEqual(payload["profile"], "split-topology")
+            self.assertEqual(payload["profile"], "multi_adapter_topology")
             self.assertEqual(payload["validation"]["resolved_roles"], {"meter": True, "switch": True, "charger": True})
 
     def test_main_non_interactive_refuses_existing_files_without_force(self) -> None:
@@ -48,7 +48,7 @@ class _WizardSetupCliCases:
                     "--config-path",
                     str(config_path),
                     "--profile",
-                    "simple-relay",
+                    "simple_relay",
                     "--host",
                     "192.168.1.44",
                 ]
@@ -69,7 +69,7 @@ class _WizardSetupCliCases:
                     "--config-path",
                     str(config_path),
                     "--profile",
-                    "simple-relay",
+                    "simple_relay",
                     "--host",
                     "192.168.1.55",
                 ]
@@ -86,7 +86,7 @@ class _WizardSetupCliCases:
             source_path = Path(temp_dir) / "source.ini"
             configure_wallbox(
                 WizardAnswers(
-                    profile="split-topology",
+                    profile="multi_adapter_topology",
                     host_input="192.168.1.92",
                     meter_host_input="192.168.1.20",
                     switch_host_input="192.168.1.21",
@@ -97,7 +97,7 @@ class _WizardSetupCliCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset="shelly-io-modbus-charger",
+                    topology_preset="shelly-io-modbus-charger",
                     charger_backend="modbus_charger",
                     transport_kind="tcp",
                     transport_host="192.168.1.93",
@@ -127,18 +127,18 @@ class _WizardSetupCliCases:
             payload = json.loads(stdout.getvalue())
             self.assertEqual(rc, 0)
             self.assertEqual(payload["imported_from"], str(source_path))
-            self.assertEqual(payload["profile"], "split-topology")
-            self.assertEqual(payload["split_preset"], "shelly-io-modbus-charger")
+            self.assertEqual(payload["profile"], "multi_adapter_topology")
+            self.assertEqual(payload["topology_preset"], "shelly-io-modbus-charger")
             self.assertEqual(payload["charger_backend"], "modbus_charger")
             self.assertEqual(payload["transport_kind"], "tcp")
             self.assertEqual(payload["role_hosts"], {"meter": "192.168.1.20", "switch": "192.168.1.21"})
 
-    def test_main_import_config_recognizes_goe_switch_group_split_preset(self) -> None:
+    def test_main_import_config_recognizes_goe_switch_group_topology_preset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             source_path = Path(temp_dir) / "source.ini"
             configure_wallbox(
                 WizardAnswers(
-                    profile="split-topology",
+                    profile="multi_adapter_topology",
                     host_input="goe.local",
                     meter_host_input="meter.local",
                     switch_host_input="switch.local",
@@ -149,7 +149,7 @@ class _WizardSetupCliCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset="shelly-meter-goe-switch-group",
+                    topology_preset="shelly-meter-goe-switch-group",
                     charger_backend="goe_charger",
                     transport_kind="serial_rtu",
                     transport_host="goe.local",
@@ -178,7 +178,7 @@ class _WizardSetupCliCases:
 
             payload = json.loads(stdout.getvalue())
             self.assertEqual(rc, 0)
-            self.assertEqual(payload["split_preset"], "shelly-meter-goe-switch-group")
+            self.assertEqual(payload["topology_preset"], "shelly-meter-goe-switch-group")
             self.assertEqual(payload["charger_backend"], "goe_charger")
             self.assertEqual(
                 payload["role_hosts"],
@@ -198,8 +198,8 @@ class _WizardSetupCliCases:
                         "--config-path",
                         str(config_path),
                         "--profile",
-                        "split-topology",
-                        "--split-preset",
+                        "multi_adapter_topology",
+                        "--topology-preset",
                         "template-meter-goe-switch-group",
                         "--meter-host",
                         "meter.local",
@@ -222,7 +222,7 @@ class _WizardSetupCliCases:
             config_path = Path(temp_dir) / "config.ini"
             configure_wallbox(
                 WizardAnswers(
-                    profile="simple-relay",
+                    profile="simple_relay",
                     host_input="192.168.1.44",
                     meter_host_input=None,
                     switch_host_input=None,
@@ -233,7 +233,7 @@ class _WizardSetupCliCases:
                     digest_auth=False,
                     username="",
                     password="",
-                    split_preset=None,
+                    topology_preset=None,
                     charger_backend=None,
                     transport_kind="serial_rtu",
                     transport_host="192.168.1.44",
@@ -262,13 +262,13 @@ class _WizardSetupCliCases:
             payload = json.loads(stdout.getvalue())
             self.assertEqual(rc, 0)
             self.assertEqual(payload["imported_from"], str(config_path))
-            self.assertEqual(payload["profile"], "simple-relay")
+            self.assertEqual(payload["profile"], "simple_relay")
             self.assertEqual(payload["config_path"], str(config_path))
 
     def test_build_answers_interactive_uses_hidden_password_prompt(self) -> None:
         parser = build_parser("/tmp/config.ini", str(default_template_path()))
         namespace = parser.parse_args(
-            ["--profile", "simple-relay", "--phase", "L1", "--policy-mode", "manual", "--device-instance", "60"]
+            ["--profile", "simple_relay", "--phase", "L1", "--policy-mode", "manual", "--device-instance", "60"]
         )
         with (
             patch("venus_evcharger.bootstrap.wizard_cli._prompt_text", side_effect=["192.168.1.50", "admin"]),
@@ -306,7 +306,7 @@ class _WizardSetupCliCases:
                         "--config-path",
                         str(config_path),
                         "--profile",
-                        "native-charger",
+                        "native_device",
                         "--charger-backend",
                         "goe_charger",
                         "--host",
@@ -324,3 +324,5 @@ class _WizardSetupCliCases:
                     "roles": {"charger": {"payload": {"type": "goe_charger"}, "status": "ok"}},
                 },
             )
+            self.assertEqual(payload["topology_config"]["topology"]["type"], "native_device")
+            self.assertEqual(payload["topology_config"]["charger"]["type"], "goe_charger")

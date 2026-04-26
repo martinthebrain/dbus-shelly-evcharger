@@ -3,7 +3,7 @@ from tests.wizard_branch_coverage_cases_common import (
     _imported_defaults,
     _namespace,
     apply_charger_preset_backend,
-    apply_split_preset_backend,
+    apply_topology_preset_backend,
     charger_preset_backend,
     compatibility_warnings,
     default_backend,
@@ -52,30 +52,30 @@ class _WizardBranchCoverageGuidanceCases:
         meter_host, switch_host, charger_host = prompt_role_hosts(
             namespace,
             imported,
-            "split-topology",
+            "multi_adapter_topology",
             "template-stack",
             "shared.local",
             prompt_text=prompt_text,
         )
-        self.assertEqual(relevant_role_hosts("advanced-manual", None), ())
-        self.assertEqual(relevant_role_hosts("native-charger-phase-switch", None), ("charger", "switch"))
-        self.assertIn("separate adapter roles", role_prompt_intro("split-topology", "template-stack") or "")
-        self.assertEqual(role_prompt_intro("native-charger", None), "This preset only needs the charger endpoint.")
+        self.assertEqual(relevant_role_hosts("advanced_manual", None), ())
+        self.assertEqual(relevant_role_hosts("hybrid_topology", None), ("charger", "switch"))
+        self.assertIn("separate adapter roles", role_prompt_intro("multi_adapter_topology", "template-stack") or "")
+        self.assertEqual(role_prompt_intro("native_device", None), "This setup only needs the charger endpoint.")
         self.assertEqual(role_prompt_label("switch", "template-stack"), "Switch endpoint (host or full BaseUrl)")
         self.assertEqual(role_prompt_label("switch", "goe-external-switch-group"), "External phase-switch endpoint (host or full BaseUrl)")
         self.assertEqual((meter_host, switch_host, charger_host), ("prompted-shared.local", "switch.explicit", "prompted-shared.local"))
         self.assertEqual(resolved_primary_host(_namespace(), _imported_defaults(), None, None, None), "192.168.1.50")
-        self.assertEqual(default_backend("native-charger", imported), "template_charger")
-        self.assertEqual(apply_split_preset_backend("shelly-meter-goe", "template_charger"), "goe_charger")
-        self.assertEqual(apply_split_preset_backend("shelly-meter-modbus-charger", "template_charger", "abb-terra-ac-modbus"), "modbus_charger")
+        self.assertEqual(default_backend("native_device", imported), "template_charger")
+        self.assertEqual(apply_topology_preset_backend("shelly-meter-goe", "template_charger"), "goe_charger")
+        self.assertEqual(apply_topology_preset_backend("shelly-meter-modbus-charger", "template_charger", "abb-terra-ac-modbus"), "modbus_charger")
         self.assertEqual(charger_preset_backend("abb-terra-ac-modbus"), "modbus_charger")
         self.assertEqual(apply_charger_preset_backend("cfos-power-brain-modbus", "template_charger"), "modbus_charger")
         self.assertEqual(relevant_charger_presets("modbus_charger"), ("abb-terra-ac-modbus", "cfos-power-brain-modbus", "openwb-modbus-secondary"))
         self.assertEqual(relevant_charger_presets("goe_charger"), ())
         self.assertEqual(
             compatibility_warnings(
-                profile="split-topology",
-                split_preset="goe-external-switch-group",
+                profile="multi_adapter_topology",
+                topology_preset="goe-external-switch-group",
                 charger_backend="goe_charger",
                 primary_host_input="shared.local",
                 role_hosts={"switch": "shared.local"},
@@ -94,8 +94,8 @@ class _WizardBranchCoverageGuidanceCases:
         self.assertIn(
             "Multiple topology roles resolve to the same shared endpoint",
             compatibility_warnings(
-                profile="split-topology",
-                split_preset="template-stack",
+                profile="multi_adapter_topology",
+                topology_preset="template-stack",
                 charger_backend="modbus_charger",
                 primary_host_input="shared.local",
                 role_hosts={"meter": "shared.local", "switch": "shared.local"},
@@ -133,16 +133,16 @@ class _WizardBranchCoverageGuidanceCases:
         self.assertIsNone(preset_transport_port("cfos-power-brain-modbus", "serial_rtu"))
         self.assertEqual(preset_transport_unit_id("abb-terra-ac-modbus"), 1)
 
-        timeout, phase_layout = preset_specific_defaults(_namespace(), _imported_defaults(), backend="template_charger", split_preset=None, charger_preset=None)
+        timeout, phase_layout = preset_specific_defaults(_namespace(), _imported_defaults(), backend="template_charger", topology_preset=None, charger_preset=None)
         self.assertIsNone(timeout)
         self.assertEqual(phase_layout, "P1,P1_P2,P1_P2_P3")
 
         prompted_timeout, prompted_phase_layout = prompt_preset_specific_defaults(
             _namespace(),
             _imported_defaults(request_timeout_seconds=5.0),
-            profile="split-topology",
+            profile="multi_adapter_topology",
             backend="goe_charger",
-            split_preset="goe-external-switch-group",
+            topology_preset="goe-external-switch-group",
             charger_preset=None,
             prompt_choice=lambda *_args: "P1,P1_P2_P3",
             prompt_text=lambda label, default: "6.5" if "timeout" in label else default,

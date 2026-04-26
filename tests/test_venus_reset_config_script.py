@@ -58,6 +58,7 @@ class TestVenusResetConfigScript(unittest.TestCase):
             (deploy_dir / "config.venus_evcharger.ini.wizard-result.json").write_text("{}\n", encoding="utf-8")
             (deploy_dir / "config.venus_evcharger.ini.wizard-audit.jsonl").write_text("{}\n", encoding="utf-8")
             (deploy_dir / "config.venus_evcharger.ini.wizard-topology.txt").write_text("topology\n", encoding="utf-8")
+            (deploy_dir / "config.venus_evcharger.ini.wizard-inventory.ini").write_text("[Profile:test]\nLabel=Test\n", encoding="utf-8")
 
             reset_script.chmod(reset_script.stat().st_mode | stat.S_IXUSR)
 
@@ -74,3 +75,4 @@ class TestVenusResetConfigScript(unittest.TestCase):
             self.assertFalse((deploy_dir / "config.venus_evcharger.ini.wizard-result.json").exists())
             self.assertFalse((deploy_dir / "config.venus_evcharger.ini.wizard-audit.jsonl").exists())
             self.assertFalse((deploy_dir / "config.venus_evcharger.ini.wizard-topology.txt").exists())
+            self.assertFalse((deploy_dir / "config.venus_evcharger.ini.wizard-inventory.ini").exists())

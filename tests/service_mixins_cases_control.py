@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import configparser
+
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -317,6 +319,34 @@ class _ServiceMixinsControlCases:
         self.assertIn("summary", snapshot)
         self.assertIn("health", snapshot)
         self.assertTrue(service._control_api_state_token())
+
+    def test_control_api_payloads_prefer_config_over_conflicting_legacy_backend_attributes(self):
+        service = _configured_control_service()
+        config = configparser.ConfigParser()
+        config["Backends"] = {
+            "Mode": "split",
+            "MeterType": "template_meter",
+            "SwitchType": "template_switch",
+            "ChargerType": "smartevse_charger",
+        }
+        service.config = config
+        service.backend_mode = "combined"
+        service.meter_backend_type = "shelly_combined"
+        service.switch_backend_type = "shelly_combined"
+        service.charger_backend_type = None
+
+        topology = service._state_api_topology_payload()
+        capabilities = service._control_api_capabilities_payload()
+        config_effective = service._state_api_config_effective_payload()
+        operational = service._state_api_operational_payload()
+
+        self.assertEqual(topology["state"]["backend_mode"], "split")
+        self.assertEqual(topology["state"]["meter_backend"], "template_meter")
+        self.assertEqual(topology["state"]["switch_backend"], "template_switch")
+        self.assertEqual(topology["state"]["charger_backend"], "smartevse_charger")
+        self.assertEqual(capabilities["topology"]["charger_backend"], "smartevse_charger")
+        self.assertEqual(config_effective["state"]["switch_backend"], "template_switch")
+        self.assertEqual(operational["state"]["charger_backend"], "smartevse_charger")
 
     def test_control_api_mixin_health_payload_uses_stale_callback_and_event_bus_is_reused(self):
         service = _ControlService()

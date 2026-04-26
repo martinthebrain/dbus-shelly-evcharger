@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import configparser
 import json
 import sys
 import unittest
@@ -27,10 +28,19 @@ class _GoldenControlService(ControlApiMixin):
 class TestVenusEvchargerControlGolden(unittest.TestCase):
     def test_capabilities_projection_matches_golden_snapshot(self) -> None:
         service = _GoldenControlService()
-        service.backend_mode = "split"
-        service.meter_backend_type = "template_meter"
-        service.switch_backend_type = "switch_group"
-        service.charger_backend_type = "goe_charger"
+        service.config = configparser.ConfigParser()
+        service.config.read_string(
+            """
+[DEFAULT]
+Host=192.168.1.20
+
+[Backends]
+Mode=split
+MeterType=template_meter
+SwitchType=switch_group
+ChargerType=goe_charger
+"""
+        )
         service.control_api_read_token = "read"
         service.control_api_control_token = "control"
         service.control_api_localhost_only = True

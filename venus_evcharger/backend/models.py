@@ -153,13 +153,15 @@ class ChargerState:
 
 
 @dataclass(frozen=True)
-class BackendSelection:
-    """Normalized backend selection derived from wallbox configuration."""
+class BackendRuntimeSummary:
+    """Normalized runtime-facing backend summary for one configured load topology."""
 
-    mode: BackendMode
-    meter_type: str
-    switch_type: str
-    charger_type: str | None
+    backend_mode: BackendMode
+    meter_type: str | None
     meter_config_path: Path | None
+    switch_type: str | None
     switch_config_path: Path | None
+    charger_type: str | None
     charger_config_path: Path | None
+    topology_configured: bool
+    primary_rpc_configured: bool

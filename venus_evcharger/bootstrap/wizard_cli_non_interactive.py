@@ -46,35 +46,35 @@ def non_interactive_digest_auth(namespace: argparse.Namespace, imported_defaults
     return False
 
 
-def non_interactive_split_preset(
+def non_interactive_topology_preset(
     namespace: argparse.Namespace,
     imported_defaults: ImportedWizardDefaults,
     profile: WizardProfile,
 ) -> str | None:
-    split_preset = namespace.split_preset or imported_defaults.split_preset
-    if profile == "split-topology":
-        return split_preset or "template-stack"
-    return split_preset
+    topology_preset = namespace.topology_preset or imported_defaults.topology_preset
+    if profile == "multi_adapter_topology":
+        return topology_preset or "template-stack"
+    return topology_preset
 
 
 def non_interactive_backend(
     namespace: argparse.Namespace,
     imported: ImportedWizardDefaults | None,
     profile: WizardProfile,
-    split_preset: str | None,
+    topology_preset: str | None,
 ) -> WizardChargerBackend | None:
-    _ = split_preset
+    _ = topology_preset
     return cast(WizardChargerBackend | None, namespace.charger_backend or default_backend(profile, imported))
 
 
 def resolved_backend(
-    split_preset: str | None,
+    topology_preset: str | None,
     charger_preset: str | None,
     backend: WizardChargerBackend | None,
 ) -> WizardChargerBackend | None:
-    from venus_evcharger.bootstrap.wizard_guidance import apply_split_preset_backend
+    from venus_evcharger.bootstrap.wizard_guidance import apply_topology_preset_backend
 
-    return apply_split_preset_backend(split_preset, backend, charger_preset)
+    return apply_topology_preset_backend(topology_preset, backend, charger_preset)
 
 
 def non_interactive_charger_preset(
@@ -109,7 +109,7 @@ def _non_interactive_transport_answers(
     backend: WizardChargerBackend | None,
     charger_preset: str | None,
     host_input: str,
-    split_preset: str | None,
+    topology_preset: str | None,
 ) -> tuple[WizardTransportKind, str, int, str, int, float | None, str]:
     transport_kind, transport_host, transport_port, transport_device, transport_unit_id = (
         non_interactive_transport_inputs(
@@ -124,7 +124,7 @@ def _non_interactive_transport_answers(
         namespace,
         imported_defaults,
         backend=backend,
-        split_preset=split_preset,
+        topology_preset=topology_preset,
         charger_preset=charger_preset,
     )
     return (
@@ -199,11 +199,11 @@ def non_interactive_answers(
 ) -> WizardAnswers:
     profile = non_interactive_profile(namespace, imported_defaults)
     shared_host = namespace.host or imported_defaults.host_input or "192.168.1.50"
-    split_preset = non_interactive_split_preset(namespace, imported_defaults, profile)
-    backend = non_interactive_backend(namespace, imported_defaults, profile, split_preset)
+    topology_preset = non_interactive_topology_preset(namespace, imported_defaults, profile)
+    backend = non_interactive_backend(namespace, imported_defaults, profile, topology_preset)
     charger_preset = non_interactive_charger_preset(namespace, imported_defaults, backend)
-    backend = resolved_backend(split_preset, charger_preset, backend)
-    meter_host, switch_host, charger_host = role_host_defaults(namespace, imported_defaults, profile, split_preset, shared_host)
+    backend = resolved_backend(topology_preset, charger_preset, backend)
+    meter_host, switch_host, charger_host = role_host_defaults(namespace, imported_defaults, profile, topology_preset, shared_host)
     host_input = resolved_primary_host(namespace, imported_defaults, meter_host, switch_host, charger_host)
     (
         transport_kind,
@@ -219,7 +219,7 @@ def non_interactive_answers(
         backend=backend,
         charger_preset=charger_preset,
         host_input=host_input,
-        split_preset=split_preset,
+        topology_preset=topology_preset,
     )
     (
         policy_mode,
@@ -254,7 +254,7 @@ def non_interactive_answers(
         digest_auth=non_interactive_digest_auth(namespace, imported_defaults),
         username=non_interactive_string(namespace.username, imported_defaults.username),
         password=non_interactive_string(namespace.password, imported_defaults.password),
-        split_preset=split_preset,
+        topology_preset=topology_preset,
         charger_backend=backend,
         charger_preset=charger_preset,
         request_timeout_seconds=request_timeout_seconds,

@@ -271,10 +271,10 @@ class TestShellyWallboxHelpersSenary(ShellyWallboxHelpersTestBase):
 
     def test_diagnostics_publish_backend_mode_and_charger_target_visibility(self):
         service = self._make_update_service()
-        service.backend_mode = "split"
-        service.meter_backend_type = "template_meter"
-        service.switch_backend_type = "template_switch"
-        service.charger_backend_type = "template_charger"
+        service.config["Backends"]["Mode"] = "split"
+        service.config["Backends"]["MeterType"] = "template_meter"
+        service.config["Backends"]["SwitchType"] = "template_switch"
+        service.config["Backends"]["ChargerType"] = "template_charger"
         service._error_state["charger"] = 2
         service._charger_target_current_amps = 13.0
         service._charger_target_current_applied_at = 96.0

@@ -8,7 +8,6 @@ from typing import Any
 from .base import BackendConstructor
 from .goe_charger import GoEChargerBackend
 from .modbus_charger import ModbusChargerBackend
-from .shelly_combined import ShellyCombinedBackend
 from .shelly_contactor_switch import ShellyContactorSwitchBackend
 from .shelly_meter import ShellyMeterBackend
 from .smartevse_charger import SmartEvseChargerBackend
@@ -21,13 +20,11 @@ from .template_switch import TemplateSwitchBackend
 
 
 METER_BACKENDS: dict[str, BackendConstructor] = {
-    "shelly_combined": ShellyCombinedBackend,
     "shelly_meter": ShellyMeterBackend,
     "template_meter": TemplateMeterBackend,
 }
 
 SWITCH_BACKENDS: dict[str, BackendConstructor] = {
-    "shelly_combined": ShellyCombinedBackend,
     "shelly_switch": ShellySwitchBackend,
     "shelly_contactor_switch": ShellyContactorSwitchBackend,
     "switch_group": SwitchGroupBackend,

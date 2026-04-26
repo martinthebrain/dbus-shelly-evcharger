@@ -20,6 +20,7 @@ from datetime import datetime
 from collections.abc import Callable
 from typing import Any
 
+from venus_evcharger.backend.config import backend_mode_for_service, backend_type_for_service
 from venus_evcharger.core.common import (
     DEFAULT_SCHEDULED_ENABLED_DAYS,
     mode_uses_scheduled_logic,
@@ -88,10 +89,10 @@ def _software_update_diagnostic_defaults(svc: Any) -> PathMap:
 def _backend_diagnostic_defaults(svc: Any) -> PathMap:
     """Return backend-composition diagnostic paths and their defaults."""
     return {
-        "/Auto/BackendMode": (str(getattr(svc, "backend_mode", "combined")), None),
-        "/Auto/MeterBackend": (str(getattr(svc, "meter_backend_type", "shelly_combined")), None),
-        "/Auto/SwitchBackend": (str(getattr(svc, "switch_backend_type", "shelly_combined")), None),
-        "/Auto/ChargerBackend": (str(getattr(svc, "charger_backend_type", "") or ""), None),
+        "/Auto/BackendMode": (backend_mode_for_service(svc, "combined"), None),
+        "/Auto/MeterBackend": (backend_type_for_service(svc, "meter", "shelly_meter"), None),
+        "/Auto/SwitchBackend": (backend_type_for_service(svc, "switch", "shelly_contactor_switch"), None),
+        "/Auto/ChargerBackend": (backend_type_for_service(svc, "charger", ""), None),
         "/Auto/ChargerStatus": ("", None),
         "/Auto/ChargerFault": ("", None),
         "/Auto/ChargerFaultActive": (0, None),
@@ -174,6 +175,12 @@ def _age_counter_diagnostic_defaults() -> PathMap:
 
 
 class _ServiceBootstrapPathMixin(_ComposableControllerMixin):
+    @staticmethod
+    def _connected_value(svc: Any) -> int:
+        """Return one static initial Connected flag for DBus registration."""
+        configured = getattr(svc, "topology_configured", getattr(svc, "host_configured", True))
+        return 1 if bool(configured) else 0
+
     def register_paths(self) -> None:
         """Register all DBus paths exposed by the emulated EV charger."""
         svc = self.service
@@ -208,7 +215,7 @@ class _ServiceBootstrapPathMixin(_ComposableControllerMixin):
         svc._dbusservice.add_path("/FirmwareVersion", svc.firmware_version)
         svc._dbusservice.add_path("/HardwareVersion", svc.hardware_version)
         svc._dbusservice.add_path("/Serial", svc.serial)
-        svc._dbusservice.add_path("/Connected", 1 if bool(getattr(svc, "host_configured", True)) else 0)
+        svc._dbusservice.add_path("/Connected", self._connected_value(svc))
         svc._dbusservice.add_path("/Position", svc.position)
         svc._dbusservice.add_path("/UpdateIndex", 0)
 

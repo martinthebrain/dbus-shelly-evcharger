@@ -17,7 +17,7 @@ from tests.wizard_branch_runtime_cases_common import (
     patch,
     preset_specific_defaults,
     prompt_policy_defaults,
-    prompt_split_preset,
+    prompt_topology_preset,
     resolved_primary_host,
     scheduled_mode_snapshot,
     tempfile,
@@ -30,7 +30,7 @@ from tests.wizard_branch_runtime_cases_common import (
 
 class _WizardBranchRuntimeImportPolicyCases:
     def test_branch_helpers_cover_remaining_prompt_and_import_edges(self) -> None:
-        self.assertEqual(prompt_split_preset(lambda *_args: "template-stack", "template-stack"), "template-stack")
+        self.assertEqual(prompt_topology_preset(lambda *_args: "template-stack", "template-stack"), "template-stack")
         self.assertEqual(resolved_primary_host(_namespace(), _imported_defaults(), None, None, None), "192.168.1.50")
 
         result_text = wizard_cli.result_text(
@@ -38,9 +38,9 @@ class _WizardBranchRuntimeImportPolicyCases:
                 created_at="2026-04-20T02:53:57",
                 config_path="/tmp/config.ini",
                 imported_from=None,
-                profile="simple-relay",
+                profile="simple_relay",
                 policy_mode="manual",
-                split_preset=None,
+                topology_preset=None,
                 charger_backend=None,
                 charger_preset=None,
                 transport_kind=None,
@@ -59,15 +59,16 @@ class _WizardBranchRuntimeImportPolicyCases:
             )
         )
         self.assertNotIn("  - meter:", result_text)
+        self.assertIn("Selected setup: Single switched path", result_text)
 
         hinted_result_text = wizard_cli.result_text(
             WizardResult(
                 created_at="2026-04-20T02:53:57",
                 config_path="/tmp/config.ini",
                 imported_from=None,
-                profile="simple-relay",
+                profile="simple_relay",
                 policy_mode="manual",
-                split_preset=None,
+                topology_preset=None,
                 charger_backend=None,
                 charger_preset=None,
                 transport_kind=None,
@@ -167,7 +168,7 @@ class _WizardBranchRuntimeImportPolicyCases:
         self.assertEqual(_policy_mode("2"), "scheduled")
         self.assertEqual(_policy_mode("0"), "manual")
         self.assertIsNone(_policy_mode("other"))
-        self.assertEqual(_profile_defaults_from_types("none", "none", "goe_charger"), ("native-charger", None, "goe_charger"))
+        self.assertEqual(_profile_defaults_from_types("none", "none", "goe_charger"), ("native_device", None, "goe_charger"))
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -220,7 +221,7 @@ class _WizardBranchRuntimeImportPolicyCases:
             _namespace(request_timeout_seconds=7.5),
             _imported_defaults(),
             backend="goe_charger",
-            split_preset=None,
+            topology_preset=None,
             charger_preset=None,
         )
         self.assertEqual(timeout, 7.5)

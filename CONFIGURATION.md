@@ -1,6 +1,6 @@
 # Configuration
 
-This guide explains how to shape a wallbox installation from
+This guide explains how to shape a Venus EV charger installation from
 `deploy/venus/config.venus_evcharger.ini`.
 
 The most useful way to read the config is by decision area:
@@ -32,23 +32,35 @@ Then review the pinned DBus selectors when you prefer explicit services for:
 
 ## Topology Decisions
 
-The main topology choice is whether the installation behaves like one combined
-wallbox path or like a composed set of meter, switch, charger, and phase
-components.
+The most useful mental model is:
 
-### Combined
+- what switches or regulates the load
+- what measures the load
+- whether a native charger backend is present
+- whether phase control is internal or external
 
-Use `combined` when one backend represents the visible charging path.
+The runtime reasons in those roles first. The deployed INI describes many
+modular setups through `[Backends]` plus `Mode=split`.
+
+### Direct Primary Host Path
+
+Use `Host=...` when one primary RPC-capable device represents the switching
+path directly.
 
 Typical fit:
 
-- Shelly relay path with directly visible power
-- one device representing the wallbox behavior as a whole
+- one Shelly-based relay path
+- one device that exposes both switching and visible load behavior
+- simple smoke tests against the network emulator
 
-### Split
+### Role-Based Backend Path
 
-Use `split` when the installation is composed from separate roles:
+Use explicit backend roles when the installation is composed from separate
+adapters or when you want a modular description on disk.
 
+Current file format:
+
+- `Mode=split`
 - `MeterType=...`
 - `SwitchType=...`
 - `ChargerType=...`
@@ -60,7 +72,9 @@ Typical fit:
 - charger plus external phase switching
 - multi-device installations with explicit feedback and interlock inputs
 
-## Backend Selection Patterns
+## Backend Role Patterns
+
+The examples below use the deployed `[Backends]` format.
 
 ### Relay + meter path
 
@@ -242,7 +256,7 @@ Huawei family-specific profiles are first-class names. That includes:
 - `huawei_map0_smartlogger_modbus_tcp`, `huawei_mb0_smartlogger_modbus_tcp`
 - `huawei_map0_unit1`, `huawei_map0_unit2`, `huawei_mb0_unit1`, `huawei_mb0_unit2`
 
-Regional `SUN5000` family names are accepted as compatibility aliases for the
+Regional `SUN5000` family names are accepted as aliases for the
 matching `LB0` and `MAP0` profiles.
 
 There is also a direct OpenDTU preset for PV-only sources:
@@ -337,8 +351,7 @@ parallel `unit1` + `unit2` setups do not double-count them.
 This is the intended bridge point for custom scripts, vendor SDK wrappers, or
 MQTT consumers that should stay outside the wallbox core.
 
-Legacy single-source keys still work and remain the fallback when
-`AutoEnergySources` is empty:
+Single-source keys are used when `AutoEnergySources` is empty:
 
 - `AutoBatteryService`
 - `AutoBatteryServicePrefix`
