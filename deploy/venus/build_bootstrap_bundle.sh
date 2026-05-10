@@ -33,6 +33,9 @@ copy_item() {
 }
 
 mkdir -p "$OUTPUT_DIR"
+mkdir -p "${OUTPUT_DIR}/bootstrap_updater.d"
+cp "${SOURCE_DIR}/deploy/venus/bootstrap_updater.sh" "${OUTPUT_DIR}/bootstrap_updater.sh"
+cp "${SOURCE_DIR}/deploy/venus/bootstrap_updater.d/"*.sh "${OUTPUT_DIR}/bootstrap_updater.d/"
 stage_dir=$(mktemp -d)
 cleanup_stage() {
     rm -rf "$stage_dir"

@@ -82,34 +82,44 @@ class MockShellyRpcHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query, keep_blank_values=True)
-        state = self.server.state
-        if parsed.path == "/__admin/reset":
-            self._handle_admin_reset()
+        if self._handle_admin_route(parsed.path, params):
             return
-        if parsed.path == "/__admin/status":
-            self._send_json(200, {"state": asdict(state)})
-            return
-        if parsed.path == "/__admin/fault":
-            self._handle_admin_fault(params)
-            return
-        if parsed.path == "/__admin/state":
-            self._handle_admin_state(params)
-            return
-        if self._handle_fault_mode(state):
-            return
-        if parsed.path == "/rpc/Shelly.GetDeviceInfo":
-            self._send_json(200, state.device_info_payload())
-            return
-        if parsed.path == f"/rpc/{state.pm_component}.GetStatus":
-            self._handle_switch_get_status(params)
-            return
-        if parsed.path == "/rpc/Switch.Set":
-            self._handle_switch_set(params)
+        if self._handle_rpc_route(parsed.path, params):
             return
         self._send_json(404, {"error": "not-found", "path": parsed.path})
 
     def log_message(self, fmt: str, *args: object) -> None:
         self.server.log.append(fmt % args)
+
+    def _handle_admin_route(self, path: str, params: dict[str, list[str]]) -> bool:
+        if path == "/__admin/reset":
+            self._handle_admin_reset()
+            return True
+        if path == "/__admin/status":
+            self._send_json(200, {"state": asdict(self.server.state)})
+            return True
+        if path == "/__admin/fault":
+            self._handle_admin_fault(params)
+            return True
+        if path == "/__admin/state":
+            self._handle_admin_state(params)
+            return True
+        return False
+
+    def _handle_rpc_route(self, path: str, params: dict[str, list[str]]) -> bool:
+        state = self.server.state
+        if self._handle_fault_mode(state):
+            return True
+        if path == "/rpc/Shelly.GetDeviceInfo":
+            self._send_json(200, state.device_info_payload())
+            return True
+        if path == f"/rpc/{state.pm_component}.GetStatus":
+            self._handle_switch_get_status(params)
+            return True
+        if path == "/rpc/Switch.Set":
+            self._handle_switch_set(params)
+            return True
+        return False
 
     def _handle_fault_mode(self, state: MockShellyState) -> bool:
         if state.fault_mode == "timeout":
@@ -151,21 +161,26 @@ class MockShellyRpcHandler(BaseHTTPRequestHandler):
 
     def _handle_admin_state(self, params: dict[str, list[str]]) -> None:
         state = self.server.state
-        if "relay" in params:
-            state.relay_on = _parse_bool(_first(params, "relay"), state.relay_on)
-        if "apower" in params:
-            state.apower = _parse_float(_first(params, "apower"), state.apower)
-        if "current" in params:
-            state.current = _parse_float(_first(params, "current"), state.current)
-        if "voltage" in params:
-            state.voltage = _parse_float(_first(params, "voltage"), state.voltage)
-        if "total_energy_wh" in params:
-            state.total_energy_wh = _parse_float(_first(params, "total_energy_wh"), state.total_energy_wh)
-        if "name" in params:
-            state.name = _first(params, "name", state.name)
-        if "model" in params:
-            state.model = _first(params, "model", state.model)
+        self._update_bool_state(params, "relay", "relay_on")
+        self._update_float_state(params, ("apower", "current", "voltage", "total_energy_wh"))
+        self._update_text_state(params, ("name", "model"))
         self._send_json(200, {"state": asdict(state)})
+
+    def _update_bool_state(self, params: dict[str, list[str]], key: str, attr: str) -> None:
+        if key in params:
+            default = bool(getattr(self.server.state, attr))
+            setattr(self.server.state, attr, _parse_bool(_first(params, key), default))
+
+    def _update_float_state(self, params: dict[str, list[str]], keys: tuple[str, ...]) -> None:
+        for key in keys:
+            if key in params:
+                default = float(getattr(self.server.state, key))
+                setattr(self.server.state, key, _parse_float(_first(params, key), default))
+
+    def _update_text_state(self, params: dict[str, list[str]], keys: tuple[str, ...]) -> None:
+        for key in keys:
+            if key in params:
+                setattr(self.server.state, key, _first(params, key, str(getattr(self.server.state, key))))
 
     def _handle_admin_fault(self, params: dict[str, list[str]]) -> None:
         state = self.server.state

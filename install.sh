@@ -39,6 +39,7 @@ else
 fi
 UPDATER_SOURCE="${VENUS_EVCHARGER_UPDATER_SOURCE:-https://raw.githubusercontent.com/${REPO_SLUG}/${CHANNEL}/deploy/venus/bootstrap_updater.sh}"
 UPDATER_HASH_SOURCE="${VENUS_EVCHARGER_UPDATER_HASH_SOURCE:-${UPDATER_SOURCE}.sha256}"
+UPDATER_LIB_DIR="${BOOTSTRAP_STATE_DIR}/bootstrap_updater.d"
 BOOTSTRAP_PUBKEY_OVERRIDE="${VENUS_EVCHARGER_BOOTSTRAP_PUBKEY:-}"
 REQUIRE_SIGNED_MANIFEST="${VENUS_EVCHARGER_REQUIRE_SIGNED_MANIFEST:-0}"
 INSTALLER_OVERRIDE="${VENUS_EVCHARGER_INSTALLER_PATH:-}"
@@ -107,6 +108,42 @@ hash_file() {
 
 expected_hash_from_file() {
     awk 'NF {print $1; exit}' "$1"
+}
+
+updater_lib_names() {
+    printf '%s\n' 00_core.sh 10_config_merge.sh 20_layout.sh 30_status_main.sh
+}
+
+updater_source_base() {
+    source_path="$1"
+    case "$source_path" in
+        */bootstrap_updater.sh)
+            printf '%s\n' "${source_path%/bootstrap_updater.sh}"
+            ;;
+        *)
+            printf '%s\n' "$(dirname "$source_path")"
+            ;;
+    esac
+}
+
+install_updater_libs() {
+    selected_source="$1"
+    tmp_dir="$2"
+    source_base=$(updater_source_base "$selected_source")
+    tmp_lib_dir="${tmp_dir}/bootstrap_updater.d"
+    rm -rf "$tmp_lib_dir"
+    mkdir -p "$tmp_lib_dir"
+
+    while IFS= read -r lib_name; do
+        download_to "${source_base}/bootstrap_updater.d/${lib_name}" "${tmp_lib_dir}/${lib_name}" || return 1
+    done <<EOF
+$(updater_lib_names)
+EOF
+
+    rm -rf "$UPDATER_LIB_DIR"
+    mkdir -p "$UPDATER_LIB_DIR"
+    cp "${tmp_lib_dir}/"* "$UPDATER_LIB_DIR/"
+    chmod 755 "$UPDATER_LIB_DIR"/*.sh
 }
 
 write_builtin_pubkey() {
@@ -231,6 +268,7 @@ ensure_updater() {
                 chmod 755 "$UPDATER_PATH"
                 log "Updated local bootstrap updater"
             fi
+            install_updater_libs "$selected_source" "$tmp_dir" || log "Could not refresh updater helper files"
         fi
     elif download_to "$UPDATER_SOURCE" "$candidate_path" && download_to "$UPDATER_HASH_SOURCE" "$candidate_hash_path"; then
         expected_hash=$(expected_hash_from_file "$candidate_hash_path")
@@ -247,6 +285,7 @@ ensure_updater() {
                 chmod 755 "$UPDATER_PATH"
                 log "Updated local bootstrap updater"
             fi
+            install_updater_libs "$UPDATER_SOURCE" "$tmp_dir" || log "Could not refresh updater helper files"
         fi
     else
         log "Could not refresh updater from source; falling back to local updater if present"

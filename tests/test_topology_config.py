@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 from venus_evcharger.backend.config import (
     _adapter_type_from_config_path,
@@ -26,6 +26,7 @@ from venus_evcharger.topology.config import (
     _legacy_hybrid_measurement_config,
     _legacy_measurement_config,
     _legacy_native_measurement_config,
+    _legacy_runtime_values,
     _optional_text,
     _validate_measurement,
     TopologyConfigError,
@@ -41,6 +42,21 @@ from venus_evcharger.topology.schema import (
 
 
 class TopologyConfigTests(unittest.TestCase):
+    def test_legacy_runtime_values_handles_configs_without_default_mapping(self) -> None:
+        class _NoDefaultConfig:
+            def __contains__(self, key: str) -> bool:
+                return False
+
+            def has_section(self, name: str) -> bool:
+                return False
+
+        runtime = _legacy_runtime_values(cast(Any, _NoDefaultConfig()))
+
+        self.assertEqual(runtime.defaults, {})
+        self.assertEqual(runtime.host, "")
+        self.assertEqual(runtime.meter_type, "shelly_meter")
+        self.assertEqual(runtime.switch_type, "shelly_contactor_switch")
+
     def test_parse_simple_relay_with_fixed_reference(self) -> None:
         parser = configparser.ConfigParser()
         parser.read_string(

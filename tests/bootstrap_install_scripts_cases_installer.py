@@ -9,11 +9,17 @@ from tests.bootstrap_install_scripts_cases_common import (
     subprocess,
     tempfile,
     UPDATER_HASH,
+    UPDATER_LIB_DIR,
     UPDATER_SCRIPT,
 )
 
 
 class _BootstrapInstallScriptsInstallerCases(_BootstrapInstallScriptsBase):
+    def _assert_cached_updater_libs(self, bootstrap_dir: Path) -> None:
+        cached_lib_dir = bootstrap_dir / ".venus-evcharger-bootstrap/bootstrap_updater.d"
+        expected_names = sorted(path.name for path in UPDATER_LIB_DIR.glob("*.sh"))
+        self.assertEqual(sorted(path.name for path in cached_lib_dir.glob("*.sh")), expected_names)
+
     def test_bootstrap_checked_in_updater_hash_matches_updater_script(self) -> None:
         expected_hash = hashlib.sha256(UPDATER_SCRIPT.read_bytes()).hexdigest()
         self.assertEqual(UPDATER_HASH.read_text(encoding="utf-8").split()[0], expected_hash)
@@ -69,6 +75,7 @@ class _BootstrapInstallScriptsInstallerCases(_BootstrapInstallScriptsBase):
             updater_copy = updater_dir / "bootstrap_updater.sh"
             updater_copy.write_text(UPDATER_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
             updater_copy.chmod(0o755)
+            self._copy_updater_libs(updater_dir)
             updater_hash = hashlib.sha256(updater_copy.read_bytes()).hexdigest()
             (updater_dir / "bootstrap_updater.sh.sha256").write_text(
                 f"{updater_hash}  bootstrap_updater.sh\n",
@@ -89,6 +96,7 @@ class _BootstrapInstallScriptsInstallerCases(_BootstrapInstallScriptsBase):
             cached_updater = bootstrap_dir / ".venus-evcharger-bootstrap/bootstrap_updater.sh"
             self.assertTrue(cached_updater.is_file())
             self.assertEqual(hashlib.sha256(cached_updater.read_bytes()).hexdigest(), updater_hash)
+            self._assert_cached_updater_libs(bootstrap_dir)
             self.assertTrue((target_dir / "installed.txt").is_file())
             self.assertEqual((target_dir / "installed.txt").read_text(encoding="utf-8"), "installed-without-manifest\n")
 
@@ -161,6 +169,7 @@ class _BootstrapInstallScriptsInstallerCases(_BootstrapInstallScriptsBase):
             )
 
             self.assertTrue((bootstrap_dir / ".venus-evcharger-bootstrap/bootstrap_updater.sh").is_file())
+            self._assert_cached_updater_libs(bootstrap_dir)
             self.assertTrue((target_dir / "installed.txt").is_file())
             self.assertEqual((target_dir / "installed.txt").read_text(encoding="utf-8"), "installed\n")
             self.assertTrue((target_dir / "deploy/venus/install_venus_evcharger_service.sh").is_file())

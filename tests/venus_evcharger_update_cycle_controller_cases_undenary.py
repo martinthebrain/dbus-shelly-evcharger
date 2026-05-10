@@ -121,7 +121,7 @@ class TestUpdateCycleControllerUndenary(UpdateCycleControllerTestBase):
         self.assertEqual(service._last_status_source, "charger-status-finished")
         self.assertEqual(service._last_charger_fault_active, 0)
 
-    def test_session_state_from_status_prefers_fresh_native_charger_enabled_readback(self):
+    def test_session_state_from_status_resets_idle_native_charger_session(self):
         service = SimpleNamespace(
             _charger_backend=SimpleNamespace(),
             _last_charger_state_enabled=True,
@@ -134,7 +134,9 @@ class TestUpdateCycleControllerUndenary(UpdateCycleControllerTestBase):
 
         charging_time, session_energy = controller.session_state_from_status(service, 1, 2.0, False, 100.0)
 
-        self.assertEqual((charging_time, session_energy), (10, 1.0))
+        self.assertEqual((charging_time, session_energy), (0, 0.0))
+        self.assertIsNone(service.charging_started_at)
+        self.assertEqual(service.energy_at_start, 2.0)
 
     def test_apply_relay_decision_uses_native_charger_backend_when_available(self):
         charger_backend = SimpleNamespace(set_enabled=MagicMock())

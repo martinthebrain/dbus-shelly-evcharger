@@ -14,10 +14,19 @@ from venus_evcharger.core.contracts import normalized_bootstrap_update_status_fi
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP_SCRIPT = REPO_ROOT / "install.sh"
 UPDATER_SCRIPT = REPO_ROOT / "deploy/venus/bootstrap_updater.sh"
+UPDATER_LIB_DIR = REPO_ROOT / "deploy/venus/bootstrap_updater.d"
 UPDATER_HASH = REPO_ROOT / "deploy/venus/bootstrap_updater.sh.sha256"
 
 
 class _BootstrapInstallScriptsBase(unittest.TestCase):
+    def _copy_updater_libs(self, destination_dir: Path) -> None:
+        destination_lib_dir = destination_dir / "bootstrap_updater.d"
+        destination_lib_dir.mkdir(parents=True, exist_ok=True)
+        for source_path in UPDATER_LIB_DIR.glob("*.sh"):
+            target_path = destination_lib_dir / source_path.name
+            target_path.write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
+            target_path.chmod(0o755)
+
     def _read_normalized_status(self, target_dir: Path) -> dict[str, object]:
         raw_status = json.loads((target_dir / ".bootstrap-state/update_status.json").read_text(encoding="utf-8"))
         return normalized_bootstrap_update_status_fields(raw_status)
