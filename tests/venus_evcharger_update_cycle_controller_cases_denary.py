@@ -3,6 +3,34 @@ from tests.venus_evcharger_update_cycle_controller_support import *
 
 
 class TestUpdateCycleControllerDenary(UpdateCycleControllerTestBase):
+    def test_prepare_update_cycle_supervises_io_worker_only_when_topology_is_configured(self):
+        configured_service = SimpleNamespace(
+            topology_configured=True,
+            _start_io_worker=MagicMock(),
+            _watchdog_recover=MagicMock(),
+            _ensure_auto_input_helper_process=MagicMock(),
+            _refresh_auto_input_snapshot=MagicMock(),
+            _get_worker_snapshot=MagicMock(return_value={"ok": True}),
+        )
+
+        self.assertEqual(UpdateCycleController.prepare_update_cycle(configured_service, 100.0), {"ok": True})
+
+        configured_service._start_io_worker.assert_called_once_with()
+        configured_service._watchdog_recover.assert_called_once_with(100.0)
+
+        unconfigured_service = SimpleNamespace(
+            topology_configured=False,
+            _start_io_worker=MagicMock(),
+            _watchdog_recover=MagicMock(),
+            _ensure_auto_input_helper_process=MagicMock(),
+            _refresh_auto_input_snapshot=MagicMock(),
+            _get_worker_snapshot=MagicMock(return_value={}),
+        )
+
+        self.assertEqual(UpdateCycleController.prepare_update_cycle(unconfigured_service, 101.0), {})
+
+        unconfigured_service._start_io_worker.assert_not_called()
+
     def test_publish_online_update_prefers_fresh_native_charger_measurements(self):
         service = SimpleNamespace(
             phase="L1",

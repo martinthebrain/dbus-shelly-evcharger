@@ -62,6 +62,24 @@ tail -f /var/volatile/log/dbus-venus-evcharger/auto-reasons.log
 - `/Auto/ScheduledFallbackStart`
 - `/Auto/ScheduledBoostUntil`
 
+## Scheduled Mode Recovery
+
+In `Mode=2` (`Scheduled/Plan`), `/StartStop=1` does not force the relay on.
+It only allows the scheduled/Auto policy to charge. For immediate manual
+charging, switch to manual mode first and then start:
+
+```bash
+dbus -y com.victronenergy.evcharger.http_60 /Mode SetValue 0
+dbus -y com.victronenergy.evcharger.http_60 /StartStop SetValue 1
+```
+
+If the service UI stops updating, restart the service before rebooting the GX:
+
+```bash
+svc -t /service/dbus-venus-evcharger
+tail -n 200 /var/volatile/log/dbus-venus-evcharger/current
+```
+
 ## Phase And Contactor Diagnostics
 
 - `/Auto/PhaseObserved`

@@ -235,9 +235,11 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
     ) -> bool:
         """Publish session, config, and diagnostic values derived from the live state."""
         svc = self.service
-        phase_energies = self.phase_energies_for_total(svc, current_total_energy)
+        # Shelly ``aenergy.total`` is a lifetime counter. Venus' EV-charger UI
+        # expects the charger-facing energy paths to describe the active charge.
+        phase_energies = self.phase_energies_for_total(svc, session_energy)
         changed = svc._publish_energy_time_measurements(
-            current_total_energy,
+            session_energy,
             phase_energies,
             charging_time,
             session_energy,
@@ -282,6 +284,10 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
     @staticmethod
     def prepare_update_cycle(svc: Any, now: float) -> Any:
         """Run pre-update recovery/supervision hooks and return the latest worker snapshot."""
+        start_io_worker = getattr(svc, "_start_io_worker", None)
+        topology_configured = bool(getattr(svc, "topology_configured", getattr(svc, "host_configured", False)))
+        if topology_configured and callable(start_io_worker):
+            start_io_worker()
         svc._watchdog_recover(now)
         svc._ensure_auto_input_helper_process(now)
         svc._refresh_auto_input_snapshot(now)

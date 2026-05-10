@@ -118,6 +118,8 @@ class TestShellyWallboxHelpersQuaternary(ShellyWallboxHelpersTestBase):
         self.assertEqual(service._dbusservice["/ChargingTime"], 30)
         self.assertEqual(service._dbusservice["/Session/Time"], 30)
         self.assertEqual(service._dbusservice["/Session/Energy"], 1.25)
+        self.assertEqual(service._dbusservice["/Ac/Energy/Forward"], 1.25)
+        self.assertEqual(service._dbusservice["/Ac/L1/Energy/Forward"], 1.25)
         self.assertEqual(service.charging_started_at, 100.0)
 
     def test_update_virtual_state_keeps_startstop_enabled_in_auto_while_waiting(self):
