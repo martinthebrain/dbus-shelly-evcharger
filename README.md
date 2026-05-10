@@ -122,13 +122,19 @@ and multiple physical devices can share the same profile.
 
 ## Quick Start
 
-1. Copy or clone the repository to a writable path under `/data`, for example:
+1. On Venus OS, download the repository archive into a writable path under
+   `/data`. Venus OS does not need `git` for this path:
 
    ```bash
-   cd /data
-   git clone https://github.com/martinthebrain/venus-evcharger-service.git
-   cd venus-evcharger-service
+   mkdir -p /data/venus-evcharger
+   cd /data/venus-evcharger
+   wget -O venus-evcharger-service.tar.gz https://codeload.github.com/martinthebrain/venus-evcharger-service/tar.gz/refs/heads/main
+   tar -xzf venus-evcharger-service.tar.gz
+   cd venus-evcharger-service-main
    ```
+
+   If your image has `curl` instead of `wget`, use
+   `curl -fsSL -o venus-evcharger-service.tar.gz https://codeload.github.com/martinthebrain/venus-evcharger-service/tar.gz/refs/heads/main`.
 
 2. Configure the installation:
 
@@ -137,7 +143,8 @@ and multiple physical devices can share the same profile.
    ```
 
    You can also edit [deploy/venus/config.venus_evcharger.ini](deploy/venus/config.venus_evcharger.ini)
-   directly.
+   directly. Configure the Shelly/charger details before installing the service
+   on a live GX device.
 
 3. Install the service:
 
@@ -154,6 +161,23 @@ and multiple physical devices can share the same profile.
    ```
 
 For a detailed installation walkthrough, see [INSTALL.md](INSTALL.md).
+
+If the service was installed before configuration, stop it first, adjust the
+config, then restart it:
+
+```bash
+svc -d /service/dbus-venus-evcharger
+./deploy/venus/configure_venus_evcharger_service.sh
+./deploy/venus/install_venus_evcharger_service.sh
+svc -t /service/dbus-venus-evcharger
+```
+
+On a development machine with `git`, cloning the repository is also fine:
+
+```bash
+git clone https://github.com/martinthebrain/venus-evcharger-service.git
+cd venus-evcharger-service
+```
 
 ## Control And State APIs
 
