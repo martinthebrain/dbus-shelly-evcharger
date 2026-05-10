@@ -34,6 +34,44 @@ class TestShellyIoControllerQuaternary(ShellyIoControllerTestBase):
         thread.start.assert_called_once_with()
         service._ensure_auto_input_helper_process.assert_called_once_with()
 
+    def test_start_io_worker_restarts_stale_alive_worker_with_fresh_stop_event_and_session(self):
+        stale_thread = MagicMock()
+        stale_thread.is_alive.return_value = True
+        old_stop_event = MagicMock()
+        old_session = MagicMock()
+        new_stop_event = MagicMock()
+        new_session = MagicMock()
+        service = SimpleNamespace(
+            _ensure_worker_state=MagicMock(),
+            _worker_thread=stale_thread,
+            _worker_stop_event=old_stop_event,
+            _worker_session=old_session,
+            _worker_poll_interval_seconds=1.0,
+            shelly_request_timeout_seconds=2.0,
+            relay_sync_timeout_seconds=2.0,
+            _time_now=MagicMock(return_value=100.0),
+            _get_worker_snapshot=MagicMock(return_value={"captured_at": 90.0}),
+            _warning_throttled=MagicMock(),
+            _ensure_auto_input_helper_process=MagicMock(),
+        )
+        controller = ShellyIoController(service)
+        new_thread = MagicMock()
+
+        with (
+            patch("venus_evcharger.backend.shelly_io_worker.threading.Event", return_value=new_stop_event),
+            patch("venus_evcharger.backend.shelly_io_worker.requests.Session", return_value=new_session),
+            patch("venus_evcharger.backend.shelly_io_worker.threading.Thread", return_value=new_thread),
+        ):
+            controller.start_io_worker()
+
+        old_stop_event.set.assert_called_once_with()
+        old_session.close.assert_called_once_with()
+        self.assertIs(service._worker_stop_event, new_stop_event)
+        self.assertIs(service._worker_session, new_session)
+        self.assertIs(service._worker_thread, new_thread)
+        new_thread.start.assert_called_once_with()
+        service._warning_throttled.assert_called_once()
+
     def test_helper_edges_cover_phase_vectors_runtime_cache_and_split_retry_paths(self):
         self.assertEqual(_single_phase_vector(9.0, "L2"), (0.0, 9.0, 0.0))
         self.assertEqual(_single_phase_vector(9.0, "L3"), (0.0, 0.0, 9.0))

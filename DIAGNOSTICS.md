@@ -62,6 +62,24 @@ tail -f /var/volatile/log/dbus-venus-evcharger/auto-reasons.log
 - `/Auto/ScheduledFallbackStart`
 - `/Auto/ScheduledBoostUntil`
 
+## Scheduled Mode Recovery
+
+In `Mode=2` (`Scheduled/Plan`), `/StartStop=1` does not force the relay on.
+It only allows the scheduled/Auto policy to charge. For immediate manual
+charging, switch to manual mode first and then start:
+
+```bash
+dbus -y com.victronenergy.evcharger.http_60 /Mode SetValue 0
+dbus -y com.victronenergy.evcharger.http_60 /StartStop SetValue 1
+```
+
+If the service UI stops updating, restart the service before rebooting the GX:
+
+```bash
+svc -t /service/dbus-venus-evcharger
+tail -n 200 /var/volatile/log/dbus-venus-evcharger/current
+```
+
 ## Phase And Contactor Diagnostics
 
 - `/Auto/PhaseObserved`
@@ -132,3 +150,32 @@ python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-meter.ini
 python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-switch.ini
 python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-charger.ini
 ```
+
+## Local Shelly RPC Emulator
+
+For Venus OS smoke tests without a physical Shelly relay, a small RPC emulator
+can run on another machine in the same LAN:
+
+```bash
+python3 ./scripts/dev/mock_shelly_rpc.py --bind 0.0.0.0 --port 8080
+```
+
+Point the Venus config to that host including the port:
+
+```ini
+Host=192.168.1.25:8080
+```
+
+Supported RPC endpoints:
+
+- `GET /rpc/Shelly.GetDeviceInfo`
+- `GET /rpc/Switch.GetStatus?id=0`
+- `GET /rpc/Switch.Set?id=0&on=true|false`
+
+Fault injection and state changes:
+
+- `GET /__admin/state?relay=1&apower=2300&current=10&voltage=230&total_energy_wh=12500`
+- `GET /__admin/fault?mode=http500`
+- `GET /__admin/fault?mode=timeout&seconds=5`
+- `GET /__admin/fault?mode=badjson`
+- `GET /__admin/reset`

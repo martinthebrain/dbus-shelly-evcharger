@@ -11,17 +11,33 @@ This guide covers the usual installation paths for Venus OS and Cerbo GX.
 
 ## Standard Install
 
-1. Copy the repository to a writable path under `/data`, for example:
+1. Download the repository archive into a writable path under `/data`. Venus OS
+   images usually do not include `git`, so the device install path uses `wget`
+   or `curl`:
 
    ```bash
-   /data/shellyWB
+   mkdir -p /data/venus-evcharger
+   cd /data/venus-evcharger
+   wget -O venus-evcharger-service.tar.gz https://codeload.github.com/martinthebrain/venus-evcharger-service/tar.gz/refs/heads/main
+   tar -xzf venus-evcharger-service.tar.gz
+   cd venus-evcharger-service-main
    ```
 
-2. Edit:
+   If `wget` is not available but `curl` is, replace the download line with:
+
+   ```bash
+   curl -fsSL -o venus-evcharger-service.tar.gz https://codeload.github.com/martinthebrain/venus-evcharger-service/tar.gz/refs/heads/main
+   ```
+
+2. Edit or generate the configuration:
 
    ```bash
    deploy/venus/config.venus_evcharger.ini
    ```
+
+   Do this before the first live start on a GX device. For a relay-backed
+   installation, verify that the configured device is the intended switching
+   path before enabling Auto mode.
 
 3. Set the core deployment values:
 
@@ -34,7 +50,6 @@ This guide covers the usual installation paths for Venus OS and Cerbo GX.
 4. Run the installer:
 
    ```bash
-   cd /data/shellyWB
    ./deploy/venus/install_venus_evcharger_service.sh
    ```
 
@@ -99,16 +114,45 @@ This guide covers the usual installation paths for Venus OS and Cerbo GX.
    `CONTROL_API_READ_TOKEN`, `CONTROL_API_CONTROL_TOKEN`, and set `TRY_WRITE=1`
    only when you intentionally want to attempt one safe live write.
 
+## Installed Before Configuration
+
+If the service is already installed with placeholder values, stop it before
+setting a real Shelly or charger host:
+
+```bash
+svc -d /service/dbus-venus-evcharger
+```
+
+Then edit `deploy/venus/config.venus_evcharger.ini` or run the wizard from the
+installed code directory. Re-run the installer to restore links and executable
+bits, then restart the service:
+
+```bash
+./deploy/venus/install_venus_evcharger_service.sh
+svc -t /service/dbus-venus-evcharger
+svstat /service/dbus-venus-evcharger
+```
+
 ## One-File Bootstrap Install
 
 `install.sh` supports a small bootstrap flow for GX deployments.
 
 Typical flow:
 
-1. copy `install.sh` into a directory under `/data`
+1. copy or download `install.sh` into a directory under `/data`
 2. run it there
 3. let it materialize the working tree
 4. let it call the regular Venus installer from the refreshed tree
+
+Example:
+
+```bash
+mkdir -p /data/venus-evcharger
+cd /data/venus-evcharger
+wget -O install.sh https://raw.githubusercontent.com/martinthebrain/venus-evcharger-service/main/install.sh
+chmod +x install.sh
+./install.sh
+```
 
 Bootstrap highlights:
 
@@ -130,6 +174,16 @@ Useful variables:
 
 The full bootstrap and updater behavior, including `noUpdate`, is documented in
 [UPDATE_FLOW.md](UPDATE_FLOW.md).
+
+## Development Checkout
+
+On a development machine with `git`, you can work from a normal checkout and
+copy the result to a GX device when needed:
+
+```bash
+git clone https://github.com/martinthebrain/venus-evcharger-service.git
+cd venus-evcharger-service
+```
 
 ## Configuration Patterns
 

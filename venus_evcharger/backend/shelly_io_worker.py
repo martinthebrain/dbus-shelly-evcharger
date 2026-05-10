@@ -8,6 +8,8 @@ from __future__ import annotations
 import threading
 from typing import Any, cast
 
+import requests
+
 from venus_evcharger.backend.modbus_transport import modbus_transport_issue_reason
 from venus_evcharger.backend.shelly_io_types import PendingRelayCommand, ShellyEnergyData, ShellyPmStatus
 
@@ -203,7 +205,8 @@ class ShellyIoWorkerMixin:
     def io_worker_loop(self) -> None:
         svc = self.service
         svc._ensure_worker_state()
-        while not svc._worker_stop_event.is_set():
+        stop_event = svc._worker_stop_event
+        while not stop_event.is_set():
             cycle_started = svc._time_now()
             try:
                 self.io_worker_once()
@@ -217,12 +220,66 @@ class ShellyIoWorkerMixin:
                 )
 
             wait_seconds = max(0.05, svc._worker_poll_interval_seconds - (svc._time_now() - cycle_started))
-            if svc._worker_stop_event.wait(wait_seconds):
+            if stop_event.wait(wait_seconds):
                 break
+
+    @staticmethod
+    def _worker_stale_restart_seconds(svc: Any) -> float:
+        poll_seconds = max(0.2, float(getattr(svc, "_worker_poll_interval_seconds", 1.0) or 1.0))
+        request_timeout = max(0.0, float(getattr(svc, "shelly_request_timeout_seconds", 2.0) or 2.0))
+        relay_sync_timeout = max(0.0, float(getattr(svc, "relay_sync_timeout_seconds", 2.0) or 2.0))
+        return max(5.0, poll_seconds * 5.0, request_timeout * 3.0, relay_sync_timeout * 2.0)
+
+    @staticmethod
+    def _worker_snapshot_age(svc: Any, now: float) -> float | None:
+        get_snapshot = getattr(svc, "_get_worker_snapshot", None)
+        if not callable(get_snapshot):
+            return None
+        try:
+            snapshot = get_snapshot()
+        except Exception:
+            return None
+        if not isinstance(snapshot, dict):
+            return None
+        captured_at = snapshot.get("captured_at")
+        if not isinstance(captured_at, (int, float)) or isinstance(captured_at, bool):
+            return None
+        return max(0.0, float(now) - float(captured_at))
+
+    @classmethod
+    def _worker_thread_stale(cls, svc: Any, now: float) -> bool:
+        thread = getattr(svc, "_worker_thread", None)
+        if thread is None or not thread.is_alive():
+            return False
+        snapshot_age = cls._worker_snapshot_age(svc, now)
+        return snapshot_age is not None and snapshot_age > cls._worker_stale_restart_seconds(svc)
+
+    def _restart_stale_io_worker(self, now: float) -> None:
+        svc = self.service
+        stale_after = self._worker_stale_restart_seconds(svc)
+        snapshot_age = self._worker_snapshot_age(svc, now)
+        svc._warning_throttled(
+            "io-worker-stale-restart",
+            stale_after,
+            "Background I/O worker stale for %.1fs, restarting worker session",
+            -1.0 if snapshot_age is None else snapshot_age,
+        )
+        stop_event = getattr(svc, "_worker_stop_event", None)
+        if stop_event is not None and hasattr(stop_event, "set"):
+            stop_event.set()
+        session = getattr(svc, "_worker_session", None)
+        if session is not None and hasattr(session, "close"):
+            session.close()
+        svc._worker_stop_event = threading.Event()
+        svc._worker_session = requests.Session()
+        svc._worker_thread = None
 
     def start_io_worker(self) -> None:
         svc = self.service
         svc._ensure_worker_state()
+        current = self._runtime_now()
+        if self._worker_thread_stale(svc, current):
+            self._restart_stale_io_worker(current)
         if svc._worker_thread is None or not svc._worker_thread.is_alive():
             svc._worker_thread = threading.Thread(
                 target=self.io_worker_loop,
