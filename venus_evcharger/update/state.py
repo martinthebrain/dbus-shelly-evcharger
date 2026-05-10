@@ -50,17 +50,6 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
         current = float(now) if now is not None else time.time()
         return abs(current - state_at) > cls._charger_state_max_age_seconds(svc)
 
-    @classmethod
-    def _effective_session_enabled_state(
-        cls,
-        svc: Any,
-        relay_on: bool,
-        now: float | None = None,
-    ) -> bool:
-        """Return the best-known enabled state for session/UI calculations."""
-        charger_enabled = cls._fresh_charger_enabled_readback(svc, now)
-        return bool(relay_on) if charger_enabled is None else bool(charger_enabled)
-
     @staticmethod
     def _fallback_local_pm_status(pm_status: dict[str, Any], relay_on: bool) -> dict[str, Any]:
         """Return one synthesized local PM payload when no helper publish is available."""
@@ -168,17 +157,14 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
         now: float,
     ) -> tuple[int, float]:
         """Compute current session timing and energy values."""
-        effective_enabled = cls._effective_session_enabled_state(svc, relay_on, now)
-        if cls._session_active(status, effective_enabled, svc.charging_started_at):
+        if cls._session_active(status):
             return cls._active_session_state(svc, current_total_energy, now)
-        if not effective_enabled:
-            return cls._reset_session_state(svc, current_total_energy)
-        return 0, cls._session_energy(current_total_energy, svc.energy_at_start)
+        return cls._reset_session_state(svc, current_total_energy)
 
     @staticmethod
-    def _session_active(status: int, effective_enabled: bool, charging_started_at: object) -> bool:
+    def _session_active(status: int) -> bool:
         """Return whether the current status should keep the session active."""
-        return status == 2 or (effective_enabled and charging_started_at is not None)
+        return status == 2
 
     @classmethod
     def _active_session_state(cls, svc: Any, current_total_energy: float, now: float) -> tuple[int, float]:

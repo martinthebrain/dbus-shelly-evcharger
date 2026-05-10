@@ -169,7 +169,9 @@ class TestUpdateCycleControllerDenary(UpdateCycleControllerTestBase):
         controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
 
         charging_time, session_energy = controller.session_state_from_status(service, 1, 2.0, True, 100.0)
-        self.assertEqual((charging_time, session_energy), (0, 0.5))
+        self.assertEqual((charging_time, session_energy), (0, 0.0))
+        self.assertIsNone(service.charging_started_at)
+        self.assertEqual(service.energy_at_start, 2.0)
 
         self.assertEqual(
             controller.phase_energies_for_total(service, 6.0),

@@ -231,7 +231,14 @@ class ShellyIoWorkerMixin:
         return max(5.0, poll_seconds * 5.0, request_timeout * 3.0, relay_sync_timeout * 2.0)
 
     @staticmethod
-    def _worker_snapshot_age(svc: Any, now: float) -> float | None:
+    def _worker_snapshot_captured_at(svc: Any) -> float | None:
+        snapshot = ShellyIoWorkerMixin._worker_snapshot_payload(svc)
+        if snapshot is None:
+            return None
+        return ShellyIoWorkerMixin._worker_snapshot_number(snapshot, "captured_at")
+
+    @staticmethod
+    def _worker_snapshot_payload(svc: Any) -> dict[str, Any] | None:
         get_snapshot = getattr(svc, "_get_worker_snapshot", None)
         if not callable(get_snapshot):
             return None
@@ -241,10 +248,21 @@ class ShellyIoWorkerMixin:
             return None
         if not isinstance(snapshot, dict):
             return None
-        captured_at = snapshot.get("captured_at")
-        if not isinstance(captured_at, (int, float)) or isinstance(captured_at, bool):
+        return cast(dict[str, Any], snapshot)
+
+    @staticmethod
+    def _worker_snapshot_number(snapshot: dict[str, Any], key: str) -> float | None:
+        value = snapshot.get(key)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
             return None
-        return max(0.0, float(now) - float(captured_at))
+        return float(value)
+
+    @classmethod
+    def _worker_snapshot_age(cls, svc: Any, now: float) -> float | None:
+        captured_at = cls._worker_snapshot_captured_at(svc)
+        if captured_at is None:
+            return None
+        return max(0.0, float(now) - captured_at)
 
     @classmethod
     def _worker_thread_stale(cls, svc: Any, now: float) -> bool:
@@ -262,17 +280,27 @@ class ShellyIoWorkerMixin:
             "io-worker-stale-restart",
             stale_after,
             "Background I/O worker stale for %.1fs, restarting worker session",
-            -1.0 if snapshot_age is None else snapshot_age,
+            self._display_snapshot_age(snapshot_age),
         )
-        stop_event = getattr(svc, "_worker_stop_event", None)
-        if stop_event is not None and hasattr(stop_event, "set"):
-            stop_event.set()
-        session = getattr(svc, "_worker_session", None)
-        if session is not None and hasattr(session, "close"):
-            session.close()
+        self._set_object_event(getattr(svc, "_worker_stop_event", None))
+        self._close_object(getattr(svc, "_worker_session", None))
         svc._worker_stop_event = threading.Event()
         svc._worker_session = requests.Session()
         svc._worker_thread = None
+
+    @staticmethod
+    def _display_snapshot_age(snapshot_age: float | None) -> float:
+        return -1.0 if snapshot_age is None else float(snapshot_age)
+
+    @staticmethod
+    def _set_object_event(candidate: Any) -> None:
+        if candidate is not None and hasattr(candidate, "set"):
+            candidate.set()
+
+    @staticmethod
+    def _close_object(candidate: Any) -> None:
+        if candidate is not None and hasattr(candidate, "close"):
+            candidate.close()
 
     def start_io_worker(self) -> None:
         svc = self.service

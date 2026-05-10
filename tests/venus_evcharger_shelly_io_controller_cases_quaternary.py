@@ -72,6 +72,62 @@ class TestShellyIoControllerQuaternary(ShellyIoControllerTestBase):
         new_thread.start.assert_called_once_with()
         service._warning_throttled.assert_called_once()
 
+    def test_start_io_worker_keeps_alive_worker_when_snapshot_read_fails(self):
+        alive_thread = MagicMock()
+        alive_thread.is_alive.return_value = True
+        service = SimpleNamespace(
+            _ensure_worker_state=MagicMock(),
+            _worker_thread=alive_thread,
+            _worker_poll_interval_seconds=1.0,
+            shelly_request_timeout_seconds=2.0,
+            relay_sync_timeout_seconds=2.0,
+            _get_worker_snapshot=MagicMock(side_effect=RuntimeError("snapshot unavailable")),
+            _ensure_auto_input_helper_process=MagicMock(),
+        )
+        controller = ShellyIoController(service)
+
+        with patch("venus_evcharger.backend.shelly_io_worker.threading.Thread") as thread_factory:
+            controller.start_io_worker()
+
+        thread_factory.assert_not_called()
+        service._ensure_auto_input_helper_process.assert_called_once_with()
+
+    def test_worker_snapshot_age_ignores_invalid_snapshot_shapes(self):
+        service = SimpleNamespace(_get_worker_snapshot=MagicMock(return_value=None))
+        self.assertIsNone(ShellyIoController._worker_snapshot_age(service, 100.0))
+
+        service._get_worker_snapshot = MagicMock(return_value={"captured_at": "bad"})
+        self.assertIsNone(ShellyIoController._worker_snapshot_age(service, 100.0))
+
+        service._get_worker_snapshot = MagicMock(return_value={"captured_at": True})
+        self.assertIsNone(ShellyIoController._worker_snapshot_age(service, 100.0))
+
+    def test_restart_stale_io_worker_tolerates_missing_stop_and_close_methods(self):
+        service = SimpleNamespace(
+            _worker_poll_interval_seconds=1.0,
+            shelly_request_timeout_seconds=2.0,
+            relay_sync_timeout_seconds=2.0,
+            _get_worker_snapshot=MagicMock(return_value={}),
+            _warning_throttled=MagicMock(),
+            _worker_stop_event=object(),
+            _worker_session=object(),
+        )
+        controller = ShellyIoController(service)
+        new_stop_event = MagicMock()
+        new_session = MagicMock()
+
+        with (
+            patch("venus_evcharger.backend.shelly_io_worker.threading.Event", return_value=new_stop_event),
+            patch("venus_evcharger.backend.shelly_io_worker.requests.Session", return_value=new_session),
+        ):
+            controller._restart_stale_io_worker(100.0)
+
+        service._warning_throttled.assert_called_once()
+        self.assertEqual(service._warning_throttled.call_args.args[-1], -1.0)
+        self.assertIs(service._worker_stop_event, new_stop_event)
+        self.assertIs(service._worker_session, new_session)
+        self.assertIsNone(service._worker_thread)
+
     def test_helper_edges_cover_phase_vectors_runtime_cache_and_split_retry_paths(self):
         self.assertEqual(_single_phase_vector(9.0, "L2"), (0.0, 9.0, 0.0))
         self.assertEqual(_single_phase_vector(9.0, "L3"), (0.0, 0.0, 9.0))

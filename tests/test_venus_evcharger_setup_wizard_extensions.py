@@ -6,12 +6,78 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 from venus_evcharger.bootstrap.wizard import WizardAnswers, configure_wallbox, default_template_path, main
 
 
 class TestShellyWallboxSetupWizardExtensions(unittest.TestCase):
+    def _simple_relay_config(self, temp_dir: str, device_instance: int = 76) -> Path:
+        config_path = Path(temp_dir) / "config.ini"
+        configure_wallbox(
+            WizardAnswers(
+                profile="simple_relay",
+                host_input="192.168.1.44",
+                meter_host_input=None,
+                switch_host_input=None,
+                charger_host_input=None,
+                device_instance=device_instance,
+                phase="L1",
+                policy_mode="manual",
+                digest_auth=False,
+                username="",
+                password="",
+                charger_backend=None,
+            ),
+            config_path=config_path,
+            template_path=default_template_path(),
+            imported_from=None,
+        )
+        return config_path
+
+    def _run_json_inventory_action(self, config_path: Path, args: list[str]) -> tuple[int, dict[str, object]]:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            rc = main(["--json", "--non-interactive", "--config-path", str(config_path), *args])
+        return rc, json.loads(stdout.getvalue())
+
+    @staticmethod
+    def _inventory_profile(payload: dict[str, object], profile_id: str) -> dict[str, object]:
+        return cast(dict[str, object], TestShellyWallboxSetupWizardExtensions._inventory_item(payload, "profiles", profile_id))
+
+    @staticmethod
+    def _inventory_binding(payload: dict[str, object], binding_id: str) -> dict[str, object]:
+        return cast(dict[str, object], TestShellyWallboxSetupWizardExtensions._inventory_item(payload, "bindings", binding_id))
+
+    @staticmethod
+    def _inventory_item(payload: dict[str, object], collection_key: str, item_id: str) -> object:
+        items = TestShellyWallboxSetupWizardExtensions._inventory_collection(payload, collection_key)
+        item = next(filter(lambda candidate: TestShellyWallboxSetupWizardExtensions._has_item_id(candidate, item_id), items), None)
+        if item is not None:
+            return item
+        raise AssertionError(f"inventory item not found: {collection_key}.{item_id}")
+
+    @staticmethod
+    def _inventory_collection(payload: dict[str, object], collection_key: str) -> list[object]:
+        inventory = payload["inventory"]
+        assert isinstance(inventory, dict)
+        items = inventory[collection_key]
+        assert isinstance(items, list)
+        return items
+
+    @staticmethod
+    def _has_item_id(candidate: object, item_id: str) -> bool:
+        return isinstance(candidate, dict) and candidate.get("id") == item_id
+
+    @staticmethod
+    def _inventory_has_binding(payload: dict[str, object], binding_id: str) -> bool:
+        inventory = payload["inventory"]
+        assert isinstance(inventory, dict)
+        bindings = inventory["bindings"]
+        assert isinstance(bindings, list)
+        return any(isinstance(binding, dict) and binding["id"] == binding_id for binding in bindings)
+
     def test_configure_wallbox_applies_policy_tuning_and_goe_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.ini"
@@ -302,173 +368,111 @@ class TestShellyWallboxSetupWizardExtensions(unittest.TestCase):
 
     def test_main_inventory_can_add_profile_capability_and_binding_member(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            config_path = Path(temp_dir) / "config.ini"
-            configure_wallbox(
-                WizardAnswers(
-                    profile="simple_relay",
-                    host_input="192.168.1.44",
-                    meter_host_input=None,
-                    switch_host_input=None,
-                    charger_host_input=None,
-                    device_instance=76,
-                    phase="L1",
-                    policy_mode="manual",
-                    digest_auth=False,
-                    username="",
-                    password="",
-                    charger_backend=None,
-                ),
-                config_path=config_path,
-                template_path=default_template_path(),
-                imported_from=None,
-            )
+            config_path = self._simple_relay_config(temp_dir)
 
-            add_profile_stdout = io.StringIO()
-            with redirect_stdout(add_profile_stdout):
-                add_profile_rc = main(
-                    [
-                        "--json",
-                        "--non-interactive",
-                        "--config-path",
-                        str(config_path),
-                        "--inventory-action",
-                        "add-profile",
-                        "--inventory-profile-id",
-                        "custom_node",
-                        "--inventory-label",
-                        "Custom node",
-                        "--inventory-capability-id",
-                        "switch",
-                        "--inventory-kind",
-                        "switch",
-                        "--inventory-adapter-type",
-                        "template_switch",
-                        "--inventory-supported-phases",
-                        "L2",
-                        "--inventory-switching-mode",
-                        "contactor",
-                        "--inventory-supports-feedback",
-                    ]
-                )
-            add_profile_payload = json.loads(add_profile_stdout.getvalue())
+            add_profile_rc, add_profile_payload = self._run_json_inventory_action(
+                config_path,
+                [
+                    "--inventory-action",
+                    "add-profile",
+                    "--inventory-profile-id",
+                    "custom_node",
+                    "--inventory-label",
+                    "Custom node",
+                    "--inventory-capability-id",
+                    "switch",
+                    "--inventory-kind",
+                    "switch",
+                    "--inventory-adapter-type",
+                    "template_switch",
+                    "--inventory-supported-phases",
+                    "L2",
+                    "--inventory-switching-mode",
+                    "contactor",
+                    "--inventory-supports-feedback",
+                ],
+            )
             self.assertEqual(add_profile_rc, 0)
             self.assertEqual(add_profile_payload["profile_id"], "custom_node")
 
-            add_capability_stdout = io.StringIO()
-            with redirect_stdout(add_capability_stdout):
-                add_capability_rc = main(
-                    [
-                        "--json",
-                        "--non-interactive",
-                        "--config-path",
-                        str(config_path),
-                        "--inventory-action",
-                        "add-capability",
-                        "--inventory-profile-id",
-                        "custom_node",
-                        "--inventory-capability-id",
-                        "meter",
-                        "--inventory-kind",
-                        "meter",
-                        "--inventory-adapter-type",
-                        "template_meter",
-                        "--inventory-supported-phases",
-                        "L2",
-                        "--inventory-measures-power",
-                        "--inventory-measures-energy",
-                    ]
-                )
-            add_capability_payload = json.loads(add_capability_stdout.getvalue())
-            self.assertEqual(add_capability_rc, 0)
-            custom_profile = next(
-                profile
-                for profile in add_capability_payload["inventory"]["profiles"]
-                if profile["id"] == "custom_node"
+            add_capability_rc, add_capability_payload = self._run_json_inventory_action(
+                config_path,
+                [
+                    "--inventory-action",
+                    "add-capability",
+                    "--inventory-profile-id",
+                    "custom_node",
+                    "--inventory-capability-id",
+                    "meter",
+                    "--inventory-kind",
+                    "meter",
+                    "--inventory-adapter-type",
+                    "template_meter",
+                    "--inventory-supported-phases",
+                    "L2",
+                    "--inventory-measures-power",
+                    "--inventory-measures-energy",
+                ],
             )
+            self.assertEqual(add_capability_rc, 0)
+            custom_profile = self._inventory_profile(add_capability_payload, "custom_node")
             self.assertEqual(len(custom_profile["capabilities"]), 2)
 
-            add_device_stdout = io.StringIO()
-            with redirect_stdout(add_device_stdout):
-                add_device_rc = main(
-                    [
-                        "--json",
-                        "--non-interactive",
-                        "--config-path",
-                        str(config_path),
-                        "--inventory-action",
-                        "add-device",
-                        "--inventory-profile-id",
-                        "custom_node",
-                        "--inventory-device-id",
-                        "custom_node_l2",
-                        "--inventory-label",
-                        "Custom node L2",
-                        "--inventory-endpoint",
-                        "http://custom-node.local",
-                    ]
-                )
-            add_device_payload = json.loads(add_device_stdout.getvalue())
+            add_device_rc, add_device_payload = self._run_json_inventory_action(
+                config_path,
+                [
+                    "--inventory-action",
+                    "add-device",
+                    "--inventory-profile-id",
+                    "custom_node",
+                    "--inventory-device-id",
+                    "custom_node_l2",
+                    "--inventory-label",
+                    "Custom node L2",
+                    "--inventory-endpoint",
+                    "http://custom-node.local",
+                ],
+            )
             self.assertEqual(add_device_rc, 0)
             self.assertEqual(add_device_payload["device_id"], "custom_node_l2")
 
-            bind_stdout = io.StringIO()
-            with redirect_stdout(bind_stdout):
-                bind_rc = main(
-                    [
-                        "--json",
-                        "--non-interactive",
-                        "--config-path",
-                        str(config_path),
-                        "--inventory-action",
-                        "set-binding-member",
-                        "--inventory-binding-id",
-                        "custom_measurement",
-                        "--inventory-binding-role",
-                        "measurement",
-                        "--inventory-binding-label",
-                        "Custom measurement",
-                        "--inventory-device-id",
-                        "custom_node_l2",
-                        "--inventory-capability-id",
-                        "meter",
-                        "--inventory-member-phases",
-                        "L2",
-                    ]
-                )
-            bind_payload = json.loads(bind_stdout.getvalue())
-            self.assertEqual(bind_rc, 0)
-            custom_binding = next(
-                binding
-                for binding in bind_payload["inventory"]["bindings"]
-                if binding["id"] == "custom_measurement"
+            bind_rc, bind_payload = self._run_json_inventory_action(
+                config_path,
+                [
+                    "--inventory-action",
+                    "set-binding-member",
+                    "--inventory-binding-id",
+                    "custom_measurement",
+                    "--inventory-binding-role",
+                    "measurement",
+                    "--inventory-binding-label",
+                    "Custom measurement",
+                    "--inventory-device-id",
+                    "custom_node_l2",
+                    "--inventory-capability-id",
+                    "meter",
+                    "--inventory-member-phases",
+                    "L2",
+                ],
             )
+            self.assertEqual(bind_rc, 0)
+            custom_binding = self._inventory_binding(bind_payload, "custom_measurement")
             self.assertEqual(custom_binding["phase_scope"], ["L2"])
             self.assertEqual(custom_binding["members"][0]["device_id"], "custom_node_l2")
 
-            unbind_stdout = io.StringIO()
-            with redirect_stdout(unbind_stdout):
-                unbind_rc = main(
-                    [
-                        "--json",
-                        "--non-interactive",
-                        "--config-path",
-                        str(config_path),
-                        "--inventory-action",
-                        "remove-binding-member",
-                        "--inventory-binding-id",
-                        "custom_measurement",
-                        "--inventory-device-id",
-                        "custom_node_l2",
-                    ]
-                )
-            unbind_payload = json.loads(unbind_stdout.getvalue())
-            self.assertEqual(unbind_rc, 0)
-            self.assertFalse(
-                any(
-                    binding["id"] == "custom_measurement"
-                    for binding in unbind_payload["inventory"]["bindings"]
-                )
+            unbind_rc, unbind_payload = self._run_json_inventory_action(
+                config_path,
+                [
+                    "--inventory-action",
+                    "remove-binding-member",
+                    "--inventory-binding-id",
+                    "custom_measurement",
+                    "--inventory-device-id",
+                    "custom_node_l2",
+                ],
             )
+            self.assertEqual(unbind_rc, 0)
+            self.assertFalse(self._inventory_has_binding(unbind_payload, "custom_measurement"))
 
     def test_main_inventory_guided_add_profile_builds_profile_device_and_binding(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

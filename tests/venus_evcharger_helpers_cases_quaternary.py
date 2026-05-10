@@ -97,7 +97,7 @@ class TestShellyWallboxHelpersQuaternary(ShellyWallboxHelpersTestBase):
         self.assertEqual(service._dbusservice["/StartStop"], 0)
         self.assertEqual(service._dbusservice["/Enable"], 1)
 
-    def test_update_virtual_state_keeps_active_session_when_relay_stays_on(self):
+    def test_update_virtual_state_resets_session_when_relay_stays_on_but_charging_stops(self):
         service = ShellyWallboxService.__new__(ShellyWallboxService)
         service.charging_started_at = 100.0
         service.energy_at_start = 5.0
@@ -115,12 +115,40 @@ class TestShellyWallboxHelpersQuaternary(ShellyWallboxHelpersTestBase):
             service._update_virtual_state(6, 6.25, True)
 
         self.assertEqual(service._dbusservice["/Status"], 6)
-        self.assertEqual(service._dbusservice["/ChargingTime"], 30)
-        self.assertEqual(service._dbusservice["/Session/Time"], 30)
-        self.assertEqual(service._dbusservice["/Session/Energy"], 1.25)
-        self.assertEqual(service._dbusservice["/Ac/Energy/Forward"], 1.25)
-        self.assertEqual(service._dbusservice["/Ac/L1/Energy/Forward"], 1.25)
+        self.assertEqual(service._dbusservice["/ChargingTime"], 0)
+        self.assertEqual(service._dbusservice["/Session/Time"], 0)
+        self.assertEqual(service._dbusservice["/Session/Energy"], 0.0)
+        self.assertEqual(service._dbusservice["/Ac/Energy/Forward"], 0.0)
+        self.assertEqual(service._dbusservice["/Ac/L1/Energy/Forward"], 0.0)
+        self.assertIsNone(service.charging_started_at)
+        self.assertEqual(service.energy_at_start, 6.25)
+
+    def test_update_virtual_state_starts_new_session_after_manual_unplug_and_replug(self):
+        service = self._make_update_service()
+        service.virtual_startstop = 1
+
+        with unittest.mock.patch("venus_evcharger_service.time.time", return_value=100.0):
+            service._update_virtual_state(2, 10.0, True)
+        self.assertEqual(service._dbusservice["/Session/Energy"], 0.0)
         self.assertEqual(service.charging_started_at, 100.0)
+        self.assertEqual(service.energy_at_start, 10.0)
+
+        with unittest.mock.patch("venus_evcharger_service.time.time", return_value=130.0):
+            service._update_virtual_state(6, 10.5, True)
+        self.assertEqual(service._dbusservice["/Session/Energy"], 0.0)
+        self.assertIsNone(service.charging_started_at)
+        self.assertEqual(service.energy_at_start, 10.5)
+
+        with unittest.mock.patch("venus_evcharger_service.time.time", return_value=160.0):
+            service._update_virtual_state(2, 11.0, True)
+        self.assertEqual(service._dbusservice["/Session/Energy"], 0.0)
+        self.assertEqual(service.charging_started_at, 160.0)
+        self.assertEqual(service.energy_at_start, 11.0)
+
+        with unittest.mock.patch("venus_evcharger_service.time.time", return_value=190.0):
+            service._update_virtual_state(2, 11.4, True)
+        self.assertEqual(service._dbusservice["/Session/Time"], 30)
+        self.assertEqual(service._dbusservice["/Session/Energy"], 0.4)
 
     def test_update_virtual_state_keeps_startstop_enabled_in_auto_while_waiting(self):
         service = ShellyWallboxService.__new__(ShellyWallboxService)
