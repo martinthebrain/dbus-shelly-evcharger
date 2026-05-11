@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import configparser
+import os
 import shutil
 import tempfile
 from datetime import datetime
@@ -265,39 +266,118 @@ def materialized_config_text(config_text: str, output_dir: Path, adapter_files: 
     return rendered
 
 
+SENSITIVE_ASSIGNMENT_KEYS = frozenset(("Password", "ControlApiAuthToken"))
+
+
+def redact_sensitive_assignments(text: str) -> str:
+    """Remove secret assignment values before temporary wizard materialization."""
+    redacted: list[str] = []
+    for line in text.splitlines():
+        key, separator, _value = line.partition("=")
+        if separator and key.strip() in SENSITIVE_ASSIGNMENT_KEYS:
+            continue
+        redacted.append(line)
+    return "\n".join(redacted) + ("\n" if text.endswith("\n") else "")
+
+
+def sensitive_defaults_from_config_text(config_text: str) -> dict[str, str]:
+    parser = configparser.ConfigParser()
+    try:
+        parser.read_string(config_text)
+    except configparser.MissingSectionHeaderError:
+        parser.read_string("[DEFAULT]\n" + config_text)
+    defaults = parser["DEFAULT"]
+    return {
+        "Username": defaults.get("Username", "").strip(),
+        "Password": defaults.get("Password", "").strip(),
+        "DigestAuth": defaults.get("DigestAuth", "0").strip(),
+        "ControlApiAuthToken": defaults.get("ControlApiAuthToken", "").strip(),
+    }
+
+
+def redact_sensitive_rendered_setup(
+    config_text: str,
+    adapter_files: dict[str, str],
+) -> tuple[str, dict[str, str]]:
+    return (
+        redact_sensitive_assignments(config_text),
+        {relative_path: redact_sensitive_assignments(content) for relative_path, content in adapter_files.items()},
+    )
+
+
+def write_private_text(target: Path, content: str) -> None:
+    """Write sensitive wizard material with owner-only permissions."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    with os.fdopen(os.open(target, flags, 0o600), "w", encoding="utf-8") as handle:
+        handle.write(content)
+    target.chmod(0o600)
+
+
+def materialize_rendered_setup(
+    config_text: str,
+    output_dir: Path,
+    adapter_files: dict[str, str],
+    config_name: str,
+) -> Path:
+    """Write one rendered setup to disk using private file permissions."""
+    materialized_text = materialized_config_text(config_text, output_dir, adapter_files)
+    main_path = output_dir / config_name
+    write_private_text(main_path, materialized_text)
+    for relative_path, content in adapter_files.items():
+        write_private_text(output_dir / relative_path, content)
+    return main_path
+
+
 def validate_rendered_setup(config_text: str, adapter_files: dict[str, str], config_name: str) -> dict[str, object]:
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
-        materialized_text = materialized_config_text(config_text, temp_path, adapter_files)
-        main_path = temp_path / config_name
-        main_path.write_text(materialized_text, encoding="utf-8")
-        for relative_path, content in adapter_files.items():
-            (temp_path / relative_path).write_text(content, encoding="utf-8")
+        redacted_config_text, redacted_adapter_files = redact_sensitive_rendered_setup(config_text, adapter_files)
+        main_path = materialize_rendered_setup(redacted_config_text, temp_path, redacted_adapter_files, config_name)
         return validate_wallbox_config(str(main_path))
 
 
-def _probe_service_from_wallbox_config(parser: configparser.ConfigParser) -> object:
+def _secret_default(
+    defaults: configparser.SectionProxy,
+    secret_defaults: dict[str, str] | None,
+    key: str,
+    fallback: str = "",
+) -> str:
+    if secret_defaults is not None and secret_defaults.get(key, ""):
+        return secret_defaults[key]
+    return defaults.get(key, fallback).strip()
+
+
+def _probe_service_from_wallbox_config(
+    parser: configparser.ConfigParser,
+    secret_defaults: dict[str, str] | None = None,
+) -> object:
     defaults = parser["DEFAULT"]
     return SimpleNamespace(
         config=parser,
         session=None,
         host=defaults.get("Host", "").strip(),
-        username=defaults.get("Username", "").strip(),
-        password=defaults.get("Password", "").strip(),
-        use_digest_auth=defaults.get("DigestAuth", "0").strip().lower() in ("1", "true", "yes", "on"),
+        username=_secret_default(defaults, secret_defaults, "Username"),
+        password=_secret_default(defaults, secret_defaults, "Password"),
+        use_digest_auth=_secret_default(defaults, secret_defaults, "DigestAuth", "0").lower() in ("1", "true", "yes", "on"),
         shelly_request_timeout_seconds=float(defaults.get("ShellyRequestTimeoutSeconds", "2.0") or 2.0),
         pm_component=defaults.get("ShellyComponent", "Switch").strip(),
         pm_id=int(defaults.get("ShellyId", "0") or 0),
         phase=defaults.get("Phase", "L1").strip(),
         max_current=float(defaults.get("MaxCurrent", "16.0") or 16.0),
         _last_voltage=None,
+        _adapter_auth_fallback_enabled=secret_defaults is not None,
     )
 
 
-def live_connectivity_payload(main_path: Path, selected_roles: tuple[str, ...] | None) -> dict[str, object]:
+def live_connectivity_payload(
+    main_path: Path,
+    selected_roles: tuple[str, ...] | None,
+    secret_defaults: dict[str, str] | None = None,
+) -> dict[str, object]:
     parser = configparser.ConfigParser()
     parser.read(main_path, encoding="utf-8")
-    runtime = build_service_backends(_probe_service_from_wallbox_config(parser)).runtime
+    runtime = build_service_backends(_probe_service_from_wallbox_config(parser, secret_defaults)).runtime
     role_results: dict[str, dict[str, object]] = {}
     ok = True
 
@@ -339,12 +419,9 @@ def live_check_rendered_setup(
 ) -> dict[str, object]:
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
-        materialized_text = materialized_config_text(config_text, temp_path, adapter_files)
-        main_path = temp_path / config_name
-        main_path.write_text(materialized_text, encoding="utf-8")
-        for relative_path, content in adapter_files.items():
-            (temp_path / relative_path).write_text(content, encoding="utf-8")
-        return live_connectivity_payload(main_path, selected_roles)
+        redacted_config_text, redacted_adapter_files = redact_sensitive_rendered_setup(config_text, adapter_files)
+        main_path = materialize_rendered_setup(redacted_config_text, temp_path, redacted_adapter_files, config_name)
+        return live_connectivity_payload(main_path, selected_roles, sensitive_defaults_from_config_text(config_text))
 
 
 def answer_defaults(answers: WizardAnswers) -> dict[str, object]:
@@ -390,7 +467,7 @@ def write_with_backup(target: Path, content: str) -> str | None:
         destination = backup_path(target)
         shutil.copy2(target, destination)
         backup_file = str(destination)
-    target.write_text(content, encoding="utf-8")
+    write_private_text(target, content)
     return backup_file
 
 

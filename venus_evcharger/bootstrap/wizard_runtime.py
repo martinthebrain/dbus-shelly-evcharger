@@ -34,8 +34,11 @@ from venus_evcharger.bootstrap.wizard_inventory import (
 from venus_evcharger.bootstrap.wizard_models import WizardAnswers, WizardResult
 from venus_evcharger.bootstrap.wizard_persistence import persist_inventory_sidecar
 from venus_evcharger.bootstrap.wizard_render import (
+    materialize_rendered_setup,
     materialized_config_text,
+    redact_sensitive_rendered_setup,
     render_wizard_config,
+    sensitive_defaults_from_config_text,
     upsert_default_assignments,
     validate_rendered_setup,
     write_generated_files,
@@ -45,21 +48,36 @@ from venus_evcharger.bootstrap.wizard_runtime_results import json_ready, persist
 from venus_evcharger.bootstrap.wizard_topology import build_wizard_topology_config
 
 
-def _probe_service_from_wallbox_config(parser: configparser.ConfigParser) -> object:
+def _secret_default(
+    defaults: configparser.SectionProxy,
+    secret_defaults: dict[str, str] | None,
+    key: str,
+    fallback: str = "",
+) -> str:
+    if secret_defaults is not None and secret_defaults.get(key, ""):
+        return secret_defaults[key]
+    return defaults.get(key, fallback).strip()
+
+
+def _probe_service_from_wallbox_config(
+    parser: configparser.ConfigParser,
+    secret_defaults: dict[str, str] | None = None,
+) -> object:
     defaults = parser["DEFAULT"]
     return SimpleNamespace(
         config=parser,
         session=None,
         host=defaults.get("Host", "").strip(),
-        username=defaults.get("Username", "").strip(),
-        password=defaults.get("Password", "").strip(),
-        use_digest_auth=defaults.get("DigestAuth", "0").strip().lower() in ("1", "true", "yes", "on"),
+        username=_secret_default(defaults, secret_defaults, "Username"),
+        password=_secret_default(defaults, secret_defaults, "Password"),
+        use_digest_auth=_secret_default(defaults, secret_defaults, "DigestAuth", "0").lower() in ("1", "true", "yes", "on"),
         shelly_request_timeout_seconds=float(defaults.get("ShellyRequestTimeoutSeconds", "2.0") or 2.0),
         pm_component=defaults.get("ShellyComponent", "Switch").strip(),
         pm_id=int(defaults.get("ShellyId", "0") or 0),
         phase=defaults.get("Phase", "L1").strip(),
         max_current=float(defaults.get("MaxCurrent", "16.0") or 16.0),
         _last_voltage=None,
+        _adapter_auth_fallback_enabled=secret_defaults is not None,
     )
 
 
@@ -78,10 +96,15 @@ def _combined_role_payload(role: str, backend: object, main_path: Path, backend_
         "type": str(backend_type),
         "charger_state": json_ready(getattr(backend, "read_charger_state")()),
     }
-def _live_connectivity_payload(main_path: Path, selected_roles: tuple[str, ...] | None) -> dict[str, object]:
+def _live_connectivity_payload(
+    main_path: Path,
+    selected_roles: tuple[str, ...] | None,
+    secret_defaults: dict[str, str] | None = None,
+) -> dict[str, object]:
     return _live_connectivity_payload_with_hooks(
         main_path,
         selected_roles,
+        secret_defaults=secret_defaults,
         build_backends_fn=build_service_backends,
         probe_meter_fn=probe_meter_backend,
         probe_switch_fn=probe_switch_backend,
@@ -97,12 +120,13 @@ def _live_connectivity_payload_with_hooks(
     probe_meter_fn: Callable[[str], dict[str, object]],
     probe_switch_fn: Callable[[str], dict[str, object]],
     read_charger_fn: Callable[[str], dict[str, object]],
+    secret_defaults: dict[str, str] | None = None,
 ) -> dict[str, object]:
     parser = configparser.ConfigParser()
     parser.read(main_path, encoding="utf-8")
     role_results: dict[str, dict[str, object]] = {}
     ok = True
-    resolved_backends = build_backends_fn(_probe_service_from_wallbox_config(parser))
+    resolved_backends = build_backends_fn(_probe_service_from_wallbox_config(parser, secret_defaults))
     runtime = resolved_backends.runtime
 
     def backend_for(role: str) -> object | None:
@@ -137,6 +161,16 @@ def _live_connectivity_payload_with_hooks(
             return
         resolved_path = config_path if config_path.is_absolute() else main_path.parent / config_path
         try:
+            if secret_defaults is not None:
+                backend = backend_for(role)
+                if backend is None:
+                    role_results[role] = {"status": "skipped", "reason": "not configured"}
+                    return
+                role_results[role] = {
+                    "status": "ok",
+                    "payload": _combined_role_payload(role, backend, resolved_path, backend_type),
+                }
+                return
             role_results[role] = {"status": "ok", "payload": probe(str(resolved_path))}
         except Exception as exc:
             ok = False
@@ -157,12 +191,9 @@ def _live_check_rendered_setup(
 ) -> dict[str, object]:
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
-        materialized_text = materialized_config_text(config_text, temp_path, adapter_files)
-        main_path = temp_path / config_name
-        main_path.write_text(materialized_text, encoding="utf-8")
-        for relative_path, content in adapter_files.items():
-            (temp_path / relative_path).write_text(content, encoding="utf-8")
-        return _live_connectivity_payload(main_path, selected_roles)
+        redacted_config_text, redacted_adapter_files = redact_sensitive_rendered_setup(config_text, adapter_files)
+        main_path = materialize_rendered_setup(redacted_config_text, temp_path, redacted_adapter_files, config_name)
+        return _live_connectivity_payload(main_path, selected_roles, sensitive_defaults_from_config_text(config_text))
 
 
 def _suggested_energy_state(

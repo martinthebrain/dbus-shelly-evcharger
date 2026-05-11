@@ -48,6 +48,7 @@ class _WizardBranchRuntimeCoreCases:
         self._assert_split_live_connectivity(temp_path, main_path, runtime)
         self._assert_combined_live_connectivity(main_path)
         self._assert_rendered_live_checks(main_path, wizard_runtime)
+        self._assert_live_check_secret_overlay_paths(main_path, wizard_runtime)
 
     def _assert_split_live_connectivity(
         self,
@@ -163,11 +164,11 @@ class _WizardBranchRuntimeCoreCases:
     def _assert_rendered_live_checks(self, main_path: Path, wizard_runtime: object) -> None:
         with patch(
             "venus_evcharger.bootstrap.wizard._live_connectivity_payload",
-            side_effect=lambda path, roles: self._rendered_live_result(path, roles),
+            side_effect=lambda path, roles, *args: self._rendered_live_result(path, roles, *args),
         ):
             live_payload = wizard._live_check_rendered_setup(
-                "[DEFAULT]\nAdapter=adapter.ini\n",
-                {"adapter.ini": "[Adapter]\n"},
+                "[DEFAULT]\nPassword=main-secret\nControlApiAuthToken=token-secret\nAdapter=adapter.ini\n",
+                {"adapter.ini": "[Adapter]\nPassword=adapter-secret\n"},
                 "config.ini",
                 ("meter",),
             )
@@ -175,11 +176,11 @@ class _WizardBranchRuntimeCoreCases:
 
         with patch(
             "venus_evcharger.bootstrap.wizard_runtime._live_connectivity_payload",
-            side_effect=lambda path, roles: self._rendered_live_result(path, roles),
+            side_effect=lambda path, roles, *args: self._rendered_live_result(path, roles, *args),
         ):
             runtime_live_payload = wizard_runtime._live_check_rendered_setup(
-                "[DEFAULT]\nAdapter=adapter.ini\n",
-                {"adapter.ini": "[Adapter]\n"},
+                "[DEFAULT]\nPassword=main-secret\nControlApiAuthToken=token-secret\nAdapter=adapter.ini\n",
+                {"adapter.ini": "[Adapter]\nPassword=adapter-secret\n"},
                 "config.ini",
                 ("meter",),
             )
@@ -193,10 +194,64 @@ class _WizardBranchRuntimeCoreCases:
         self.assertTrue(direct_runtime_payload["ok"])
         runtime_hooks.assert_called_once()
 
+    def _assert_live_check_secret_overlay_paths(self, main_path: Path, wizard_runtime: object) -> None:
+        from venus_evcharger.bootstrap import wizard_render
+
+        defaults = wizard_runtime.configparser.ConfigParser()["DEFAULT"]
+        self.assertEqual(wizard_runtime._secret_default(defaults, {"Password": "secret"}, "Password"), "secret")
+        self.assertEqual(wizard_render._secret_default(defaults, {"Password": "secret"}, "Password"), "secret")
+
+        runtime = SimpleNamespace(
+            backend_mode="split",
+            meter_type="template_meter",
+            meter_config_path=Path("meter.ini"),
+            switch_type=None,
+            switch_config_path=None,
+            charger_type="",
+            charger_config_path=None,
+        )
+        meter_backend = SimpleNamespace(read_meter=lambda: {"power_w": 12.0})
+
+        def build_backends(service: object) -> object:
+            self.assertEqual(service.password, "secret")
+            return SimpleNamespace(runtime=runtime, meter=meter_backend, switch=None, charger=None)
+
+        payload = wizard_runtime._live_connectivity_payload_with_hooks(
+            main_path,
+            ("meter",),
+            secret_defaults={"Password": "secret"},
+            build_backends_fn=build_backends,
+            probe_meter_fn=lambda path: {"unexpected": path},
+            probe_switch_fn=lambda path: {"unexpected": path},
+            read_charger_fn=lambda path: {"unexpected": path},
+        )
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["roles"]["meter"]["payload"]["meter"]["power_w"], 12.0)
+
+        missing_backend_payload = wizard_runtime._live_connectivity_payload_with_hooks(
+            main_path,
+            ("meter",),
+            secret_defaults={"Password": "secret"},
+            build_backends_fn=lambda service: SimpleNamespace(runtime=runtime, meter=None, switch=None, charger=None),
+            probe_meter_fn=lambda path: {"unexpected": path},
+            probe_switch_fn=lambda path: {"unexpected": path},
+            read_charger_fn=lambda path: {"unexpected": path},
+        )
+        self.assertEqual(missing_backend_payload["roles"]["meter"]["reason"], "not configured")
+
     @staticmethod
-    def _rendered_live_result(path: Path, roles: object) -> dict[str, object]:
+    def _rendered_live_result(path: Path, roles: object, *args: object) -> dict[str, object]:
+        adapter_path = path.parent / "adapter.ini"
+        materialized_content = path.read_text(encoding="utf-8") + adapter_path.read_text(encoding="utf-8")
         return {
-            "ok": path.exists() and (path.parent / "adapter.ini").exists(),
+            "ok": path.exists()
+            and adapter_path.exists()
+            and (path.stat().st_mode & 0o777) == 0o600
+            and (adapter_path.stat().st_mode & 0o777) == 0o600
+            and "secret" not in materialized_content
+            and "Password=" not in materialized_content
+            and bool(args)
+            and args[0]["Password"] == "main-secret",
             "checked_roles": roles or (),
             "roles": {},
         }
@@ -215,6 +270,8 @@ class _WizardBranchRuntimeCoreCases:
         adapter_path.write_text("old\n", encoding="utf-8")
         backups = wizard._write_generated_files(config_path, "new\n", {"adapter.ini": "new\n"})
         self.assertEqual(len(backups), 2)
+        self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(adapter_path.stat().st_mode & 0o777, 0o600)
         return _result()
 
     def _assert_wizard_write_guard_paths(self, preview: object) -> None:
