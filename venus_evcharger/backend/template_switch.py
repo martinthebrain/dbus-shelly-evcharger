@@ -199,7 +199,7 @@ def load_template_switch_settings(service: object, config_path: str) -> Template
 
     return TemplateSwitchSettings(
         base_url=base_url,
-        auth_settings=load_template_auth_settings(adapter),
+        auth_settings=load_template_auth_settings(adapter, service),
         timeout_seconds=_template_switch_timeout_seconds(adapter, service),
         state_method=normalize_http_method(state_request.get("Method", "GET"), "GET"),
         state_url=urls.state_url,

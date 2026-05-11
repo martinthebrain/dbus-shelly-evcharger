@@ -22,6 +22,8 @@ from venus_evcharger.core.contracts import (
 
 
 class _LocalControlApiCommandMixin:
+    _SAFE_EXTRA_RESPONSE_HEADERS: frozenset[str] = frozenset(("ETag", "Retry-After", "X-State-Token"))
+
     def _read_json_payload(self, handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
         try:
             content_length = int(handler.headers.get("Content-Length", "0"))
@@ -414,6 +416,17 @@ class _LocalControlApiCommandMixin:
         return normalized_control_result_fields(asdict(result))
 
     @staticmethod
+    def _safe_extra_response_headers(extra_headers: Mapping[str, str] | None) -> dict[str, str]:
+        if not extra_headers:
+            return {}
+        safe_headers: dict[str, str] = {}
+        for key, value in extra_headers.items():
+            if key not in _LocalControlApiCommandMixin._SAFE_EXTRA_RESPONSE_HEADERS:
+                continue
+            safe_headers[key] = str(value).replace("\r", "").replace("\n", "")
+        return safe_headers
+
+    @staticmethod
     def _write_error(
         handler: BaseHTTPRequestHandler,
         status: HTTPStatus,
@@ -435,7 +448,12 @@ class _LocalControlApiCommandMixin:
         handler.send_response(int(status))
         handler.send_header("Content-Type", "application/json")
         handler.send_header("Content-Length", str(len(raw)))
-        for key, value in dict(extra_headers or {}).items():
-            handler.send_header(str(key), str(value))
+        safe_headers = _LocalControlApiCommandMixin._safe_extra_response_headers(extra_headers)
+        if "ETag" in safe_headers:
+            handler.send_header("ETag", safe_headers["ETag"])
+        if "Retry-After" in safe_headers:
+            handler.send_header("Retry-After", safe_headers["Retry-After"])
+        if "X-State-Token" in safe_headers:
+            handler.send_header("X-State-Token", safe_headers["X-State-Token"])
         handler.end_headers()
         handler.wfile.write(raw)

@@ -201,7 +201,7 @@ def load_template_charger_settings(service: object, config_path: str) -> Templat
 
     return TemplateChargerSettings(
         base_url=base_url,
-        auth_settings=load_template_auth_settings(adapter),
+        auth_settings=load_template_auth_settings(adapter, service),
         timeout_seconds=_template_charger_timeout_seconds(adapter, service),
         supported_phase_selections=supported_phase_selections,
         state_method=normalize_http_method(state_request.get("Method", "GET"), "GET"),

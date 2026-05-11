@@ -191,7 +191,7 @@ def load_template_meter_settings(service: object, config_path: str) -> TemplateM
     )
     return TemplateMeterSettings(
         base_url=base_url,
-        auth_settings=load_template_auth_settings(adapter),
+        auth_settings=load_template_auth_settings(adapter, service),
         timeout_seconds=2.0 if timeout_seconds is None or timeout_seconds <= 0.0 else float(timeout_seconds),
         meter_method=normalize_http_method(meter_request.get("Method", "GET"), "GET"),
         meter_url=meter_url,

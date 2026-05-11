@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+from http import HTTPStatus
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -7,6 +8,31 @@ from venus_evcharger.control import ControlApiRateLimiter, ControlCommand, Contr
 
 
 class _ControlApiHttpTailCases:
+    def test_json_extra_headers_are_allowlisted_and_crlf_sanitized(self) -> None:
+        handler = _FakeHandler("/v1/state/summary")
+
+        LocalControlApiHttpServer._write_json(
+            handler,
+            HTTPStatus.OK,
+            {"ok": True},
+            extra_headers={
+                "Content-Type": "text/plain",
+                "ETag": '"state\r\nInjected: bad"',
+                "Retry-After": "5\n6",
+                "X-State-Token": "token\rvalue",
+                "X-Bad\r\nHeader": "evil",
+            },
+        )
+
+        self.assertEqual(handler.response_headers["Content-Type"], "application/json")
+        self.assertEqual(handler.response_headers["ETag"], '"stateInjected: bad"')
+        self.assertEqual(handler.response_headers["Retry-After"], "56")
+        self.assertEqual(handler.response_headers["X-State-Token"], "tokenvalue")
+        self.assertNotIn("X-Bad\r\nHeader", handler.response_headers)
+        for key, value in handler.response_headers.items():
+            self.assertNotIn("\r", key + value)
+            self.assertNotIn("\n", key + value)
+
     def test_events_endpoint_filters_recent_events_by_kind(self) -> None:
         service = SimpleNamespace(
             _control_command_from_payload=MagicMock(),

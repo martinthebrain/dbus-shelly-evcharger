@@ -27,11 +27,16 @@ class TemplateAuthSettings:
     auth_header_value: str | None
 
 
-def load_template_auth_settings(adapter: configparser.SectionProxy) -> TemplateAuthSettings:
+def load_template_auth_settings(
+    adapter: configparser.SectionProxy,
+    service: object | None = None,
+) -> TemplateAuthSettings:
     """Return normalized auth settings shared by all template backends."""
-    username = str(adapter.get("Username", "")).strip()
-    password = str(adapter.get("Password", ""))
-    use_digest_auth = bool(normalize_binary_flag(adapter.get("DigestAuth", "0")))
+    auth_fallback_enabled = bool(getattr(service, "_adapter_auth_fallback_enabled", False))
+    username = str(adapter.get("Username", getattr(service, "username", "") if auth_fallback_enabled else "")).strip()
+    password = str(adapter.get("Password", getattr(service, "password", "") if auth_fallback_enabled else ""))
+    default_digest_auth = "1" if auth_fallback_enabled and bool(getattr(service, "use_digest_auth", False)) else "0"
+    use_digest_auth = bool(normalize_binary_flag(adapter.get("DigestAuth", default_digest_auth)))
     auth_header_name = _optional_text(adapter.get("AuthHeaderName", ""))
     auth_header_value = _optional_text(adapter.get("AuthHeaderValue", ""))
     _validate_template_auth_settings(

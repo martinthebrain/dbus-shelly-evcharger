@@ -87,7 +87,7 @@ def load_goe_charger_settings(service: object, config_path: str) -> GoEChargerSe
         raise ValueError("go-e charger backend requires Adapter.BaseUrl")
     return GoEChargerSettings(
         base_url=base_url,
-        auth_settings=load_template_auth_settings(adapter),
+        auth_settings=load_template_auth_settings(adapter, service),
         timeout_seconds=_goe_timeout_seconds(adapter, service),
         supported_phase_selections=_GOE_SUPPORTED_PHASE_SELECTIONS,
         state_url=resolved_url(base_url, "/api/status"),

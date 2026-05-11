@@ -32,9 +32,11 @@ from venus_evcharger.bootstrap.wizard_render import (
     append_backends,
     default_config_path,
     default_template_path,
-    materialized_config_text,
+    materialize_rendered_setup,
+    redact_sensitive_rendered_setup,
     replace_assignment,
     render_wizard_config,
+    sensitive_defaults_from_config_text,
     upsert_default_assignments,
     write_generated_files,
 )
@@ -57,11 +59,16 @@ def _resolve_live_check(namespace: argparse.Namespace) -> bool:
     return prompt_yes_no("Run optional live connectivity checks now?", False)
 
 
-def _live_connectivity_payload(main_path: Path, selected_roles: tuple[str, ...] | None) -> dict[str, object]:
+def _live_connectivity_payload(
+    main_path: Path,
+    selected_roles: tuple[str, ...] | None,
+    secret_defaults: dict[str, str] | None = None,
+) -> dict[str, object]:
     """Run live connectivity checks through patchable module-level hook targets."""
     return _live_connectivity_payload_with_hooks(
         main_path,
         selected_roles,
+        secret_defaults=secret_defaults,
         build_backends_fn=build_service_backends,
         probe_meter_fn=probe_meter_backend,
         probe_switch_fn=probe_switch_backend,
@@ -78,12 +85,9 @@ def _live_check_rendered_setup(
     """Materialize one rendered setup and probe it through patchable module-level hooks."""
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
-        materialized_text = materialized_config_text(config_text, temp_path, adapter_files)
-        main_path = temp_path / config_name
-        main_path.write_text(materialized_text, encoding="utf-8")
-        for relative_path, content in adapter_files.items():
-            (temp_path / relative_path).write_text(content, encoding="utf-8")
-        return _live_connectivity_payload(main_path, selected_roles)
+        redacted_config_text, redacted_adapter_files = redact_sensitive_rendered_setup(config_text, adapter_files)
+        main_path = materialize_rendered_setup(redacted_config_text, temp_path, redacted_adapter_files, config_name)
+        return _live_connectivity_payload(main_path, selected_roles, sensitive_defaults_from_config_text(config_text))
 
 
 def _resolved_energy_capacity_wh(
