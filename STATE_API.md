@@ -54,6 +54,34 @@ paths.
 
 Returns the current runtime-state snapshot used for runtime persistence.
 
+### `GET /v1/state/automation`
+
+Returns one automation-friendly snapshot for clients that need reliable read
+and write coordination. This endpoint intentionally combines the most useful
+read surfaces into one payload and includes the current `state_token`.
+
+Typical fields in `state` include:
+
+- `state_token`: use this as `If-Match` for the next write
+- `command_endpoint`: currently `/v1/control/command`
+- `events_endpoint`: currently `/v1/events`
+- `safe_write`: header names and the recommended read-then-write flow
+- `writable.command_names`
+- `writable.scope_requirements`
+- `operational`
+- `auto_decision`
+- `health`
+- `topology`
+- `diagnostics`
+
+Recommended write flow:
+
+1. Read `/v1/state/automation`.
+2. Send `POST /v1/control/command` with `If-Match: <state_token>`.
+3. Add `Idempotency-Key` for retry-safe automation writes.
+4. If the API returns `409`, read `/v1/state/automation` again and retry only
+   after checking that the intended command is still safe.
+
 ### `GET /v1/state/operational`
 
 Returns a normalized operator-facing snapshot for automation and monitoring.
@@ -80,6 +108,7 @@ Stable fields in `state` include:
 - `software_update_no_update_active`
 - `runtime_overrides_active`
 - `runtime_overrides_path`
+- `auto_decision`
 - `combined_battery_soc`
 - `combined_battery_source_count`
 - `combined_battery_online_source_count`
@@ -118,6 +147,22 @@ Stable fields in `state` include:
 - `combined_battery_reserve_band_floor_soc`
 - `combined_battery_reserve_band_ceiling_soc`
 - `combined_battery_reserve_band_width_soc`
+
+`auto_decision` is the structured "why did it start/stop?" view for local
+GUIs and scripts. It mirrors the most important DBus diagnostics without
+forcing clients to parse path-keyed data:
+
+- `reason`
+- `state`
+- `state_code`
+- `relay_intent`
+- `surplus_watts`
+- `grid_watts`
+- `soc_percent`
+- `start_threshold_watts`
+- `stop_threshold_watts`
+- `profile`
+- `threshold_mode`
 - `combined_battery_direction_change_count`
 - `battery_discharge_balance_mode`
 - `battery_discharge_balance_target_distribution_mode`
@@ -502,6 +547,20 @@ mode more cautious while a large imbalance is present.
 
 Returns the compact outward diagnostics set that the service also publishes on
 DBus. The returned `state` object uses DBus path names as stable keys.
+
+For operator-facing "why did it start/stop?" views, start with:
+
+- `/Auto/DecisionReason`
+- `/Auto/DecisionState`
+- `/Auto/DecisionRelayIntent`
+- `/Auto/DecisionSurplusWatts`
+- `/Auto/DecisionGridWatts`
+- `/Auto/DecisionSocPercent`
+- `/Auto/DecisionStartThresholdWatts`
+- `/Auto/DecisionStopThresholdWatts`
+- `/Auto/ScheduledReason`
+- `/Auto/PhaseLockoutReason`
+- `/Auto/ContactorLockoutReason`
 
 ### `GET /v1/state/topology`
 

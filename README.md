@@ -82,6 +82,12 @@ Backend details live in [CHARGER_BACKENDS.md](CHARGER_BACKENDS.md) and
 
 ## Charging Modes
 
+Mode values are intentionally simple:
+
+- `Mode=0` is Manual charging: user control directly enables or disables the charger/switch.
+- `Mode=1` is Auto charging: charge only when the configured PV surplus, grid, SOC, timing, and safety rules allow it.
+- `Mode=2` is Scheduled charging: use the same Auto surplus logic during the day and add a target-day night/fallback charge window after the configured daytime window.
+
 ### Manual
 
 Manual mode follows direct user control from the Venus EV charger tile, DBus,
@@ -104,8 +110,16 @@ Auto mode can combine:
 
 ### Scheduled
 
-Scheduled mode builds on the same runtime logic and adds day-aware daytime or
-night-boost windows for controlled charging.
+Scheduled mode does not redefine Auto. It builds on the same surplus policy and
+adds day-aware fallback charging after the daytime PV window, up to the
+configured latest end time.
+
+### Session Energy
+
+Some meters, including Shelly devices, report a lifetime energy counter. The
+service keeps that raw counter internal and publishes session energy to the
+Venus EV charger UI, so unplugging and replugging starts a fresh displayed
+charging session.
 
 ## Setup Wizard
 
@@ -115,6 +129,26 @@ and a persistent device inventory:
 ```bash
 ./deploy/venus/configure_venus_evcharger_service.sh
 ```
+
+For Venus OS systems, the recommended workflow is preview first, write second:
+
+```bash
+./deploy/venus/configure_venus_evcharger_service.sh --dry-run
+./deploy/venus/configure_venus_evcharger_service.sh
+```
+
+The preview shows the selected preset, the hardware responsibility split,
+the initial charging policy, risk-ranked warnings, and a short post-install
+checklist before any files are changed.
+
+Common guided presets include:
+
+| Preset | Use it when |
+| --- | --- |
+| Shelly PM/PM1 Gen4 measures and switches | One Shelly-compatible device measures energy and switches the EVSE relay/contactor |
+| Shelly meter + Cerbo GX Relay switch | A Shelly measures energy while one of the Cerbo GX relays switches the contactor |
+| Shelly meter + native go-e charger | A Shelly provides independent metering and the go-e charger owns charger control |
+| Shelly meter + native Modbus wallbox | A Shelly provides independent metering and a Modbus wallbox owns charger control |
 
 The inventory stores local device profiles, concrete device instances, and
 role/phase bindings. That means a locally described device can be reused later,
@@ -139,6 +173,7 @@ and multiple physical devices can share the same profile.
 2. Configure the installation:
 
    ```bash
+   ./deploy/venus/configure_venus_evcharger_service.sh --dry-run
    ./deploy/venus/configure_venus_evcharger_service.sh
    ```
 
@@ -159,6 +194,10 @@ and multiple physical devices can share the same profile.
    svstat /service/dbus-venus-evcharger
    dbus -y com.victronenergy.evcharger.http_60 /Connected GetValue
    ```
+
+   In the Venus GUI, also check the EV charger tile: `Mode`, `StartStop`,
+   `AutoStart`, relay state, and current charging power should match the
+   physical installation.
 
 For a detailed installation walkthrough, see [INSTALL.md](INSTALL.md).
 
@@ -195,7 +234,7 @@ Quick start:
 - `python3 ./venus_evchargerctl.py --token READ-TOKEN health`
 - `python3 ./venus_evchargerctl.py --token READ-TOKEN doctor`
 - `python3 ./venus_evchargerctl.py --token READ-TOKEN capabilities`
-- `python3 ./venus_evchargerctl.py --token READ-TOKEN state summary`
+- `python3 ./venus_evchargerctl.py --token READ-TOKEN state automation`
 - `python3 ./venus_evchargerctl.py --token CONTROL-TOKEN safe-write set-mode 1`
 - `python3 ./venus_evchargerctl.py --unix-socket /run/venus-evcharger-control.sock --token READ-TOKEN watch --kind command --once`
 

@@ -44,6 +44,7 @@ class LocalControlApiHttpServer(
 
     _STATE_GET_ENDPOINTS = frozenset(
         {
+            "/v1/state/automation",
             "/v1/state/build",
             "/v1/state/config-effective",
             "/v1/state/contracts",

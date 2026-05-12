@@ -142,6 +142,27 @@ class TestVenusEvchargerControlCli(unittest.TestCase):
         list_response = SimpleNamespace(json=lambda: ["event"], headers={}, status=200)
         self.assertEqual(cli._response_payload(list_response), {"value": ["event"]})
 
+        self.assertEqual(
+            cli._state_token_from_response(SimpleNamespace(json=lambda: {}, headers={"X-State-Token": '"abc"'}, status=200)),
+            "abc",
+        )
+        self.assertEqual(
+            cli._state_token_from_response(
+                SimpleNamespace(json=lambda: {"state": {"state_token": '"body-token"'}}, headers={}, status=200)
+            ),
+            "body-token",
+        )
+        self.assertEqual(
+            cli._state_token_from_response(SimpleNamespace(json=lambda: {"state": 1}, headers={}, status=200)),
+            "",
+        )
+        self.assertEqual(
+            cli._state_token_from_response(
+                SimpleNamespace(json=lambda: {"state": {"state_token": 1}}, headers={}, status=200)
+            ),
+            "",
+        )
+
         missing_token_response = ControlApiClientResponse(
             status=200,
             headers={},

@@ -116,6 +116,20 @@ This repository benefits from several kinds of tests:
 
 When you add a feature, choose the test type that best proves the new truth.
 
+## CodeQL And Coverage Hygiene
+
+Treat CodeQL and Codecov comments as review input, not as noise to suppress.
+Preferred fixes are small, explicit, and test-backed:
+
+- remove or minimize sensitive data at rest before adding suppression comments
+- keep temporary wizard/live-check files redacted and owner-only when secrets are involved
+- sanitize or allowlist HTTP headers instead of passing caller-provided names through
+- add regression tests for every security helper that exists because of a scanner finding
+- keep patch coverage high by testing both the safe path and the rejected/sanitized path
+
+If a finding is intentionally accepted, document why the behavior is required on
+Venus OS and what limits the blast radius.
+
 ## Questions To Answer Before Opening A Behavioral PR
 
 For a feature that changes runtime behavior, answer these questions clearly:

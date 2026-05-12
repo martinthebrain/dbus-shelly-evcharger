@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from venus_evcharger.bootstrap.wizard_adapters import (
+    cerbo_gx_relay_switch_config,
     modbus_charger_config,
     native_charger_config,
     shelly_meter_config,
@@ -24,12 +25,25 @@ def render_adapter_files_from_topology(
     role_hosts: dict[str, str],
 ) -> dict[str, str]:
     if topology_config.topology.type == "simple_relay":
-        return {}
+        return _simple_relay_files(topology_config, answers, role_hosts)
     if topology_config.topology.type == "native_device":
         return _native_device_files(topology_config, answers, role_hosts)
     if topology_config.topology.type == "hybrid_topology":
         return _hybrid_topology_files(topology_config, answers, role_hosts)
     return {}
+
+
+def _simple_relay_files(
+    topology_config: EvChargerTopologyConfig,
+    answers: WizardAnswers,
+    role_hosts: dict[str, str],
+) -> dict[str, str]:
+    files: dict[str, str] = {}
+    if topology_config.measurement is not None and topology_config.measurement.type == "external_meter":
+        files["wizard-meter.ini"] = _measurement_config_text(answers, role_hosts)
+    if topology_config.actuator is not None and topology_config.actuator.config_path is not None:
+        files.update(_actuator_files(topology_config, role_hosts, answers))
+    return files
 
 
 def _native_device_files(
@@ -88,7 +102,7 @@ def _measurement_config_text(answers: WizardAnswers, role_hosts: dict[str, str])
     meter_host = role_hosts.get("meter", answers.host_input)
     meter_base_url = base_url_from_input(meter_host)
     topology_preset = answers.topology_preset or ("template-stack" if answers.profile == "multi_adapter_topology" else None)
-    if topology_preset in {"template-stack", "template-meter-goe-switch-group"}:
+    if topology_preset in {"template-stack", "template-meter-cerbo-relay", "template-meter-goe-switch-group"}:
         return template_meter_config(meter_base_url)
     return shelly_meter_config(host_from_input(meter_host))
 
@@ -99,14 +113,31 @@ def _actuator_files(
     answers: WizardAnswers,
 ) -> dict[str, str]:
     actuator = topology_config.actuator
-    if actuator is None:
+    if actuator is None or actuator.type not in _ACTUATOR_RENDERERS:
         return {}
-    switch_host = role_hosts.get("switch", answers.host_input)
-    switch_base_url = base_url_from_input(switch_host)
-    if actuator.type == "switch_group":
-        return template_switch_group_files(switch_base_url, answers.switch_group_supported_phase_selections)
-    if actuator.type == "template_switch":
-        return {"wizard-switch.ini": template_switch_config(switch_base_url, "/wizard/switch")}
-    if actuator.type in {"shelly_switch", "shelly_contactor_switch"}:
-        return {"wizard-switch.ini": shelly_switch_config(host_from_input(switch_host))}
-    return {}
+    return _ACTUATOR_RENDERERS[actuator.type](role_hosts.get("switch", answers.host_input), answers)
+
+
+def _cerbo_actuator_files(_switch_host: str, answers: WizardAnswers) -> dict[str, str]:
+    return {"wizard-switch.ini": cerbo_gx_relay_switch_config(answers.cerbo_relay_index, answers.cerbo_relay_contact_mode)}
+
+
+def _switch_group_actuator_files(switch_host: str, answers: WizardAnswers) -> dict[str, str]:
+    return template_switch_group_files(base_url_from_input(switch_host), answers.switch_group_supported_phase_selections)
+
+
+def _template_switch_actuator_files(switch_host: str, _answers: WizardAnswers) -> dict[str, str]:
+    return {"wizard-switch.ini": template_switch_config(base_url_from_input(switch_host), "/wizard/switch")}
+
+
+def _shelly_switch_actuator_files(switch_host: str, _answers: WizardAnswers) -> dict[str, str]:
+    return {"wizard-switch.ini": shelly_switch_config(host_from_input(switch_host))}
+
+
+_ACTUATOR_RENDERERS = {
+    "cerbo_gx_relay_switch": _cerbo_actuator_files,
+    "switch_group": _switch_group_actuator_files,
+    "template_switch": _template_switch_actuator_files,
+    "shelly_switch": _shelly_switch_actuator_files,
+    "shelly_contactor_switch": _shelly_switch_actuator_files,
+}

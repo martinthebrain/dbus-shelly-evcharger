@@ -1,4 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+"""Runtime gates for Auto-mode decisions.
+
+The methods here combine cached inputs, relay state, timing constraints, and
+charger health into small decision helpers used by the Auto workflow.
+"""
+
 from __future__ import annotations
 
 import logging

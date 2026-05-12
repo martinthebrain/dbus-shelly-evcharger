@@ -17,7 +17,7 @@ from venus_evcharger.bootstrap.wizard_models import (
     WizardTransportKind,
 )
 from venus_evcharger.bootstrap.wizard_policy_guidance import policy_defaults
-from venus_evcharger.bootstrap.wizard_support import host_from_input
+from venus_evcharger.bootstrap.wizard_support import host_from_input, topology_uses_cerbo_relay
 from venus_evcharger.bootstrap.wizard_support import (
     backend_requires_transport,
 )
@@ -100,6 +100,29 @@ def non_interactive_phase(namespace: argparse.Namespace, imported_defaults: Impo
 
 def non_interactive_string(namespace_value: str | None, imported_value: str | None) -> str:
     return namespace_value or imported_value or ""
+
+
+def non_interactive_cerbo_relay_inputs(namespace: argparse.Namespace, topology_preset: str | None) -> tuple[int, str]:
+    if not topology_uses_cerbo_relay(topology_preset):
+        return 0, "NO"
+    relay_index = _non_interactive_relay_index(namespace)
+    contact_mode = _non_interactive_contact_mode(namespace)
+    return relay_index, contact_mode
+
+
+def _non_interactive_relay_index(namespace: argparse.Namespace) -> int:
+    raw_value = getattr(namespace, "cerbo_relay_index", None)
+    relay_index = int(raw_value if raw_value is not None else 0)
+    if relay_index not in (0, 1):
+        raise ValueError("--cerbo-relay-index must be 0 or 1")
+    return relay_index
+
+
+def _non_interactive_contact_mode(namespace: argparse.Namespace) -> str:
+    contact_mode = str(getattr(namespace, "cerbo_relay_contact_mode", None) or "NO").strip().upper()
+    if contact_mode not in {"NO", "NC"}:
+        raise ValueError("--cerbo-relay-contact-mode must be NO or NC")
+    return contact_mode
 
 
 def _non_interactive_transport_answers(
@@ -242,6 +265,7 @@ def non_interactive_answers(
             transport_unit_id,
         )
     )
+    cerbo_relay_index, cerbo_relay_contact_mode = non_interactive_cerbo_relay_inputs(namespace, topology_preset)
     return WizardAnswers(
         profile=profile,
         host_input=host_input,
@@ -258,6 +282,8 @@ def non_interactive_answers(
         charger_backend=backend,
         charger_preset=charger_preset,
         request_timeout_seconds=request_timeout_seconds,
+        cerbo_relay_index=cerbo_relay_index,
+        cerbo_relay_contact_mode=cerbo_relay_contact_mode,
         switch_group_supported_phase_selections=switch_group_phase_layout,
         auto_start_surplus_watts=auto_start_surplus_watts,
         auto_stop_surplus_watts=auto_stop_surplus_watts,

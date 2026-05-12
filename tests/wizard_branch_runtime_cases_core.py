@@ -15,9 +15,17 @@ from tests.wizard_branch_runtime_cases_common import (
 
 class _WizardBranchRuntimeCoreCases:
     def test_wizard_core_helpers_cover_live_checks_write_paths_and_main_guard(self) -> None:
+        from venus_evcharger.bootstrap.wizard_render import redact_sensitive_assignments
+
         with self.assertRaisesRegex(ValueError, "missing required key"):
             wizard._replace_assignment("Host=foo\n", "DeviceInstance", "60")
         self.assertEqual(wizard._append_backends("[Backends]\nX=1\n\n[Other]\nA=1\n", []), "[Other]\nA=1\n")
+        self.assertEqual(
+            redact_sensitive_assignments(
+                "[DEFAULT]\nUsername=user\nPassword=secret\nControlApiAuthToken=token\nHost=demo\n"
+            ),
+            "[DEFAULT]\nUsername=user\nHost=demo\n",
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -243,18 +251,37 @@ class _WizardBranchRuntimeCoreCases:
     def _rendered_live_result(path: Path, roles: object, *args: object) -> dict[str, object]:
         adapter_path = path.parent / "adapter.ini"
         materialized_content = path.read_text(encoding="utf-8") + adapter_path.read_text(encoding="utf-8")
+        ok = all(
+            (
+                _WizardBranchRuntimeCoreCases._live_check_files_exist(path, adapter_path),
+                _WizardBranchRuntimeCoreCases._live_check_files_are_private(path, adapter_path),
+                _WizardBranchRuntimeCoreCases._live_check_materialized_content_is_sanitized(materialized_content),
+                _WizardBranchRuntimeCoreCases._live_check_secret_defaults_match(args),
+            )
+        )
         return {
-            "ok": path.exists()
-            and adapter_path.exists()
-            and (path.stat().st_mode & 0o777) == 0o600
-            and (adapter_path.stat().st_mode & 0o777) == 0o600
-            and "secret" not in materialized_content
-            and "Password=" not in materialized_content
-            and bool(args)
-            and args[0]["Password"] == "main-secret",
+            "ok": ok,
             "checked_roles": roles or (),
             "roles": {},
         }
+
+    @staticmethod
+    def _live_check_files_exist(path: Path, adapter_path: Path) -> bool:
+        return path.exists() and adapter_path.exists()
+
+    @staticmethod
+    def _live_check_files_are_private(path: Path, adapter_path: Path) -> bool:
+        return (path.stat().st_mode & 0o777) == 0o600 and (adapter_path.stat().st_mode & 0o777) == 0o600
+
+    @staticmethod
+    def _live_check_materialized_content_is_sanitized(materialized_content: str) -> bool:
+        return "secret" not in materialized_content and "Password=" not in materialized_content
+
+    @staticmethod
+    def _live_check_secret_defaults_match(args: tuple[object, ...]) -> bool:
+        if not args or not isinstance(args[0], dict):
+            return False
+        return args[0].get("Password") == "main-secret"
 
     def _assert_wizard_write_confirmation_paths(self, temp_path: Path) -> None:
         from venus_evcharger.bootstrap import wizard_runtime

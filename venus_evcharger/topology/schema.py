@@ -10,6 +10,7 @@ TopologyType = Literal["simple_relay", "native_device", "hybrid_topology", "cust
 PolicyMode = Literal["manual", "auto", "scheduled"]
 
 ActuatorType = Literal[
+    "cerbo_gx_relay_switch",
     "shelly_switch",
     "shelly_contactor_switch",
     "template_switch",

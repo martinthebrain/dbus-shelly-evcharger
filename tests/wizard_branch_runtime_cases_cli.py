@@ -7,6 +7,7 @@ from tests.wizard_branch_runtime_cases_common import (
     redirect_stdout,
     wizard_cli,
 )
+from venus_evcharger.bootstrap.wizard_cli_non_interactive import non_interactive_cerbo_relay_inputs
 
 
 class _WizardBranchRuntimeCliCases:
@@ -130,6 +131,19 @@ class _WizardBranchRuntimeCliCases:
                 wizard_cli._interactive_topology_preset(_namespace(), _imported_defaults(), "multi_adapter_topology"),
                 "template-stack",
             )
+        self.assertEqual(wizard_cli._interactive_cerbo_relay_inputs(_namespace(), None), (0, "NO"))
+        self.assertEqual(
+            wizard_cli._interactive_cerbo_relay_inputs(
+                _namespace(cerbo_relay_index=1, cerbo_relay_contact_mode="nc"),
+                "shelly-meter-cerbo-relay",
+            ),
+            (1, "NC"),
+        )
+        with patch("venus_evcharger.bootstrap.wizard_cli._prompt_choice", side_effect=["1", "NC"]):
+            self.assertEqual(
+                wizard_cli._interactive_cerbo_relay_inputs(_namespace(), "shelly-meter-cerbo-relay"),
+                (1, "NC"),
+            )
         self.assertEqual(wizard_cli._interactive_username(_namespace(username="user"), imported, True), "user")
         self.assertEqual(wizard_cli._interactive_password(_namespace(password="secret"), imported, True), "secret")
         with patch("venus_evcharger.bootstrap.wizard_cli._prompt_text", return_value="77"):
@@ -157,3 +171,18 @@ class _WizardBranchRuntimeCliCases:
         with self.assertRaisesRegex(ValueError, "--profile is required"):
             wizard_cli._non_interactive_profile(_namespace(), _imported_defaults())
         self.assertTrue(wizard_cli._non_interactive_digest_auth(_namespace(digest_auth=True), _imported_defaults()))
+        self.assertEqual(non_interactive_cerbo_relay_inputs(_namespace(), None), (0, "NO"))
+        self.assertEqual(
+            non_interactive_cerbo_relay_inputs(
+                _namespace(cerbo_relay_index=1, cerbo_relay_contact_mode="nc"),
+                "shelly-meter-cerbo-relay",
+            ),
+            (1, "NC"),
+        )
+        with self.assertRaisesRegex(ValueError, "--cerbo-relay-index"):
+            non_interactive_cerbo_relay_inputs(_namespace(cerbo_relay_index=3), "shelly-meter-cerbo-relay")
+        with self.assertRaisesRegex(ValueError, "--cerbo-relay-contact-mode"):
+            non_interactive_cerbo_relay_inputs(
+                _namespace(cerbo_relay_contact_mode="bad"),
+                "shelly-meter-cerbo-relay",
+            )

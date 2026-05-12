@@ -13,6 +13,7 @@ from venus_evcharger.core.contracts import (
     normalized_state_api_operational_fields,
 )
 from venus_evcharger.service.control_state_operational_support import (
+    _state_api_operational_auto_decision_state,
     _state_api_operational_balance_state,
     _state_api_operational_energy_state,
     _state_api_operational_victron_bias_state,
@@ -84,6 +85,7 @@ def _state_api_operational_state(
         software_update_available,
         software_update_no_update_active,
     )
+    state.update(_state_api_operational_auto_decision_state(owner, last_auto_metrics, auto_state, auto_state_code))
     state.update(_state_api_operational_energy_state(worker_snapshot, learning_summary))
     state.update(_state_api_operational_balance_state(owner, worker_snapshot, last_auto_metrics))
     state.update(_state_api_operational_victron_bias_state(last_auto_metrics))

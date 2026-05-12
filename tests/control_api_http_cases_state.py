@@ -30,6 +30,14 @@ class _ControlApiHttpStateCases:
             _state_api_dbus_diagnostics_payload=MagicMock(
                 return_value={"ok": True, "api_version": "v1", "kind": "dbus-diagnostics", "state": {"/Auto/State": "idle"}}
             ),
+            _state_api_automation_payload=MagicMock(
+                return_value={
+                    "ok": True,
+                    "api_version": "v1",
+                    "kind": "automation",
+                    "state": {"state_token": "state-1", "command_endpoint": "/v1/control/command"},
+                }
+            ),
             _state_api_healthz_payload=MagicMock(return_value={"ok": True, "api_version": "v1", "kind": "healthz", "state": {"alive": True}}),
             _state_api_version_payload=MagicMock(return_value={"ok": True, "api_version": "v1", "kind": "version", "state": {"service_version": "1.2.3"}}),
             _state_api_build_payload=MagicMock(return_value={"ok": True, "api_version": "v1", "kind": "build", "state": {"firmware_version": "FW"}}),
@@ -52,6 +60,7 @@ class _ControlApiHttpStateCases:
 
         capabilities_handler = _FakeHandler("/v1/capabilities")
         diagnostics_handler = _FakeHandler("/v1/state/dbus-diagnostics")
+        automation_handler = _FakeHandler("/v1/state/automation")
         healthz_handler = _FakeHandler("/v1/state/healthz")
         version_handler = _FakeHandler("/v1/state/version")
         build_handler = _FakeHandler("/v1/state/build")
@@ -63,6 +72,7 @@ class _ControlApiHttpStateCases:
 
         server._handle_get(capabilities_handler)
         server._handle_get(diagnostics_handler)
+        server._handle_get(automation_handler)
         server._handle_get(healthz_handler)
         server._handle_get(version_handler)
         server._handle_get(build_handler)
@@ -78,6 +88,9 @@ class _ControlApiHttpStateCases:
         self.assertIn("set_mode", capabilities_handler.json_payload()["command_names"])
         self.assertEqual(diagnostics_handler.status_code, 200)
         self.assertEqual(diagnostics_handler.json_payload()["kind"], "dbus-diagnostics")
+        self.assertEqual(automation_handler.status_code, 200)
+        self.assertEqual(automation_handler.json_payload()["kind"], "automation")
+        self.assertEqual(automation_handler.json_payload()["state"]["command_endpoint"], "/v1/control/command")
         self.assertEqual(healthz_handler.status_code, 200)
         self.assertEqual(healthz_handler.json_payload()["kind"], "healthz")
         self.assertEqual(version_handler.json_payload()["kind"], "version")

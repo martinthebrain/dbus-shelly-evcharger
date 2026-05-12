@@ -495,7 +495,7 @@ CLI quick start:
 python3 ./venus_evchargerctl.py --token READ-TOKEN health
 python3 ./venus_evchargerctl.py --token READ-TOKEN doctor
 python3 ./venus_evchargerctl.py --token READ-TOKEN capabilities
-python3 ./venus_evchargerctl.py --token READ-TOKEN state summary
+python3 ./venus_evchargerctl.py --token READ-TOKEN state automation
 python3 ./venus_evchargerctl.py --token CONTROL-TOKEN command set-mode 1
 python3 ./venus_evchargerctl.py --token CONTROL-TOKEN safe-write set-mode 1
 python3 ./venus_evchargerctl.py --token CONTROL-TOKEN command set-current-setting 12.5 --path /SetCurrent
@@ -536,7 +536,7 @@ Use `If-Match` with the current state token:
 ```bash
 STATE_TOKEN="$(curl -s -D - -o /tmp/state.json \
   -H 'Authorization: Bearer READ-TOKEN' \
-  http://127.0.0.1:8765/v1/state/health \
+  http://127.0.0.1:8765/v1/state/automation \
   | awk -F': ' '/^X-State-Token:/ {print $2}' | tr -d '\r')"
 
 curl -s \
@@ -557,12 +557,11 @@ client = LocalControlApiClient(
     bearer_token="CONTROL-TOKEN",
 )
 
-summary = client.state("summary").json()
-state_token = client.state("health").headers.get("X-State-Token", "")
-result = client.command(
+automation = client.automation()
+state_token = client.state_token_from_response(automation)
+result = client.safe_command(
     {"name": "set_mode", "value": 1},
     idempotency_key="set-mode-1",
-    if_match=state_token,
 ).json()
 ```
 <!-- END:CONTROL_API_GETTING_STARTED -->

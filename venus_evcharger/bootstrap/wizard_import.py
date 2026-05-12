@@ -25,6 +25,8 @@ _PROFILE_DEFAULTS_BY_BACKENDS: dict[tuple[str, str, str], tuple[WizardProfile, s
     ("template_meter", "template_switch", "template_charger"): ("multi_adapter_topology", "template-stack", "template_charger"),
     ("shelly_meter", "shelly_switch", "template_charger"): ("multi_adapter_topology", "shelly-io-template-charger", "template_charger"),
     ("shelly_meter", "shelly_switch", "modbus_charger"): ("multi_adapter_topology", "shelly-io-modbus-charger", "modbus_charger"),
+    ("template_meter", "cerbo_gx_relay_switch", ""): ("multi_adapter_topology", "template-meter-cerbo-relay", None),
+    ("shelly_meter", "cerbo_gx_relay_switch", ""): ("multi_adapter_topology", "shelly-meter-cerbo-relay", None),
     ("shelly_meter", "none", "goe_charger"): ("multi_adapter_topology", "shelly-meter-goe", "goe_charger"),
     ("shelly_meter", "none", "modbus_charger"): ("multi_adapter_topology", "shelly-meter-modbus-charger", "modbus_charger"),
     ("none", "switch_group", "goe_charger"): ("multi_adapter_topology", "goe-external-switch-group", "goe_charger"),

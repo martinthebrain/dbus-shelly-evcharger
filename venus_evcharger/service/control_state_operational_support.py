@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from venus_evcharger.core.contracts import finite_float_or_none, sanitized_auto_metrics
 from venus_evcharger.energy import summarize_energy_learning_profiles
 
 
@@ -68,6 +69,40 @@ def _state_api_operational_energy_state(
         "combined_battery_direction_change_count": learning_summary.get("direction_change_count", 0),
         "combined_battery_learning_summary": learning_summary,
     }
+
+
+def _state_api_operational_auto_decision_state(
+    owner: Any,
+    last_auto_metrics: dict[str, Any],
+    auto_state: object,
+    auto_state_code: object,
+) -> dict[str, Any]:
+    metrics = sanitized_auto_metrics(last_auto_metrics)
+    return {
+        "auto_decision": {
+            "reason": str(getattr(owner, "_last_health_reason", "") or "na"),
+            "state": auto_state,
+            "state_code": auto_state_code,
+            "relay_intent": _relay_intent_value(metrics.get("relay_intent")),
+            "surplus_watts": finite_float_or_none(metrics.get("surplus")),
+            "grid_watts": finite_float_or_none(metrics.get("grid")),
+            "soc_percent": finite_float_or_none(metrics.get("soc")),
+            "start_threshold_watts": finite_float_or_none(metrics.get("start_threshold")),
+            "stop_threshold_watts": finite_float_or_none(metrics.get("stop_threshold")),
+            "profile": _optional_metric_text(metrics.get("profile")),
+            "threshold_mode": _optional_metric_text(metrics.get("threshold_mode")),
+        }
+    }
+
+
+def _relay_intent_value(value: object) -> int:
+    if value is None:
+        return -1
+    return int(bool(value))
+
+
+def _optional_metric_text(value: object) -> str:
+    return "" if value is None else str(value).strip()
 
 
 def _state_api_operational_balance_state(

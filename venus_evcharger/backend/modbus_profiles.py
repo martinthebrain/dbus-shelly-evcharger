@@ -1,5 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Generic Modbus EVSE register-profile support."""
+"""Generic Modbus EVSE register-profile support.
+
+Profiles describe how a charger exposes state and control registers without
+hard-coding one vendor layout into the runtime backend. The parser validates
+register types, data types, scales, value maps, phase maps, and capability
+flags before a profile reaches the charger adapter. Runtime reads then stay
+small: each configured field knows how to fetch and normalize its own value,
+while writes encode enable, current, and phase-selection commands.
+"""
 
 from __future__ import annotations
 

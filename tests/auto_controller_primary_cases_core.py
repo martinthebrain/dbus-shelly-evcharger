@@ -37,6 +37,20 @@ class _AutoControllerPrimaryCoreCases:
         self.assertTrue(controller.is_within_auto_daytime_window(datetime(2026, 4, 4, 8, 0)))
         self.assertTrue(controller.is_within_auto_daytime_window(datetime(2026, 5, 4, 2, 0)))
 
+    def test_auto_mode_does_not_start_scheduled_night_fallback_after_daytime_window_ends(self):
+        controller, service = self._make_controller()
+        service.virtual_mode = 1
+        service.virtual_autostart = 1
+        service.auto_month_windows = {4: ((7, 30), (19, 30))}
+        service.auto_scheduled_enabled_days = "Mon,Tue,Wed,Thu,Fri"
+        service.auto_scheduled_night_start_delay_seconds = 3600.0
+        service.auto_scheduled_latest_end_time = "06:30"
+        service._time_now = lambda: datetime(2026, 4, 20, 20, 45).timestamp()
+
+        self.assertFalse(controller.auto_decide_relay(False, None, None, None))
+        self.assertNotEqual(service._last_health_reason, "scheduled-night-charge")
+        self.assertNotEqual(service._last_auto_state, "charging")
+
     def test_scheduled_mode_starts_charging_one_hour_after_daytime_window_ends(self):
         controller, service = self._make_controller()
         service.virtual_mode = 2

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from venus_evcharger.bootstrap import wizard, wizard_cli
-from venus_evcharger.bootstrap.wizard_guidance import prompt_topology_preset, resolved_primary_host
+from venus_evcharger.bootstrap.wizard_guidance import _topology_choice_labels, prompt_topology_preset, resolved_primary_host
 from venus_evcharger.bootstrap.wizard_import import (
     ImportedWizardDefaults,
     _adapter_path,

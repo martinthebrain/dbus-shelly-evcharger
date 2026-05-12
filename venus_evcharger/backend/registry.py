@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 from .base import BackendConstructor
+from .cerbo_gx_relay_switch import CerboGxRelaySwitchBackend
 from .goe_charger import GoEChargerBackend
 from .modbus_charger import ModbusChargerBackend
 from .shelly_contactor_switch import ShellyContactorSwitchBackend
@@ -25,6 +26,7 @@ METER_BACKENDS: dict[str, BackendConstructor] = {
 }
 
 SWITCH_BACKENDS: dict[str, BackendConstructor] = {
+    "cerbo_gx_relay_switch": CerboGxRelaySwitchBackend,
     "shelly_switch": ShellySwitchBackend,
     "shelly_contactor_switch": ShellyContactorSwitchBackend,
     "switch_group": SwitchGroupBackend,

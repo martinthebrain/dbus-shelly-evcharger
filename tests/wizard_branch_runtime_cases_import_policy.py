@@ -11,6 +11,7 @@ from tests.wizard_branch_runtime_cases_common import (
     _policy_mode,
     _profile_defaults_from_types,
     _switch_group_member_host,
+    _topology_choice_labels,
     datetime,
     json,
     load_imported_defaults,
@@ -31,6 +32,7 @@ from tests.wizard_branch_runtime_cases_common import (
 class _WizardBranchRuntimeImportPolicyCases:
     def test_branch_helpers_cover_remaining_prompt_and_import_edges(self) -> None:
         self.assertEqual(prompt_topology_preset(lambda *_args: "template-stack", "template-stack"), "template-stack")
+        self.assertIn("responsibilities separate", _topology_choice_labels()["template-stack"])
         self.assertEqual(resolved_primary_host(_namespace(), _imported_defaults(), None, None, None), "192.168.1.50")
 
         result_text = wizard_cli.result_text(
@@ -59,7 +61,8 @@ class _WizardBranchRuntimeImportPolicyCases:
             )
         )
         self.assertNotIn("  - meter:", result_text)
-        self.assertIn("Selected setup: Single switched path", result_text)
+        self.assertIn("Selected setup: Recommended: Shelly PM/PM1 Gen4 measures and switches", result_text)
+        self.assertIn("Responsibilities: one Shelly-compatible device provides both metering and switching", result_text)
 
         hinted_result_text = wizard_cli.result_text(
             WizardResult(

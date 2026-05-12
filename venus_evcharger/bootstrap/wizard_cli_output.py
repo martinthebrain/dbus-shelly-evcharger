@@ -4,17 +4,28 @@
 from __future__ import annotations
 
 from venus_evcharger.bootstrap.wizard_models import WizardResult
-from venus_evcharger.bootstrap.wizard_support import profile_label, topology_preset_label
+from venus_evcharger.bootstrap.wizard_support import (
+    policy_mode_label,
+    policy_mode_note,
+    profile_label,
+    setup_responsibility_summary,
+    topology_preset_label,
+    topology_uses_cerbo_relay,
+)
 
 
 def result_text(result: WizardResult) -> str:
     lines = [
         *_result_header_lines(result),
+        *_result_configuration_summary_lines(result),
         *_result_role_host_lines(result),
         *_result_generated_file_lines(result),
         *_result_artifact_lines(result),
         *_result_warning_lines(result),
         *_result_live_check_lines(result),
+        *_result_setup_note_lines(result),
+        *_result_next_step_lines(result),
+        *_result_post_install_checklist_lines(result),
         *_result_suggested_energy_source_lines(result),
         *_result_suggested_energy_merge_lines(result),
         *_result_suggested_block_lines(result),
@@ -30,6 +41,8 @@ def _result_header_lines(result: WizardResult) -> list[str]:
         _optional_header_line("Imported defaults", result.imported_from, "none"),
         _optional_header_line("Selected setup", profile_label(result.profile), ""),
         _optional_header_line("Selected topology preset", topology_preset_label(result.topology_preset), "n/a"),
+        _optional_header_line("Responsibilities", setup_responsibility_summary(result.profile, result.topology_preset), ""),
+        _optional_header_line("Initial policy mode", policy_mode_label(result.policy_mode), ""),
         _optional_header_line("Selected charger backend", result.charger_backend, "none"),
         _optional_header_line("Transport", result.transport_kind, "n/a"),
         "Validation: ok",
@@ -56,6 +69,58 @@ def _result_role_host_lines(result: WizardResult) -> list[str]:
     return lines
 
 
+def _result_configuration_summary_lines(result: WizardResult) -> list[str]:
+    return [
+        "Configuration summary:",
+        f"  - Target config: {result.config_path}",
+        f"  - Charging policy: {policy_mode_label(result.policy_mode)}",
+        f"  - Hardware flow: {_hardware_flow_summary(result)}",
+    ]
+
+
+def _hardware_flow_summary(result: WizardResult) -> str:
+    meter = result.role_hosts.get("meter")
+    switch = result.role_hosts.get("switch")
+    charger = result.role_hosts.get("charger")
+    topology_preset = result.topology_preset or ""
+    if topology_uses_cerbo_relay(result.topology_preset):
+        return _cerbo_hardware_flow(meter)
+    if "switch-group" in topology_preset:
+        return _switch_group_hardware_flow(meter, switch, charger)
+    if result.profile == "simple_relay":
+        return _simple_relay_hardware_flow(meter, switch)
+    return _native_or_generic_hardware_flow(result, meter, charger)
+
+
+def _cerbo_hardware_flow(meter: str | None) -> str:
+    meter_text = _endpoint_text(meter, "the configured meter")
+    return f"{meter_text} measures energy; the local Cerbo GX relay switches the contactor."
+
+
+def _switch_group_hardware_flow(meter: str | None, switch: str | None, charger: str | None) -> str:
+    charger_text = _endpoint_text(charger, "the charger backend")
+    switch_text = _endpoint_text(switch, "the external switch group")
+    meter_prefix = f"{_endpoint_text(meter, 'the configured meter')} measures energy; " if meter else ""
+    return f"{meter_prefix}{charger_text} controls charging; {switch_text} switches phases/contactors."
+
+
+def _simple_relay_hardware_flow(meter: str | None, switch: str | None) -> str:
+    endpoint = _endpoint_text(meter or switch, "the Shelly-compatible device")
+    return f"{endpoint} measures energy and switches the relay/contactor."
+
+
+def _native_or_generic_hardware_flow(result: WizardResult, meter: str | None, charger: str | None) -> str:
+    if charger is None:
+        return setup_responsibility_summary(result.profile, result.topology_preset) + "."
+    if meter is None:
+        return f"{charger} owns charger control and status where supported."
+    return f"{meter} measures energy; {charger} controls charging."
+
+
+def _endpoint_text(endpoint: str | None, fallback: str) -> str:
+    return endpoint if endpoint else fallback
+
+
 def _result_generated_file_lines(result: WizardResult) -> list[str]:
     lines = ["Generated files:", *(f"  - {item}" for item in result.generated_files)]
     if result.backup_files:
@@ -77,9 +142,60 @@ def _result_artifact_lines(result: WizardResult) -> list[str]:
 
 
 def _result_warning_lines(result: WizardResult) -> list[str]:
-    if not result.warnings:
+    warnings = _risk_warning_lines(result)
+    if not warnings:
         return []
-    return ["Warnings:", *(f"  - {item}" for item in result.warnings)]
+    return ["Warnings by risk:", *(f"  - {item}" for item in warnings)]
+
+
+def _risk_warning_lines(result: WizardResult) -> list[str]:
+    items = [*_derived_risk_warning_items(result), *((_warning_severity(item), item) for item in result.warnings)]
+    return [f"{severity}: {message}" for severity, message in sorted(items, key=_risk_sort_key)]
+
+
+def _optional_warning(condition: bool, severity: str, message: str) -> tuple[tuple[str, str], ...]:
+    return ((severity, message),) if condition else tuple()
+
+
+def _derived_risk_warning_items(result: WizardResult) -> tuple[tuple[str, str], ...]:
+    return (
+        *_optional_warning(
+            result.live_check is not None and not result.live_check.get("ok"),
+            "High",
+            "Live connectivity check reported issues; fix these before unattended charging.",
+        ),
+        *_optional_warning(
+            bool(result.answer_defaults.get("password_present")),
+            "Medium",
+            "Authentication credentials are configured; keep generated config and wizard artifacts private.",
+        ),
+        *_optional_warning(
+            topology_uses_cerbo_relay(result.topology_preset)
+            and result.answer_defaults.get("cerbo_relay_contact_mode") == "NC",
+            "Medium",
+            "Cerbo relay uses NC wiring; verify fail-safe behavior before connecting a vehicle.",
+        ),
+    )
+
+
+def _warning_severity(message: str) -> str:
+    lowered = message.lower()
+    if _contains_any(lowered, ("live connectivity", "dbus", "auth", "password")):
+        return "High"
+    if _contains_any(lowered, ("relay", "contactor", "phase", "switch")):
+        return "Medium"
+    if _contains_any(lowered, ("auto", "threshold", "surplus")):
+        return "Medium"
+    return "Low"
+
+
+def _contains_any(text: str, tokens: tuple[str, ...]) -> bool:
+    return any(token in text for token in tokens)
+
+
+def _risk_sort_key(item: tuple[str, str]) -> tuple[int, str]:
+    severity_order = {"High": 0, "Medium": 1, "Low": 2}
+    return severity_order.get(item[0], 3), item[1]
 
 
 def _result_live_check_lines(result: WizardResult) -> list[str]:
@@ -98,6 +214,104 @@ def _result_live_check_role_line(role: str, payload: object) -> str | None:
     status = payload.get("status", "unknown")
     detail = payload.get("error") or payload.get("reason") or "ok"
     return f"  - {role}: {status} ({detail})"
+
+
+def _result_setup_note_lines(result: WizardResult) -> list[str]:
+    notes = [
+        policy_mode_note(result.policy_mode),
+        *_topology_setup_notes(result),
+    ]
+    return ["Setup notes:", *(f"  - {item}" for item in notes)]
+
+
+def _topology_setup_notes(result: WizardResult) -> tuple[str, ...]:
+    topology_preset = result.topology_preset or ""
+    return tuple(
+        message
+        for condition, message in (
+            (
+                topology_uses_cerbo_relay(result.topology_preset),
+                "Cerbo GX relay switching sets the Venus OS relay function to Manual before changing relay state.",
+            ),
+            (
+                _is_shelly_style_setup(result.profile, result.topology_preset),
+                "Shelly-style metering/switching setups infer charging from power and energy deltas, not from vehicle communication.",
+            ),
+            (
+                "switch-group" in topology_preset,
+                "External switch-group adapters own phase/contact switching only; the charger backend still owns charger control.",
+            ),
+            (
+                _has_native_charger_backend(result.charger_backend),
+                "Native charger backends can use charger-side status/control where the device supports it.",
+            ),
+        )
+        if condition
+    )
+
+
+def _is_shelly_style_setup(profile: str, topology_preset: str | None) -> bool:
+    return (profile == "simple_relay" and topology_preset is None) or "shelly" in (topology_preset or "")
+
+
+def _has_native_charger_backend(charger_backend: str | None) -> bool:
+    return charger_backend in {"goe_charger", "modbus_charger", "simpleevse_charger", "smartevse_charger"}
+
+
+def _result_next_step_lines(result: WizardResult) -> list[str]:
+    lines = ["Next steps:"]
+    lines.extend(_optional_line(result.dry_run, "  - Review this preview, then rerun without --dry-run to write the files."))
+    lines.extend(
+        _optional_line(result.manual_review, "  - Review the Manual review items below before enabling unattended charging.")
+    )
+    lines.append(f"  - Validate the full setup: python3 -m venus_evcharger.backend.probe validate-wallbox {result.config_path}")
+    lines.extend(
+        _optional_line(
+            _has_adapter_files(result),
+            "  - Validate generated adapter files individually with: python3 -m venus_evcharger.backend.probe validate <adapter.ini>",
+        )
+    )
+    lines.extend(_live_check_next_step_lines(result))
+    return lines
+
+
+def _optional_line(condition: object, line: str) -> tuple[str, ...]:
+    return (line,) if condition else tuple()
+
+
+def _live_check_next_step_lines(result: WizardResult) -> tuple[str, ...]:
+    if result.live_check is None:
+        return ("  - Optional: rerun the wizard with --live-check once the devices are reachable.",)
+    return _optional_line(not result.live_check.get("ok"), "  - Fix the live connectivity issues above, then rerun with --live-check.")
+
+
+def _result_post_install_checklist_lines(result: WizardResult) -> list[str]:
+    lines = [
+        "Post-install checklist:",
+        "  - In the Venus GUI, confirm Mode, StartStop, AutoStart, relay state, and measured charging power.",
+        "  - Start with a safe manual test before relying on unattended Auto or Scheduled charging.",
+    ]
+    lines.extend(
+        _optional_line(
+            topology_uses_cerbo_relay(result.topology_preset),
+            "  - For Cerbo relay setups, confirm Relay 1/2 and NO/NC wiring match the generated config.",
+        )
+    )
+    lines.extend(
+        _optional_line(
+            _is_shelly_style_setup(result.profile, result.topology_preset),
+            "  - For Shelly-style setups, confirm session energy starts at zero after unplug/replug.",
+        )
+    )
+    return lines
+
+
+def _has_adapter_files(result: WizardResult) -> bool:
+    return any(item.endswith(".ini") and item != _config_filename(result.config_path) for item in result.generated_files)
+
+
+def _config_filename(config_path: str) -> str:
+    return config_path.rstrip("/").rsplit("/", 1)[-1]
 
 
 def _result_suggested_block_lines(result: WizardResult) -> list[str]:

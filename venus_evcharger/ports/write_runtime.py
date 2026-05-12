@@ -1,7 +1,31 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # mypy: disable-error-code=attr-defined
 # pyright: reportAttributeAccessIssue=false
-"""Runtime-facing property surface for the DBus write controller port."""
+"""Runtime-facing property surface for the DBus write controller port.
+
+The write controller should not know the concrete service object's internal
+attribute layout. This mixin provides that narrow boundary as explicit
+properties for manual control state, Auto thresholds, scheduled charging,
+learning settings, phase switching, and transient runtime flags.
+
+Most properties are intentionally simple pass-throughs with light normalization.
+Validation belongs in the control service, write controller, and config loader;
+the port only translates between controller concepts and service attributes.
+That separation keeps external command behavior stable while allowing the
+service runtime to evolve behind the port.
+
+The module is long because the public runtime surface is long, not because the
+individual accessors are complex. Keeping the accessor contract in one place
+makes tests exercise the same boundary production uses and avoids duplicate
+DBus-write glue in controller code.
+
+If this surface grows further, the safe split point is by setting group while
+preserving this aggregate mixin name for existing imports.
+Callers should treat every property here as part of the write-controller port
+contract, even when the backing service attribute is private or transitional.
+That makes rollback, runtime persistence, and GUI writes share one consistent
+attribute vocabulary.
+"""
 
 from __future__ import annotations
 

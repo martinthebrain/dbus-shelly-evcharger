@@ -162,6 +162,33 @@ ChargerType=na
     def _state_api_dbus_diagnostics_payload(self) -> dict[str, Any]:
         return {"ok": True, "api_version": "v1", "kind": "dbus-diagnostics", "state": {"writes": self._revision}}
 
+    def _state_api_automation_payload(self) -> dict[str, Any]:
+        operational = self._state_api_operational_payload()
+        return {
+            "ok": True,
+            "api_version": "v1",
+            "kind": "automation",
+            "state": {
+                "state_token": self._control_api_state_token(),
+                "command_endpoint": "/v1/control/command",
+                "events_endpoint": "/v1/events",
+                "safe_write": {
+                    "if_match_header": "If-Match",
+                    "idempotency_key_header": "Idempotency-Key",
+                    "command_id_header": "X-Command-Id",
+                },
+                "writable": {
+                    "command_names": sorted(ControlApiV1Service._COMMAND_NAMES),
+                    "scope_requirements": dict(CONTROL_API_COMMAND_SCOPE_REQUIREMENTS),
+                },
+                "operational": dict(operational["state"]),
+                "auto_decision": {},
+                "health": dict(self._state_api_health_payload()["state"]),
+                "topology": dict(self._state_api_topology_payload()["state"]),
+                "diagnostics": dict(self._state_api_dbus_diagnostics_payload()["state"]),
+            },
+        }
+
     def _state_api_topology_payload(self) -> dict[str, Any]:
         return {
             "ok": True,
@@ -259,7 +286,7 @@ ChargerType=na
             "command_names": sorted(ControlApiV1Service._COMMAND_NAMES),
             "command_scope_requirements": dict(CONTROL_API_COMMAND_SCOPE_REQUIREMENTS),
             "command_sources": ["http"],
-            "state_endpoints": ["/v1/state/summary", "/v1/state/runtime", "/v1/state/health"],
+            "state_endpoints": ["/v1/state/automation", "/v1/state/summary", "/v1/state/runtime", "/v1/state/health"],
             "endpoints": ["/v1/control/health", "/v1/control/command", "/v1/events", "/v1/state/summary"],
             "available_modes": [0, 1, 2],
             "supported_phase_selections": list(self.supported_phase_selections),

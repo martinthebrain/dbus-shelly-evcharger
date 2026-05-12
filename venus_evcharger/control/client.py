@@ -85,6 +85,30 @@ class LocalControlApiClient:
     def capabilities(self, *, headers: Mapping[str, str] | None = None) -> ControlApiClientResponse:
         return self.get("/v1/capabilities", headers=headers)
 
+    def automation(self, *, headers: Mapping[str, str] | None = None) -> ControlApiClientResponse:
+        return self.state("automation", headers=headers)
+
+    def safe_command(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        state_endpoint: str = "automation",
+        idempotency_key: str = "",
+        command_id: str = "",
+        headers: Mapping[str, str] | None = None,
+    ) -> ControlApiClientResponse:
+        state_response = self.state(state_endpoint, headers=headers)
+        state_token = self.state_token_from_response(state_response)
+        if not state_token:
+            raise ValueError(f"State endpoint '{state_endpoint}' did not return a state token.")
+        return self.command(
+            payload,
+            idempotency_key=idempotency_key,
+            command_id=command_id,
+            if_match=state_token,
+            headers=headers,
+        )
+
     def health(self, *, headers: Mapping[str, str] | None = None) -> ControlApiClientResponse:
         return self.get("/v1/control/health", headers=headers)
 
@@ -261,3 +285,16 @@ class LocalControlApiClient:
         if json_payload is None:
             return None
         return json.dumps(dict(json_payload), separators=(",", ":"))
+
+    @staticmethod
+    def state_token_from_response(response: ControlApiClientResponse) -> str:
+        header_token = str(response.headers.get("X-State-Token", "")).strip()
+        if header_token:
+            return header_token.strip('"')
+        payload = response.json()
+        state = payload.get("state")
+        if isinstance(state, dict):
+            token = state.get("state_token", "")
+            if isinstance(token, str):
+                return token.strip().strip('"')
+        return ""

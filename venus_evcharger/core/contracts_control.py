@@ -36,6 +36,7 @@ CONTROL_API_ERROR_CODES = frozenset(
 )
 CONTROL_API_STATE_ENDPOINTS = frozenset(
     {
+        "/v1/state/automation",
         "/v1/state/build",
         "/v1/state/config-effective",
         "/v1/state/contracts",

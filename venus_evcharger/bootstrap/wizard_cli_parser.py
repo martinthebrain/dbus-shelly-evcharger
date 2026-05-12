@@ -89,6 +89,8 @@ def build_parser(default_config_path: str, default_template_path: str) -> argpar
     parser.add_argument("--live-check", action="store_true")
     parser.add_argument("--probe-role", dest="probe_roles", action="append", choices=("meter", "switch", "charger"))
     parser.add_argument("--request-timeout-seconds", type=float)
+    parser.add_argument("--cerbo-relay-index", type=int, choices=(0, 1))
+    parser.add_argument("--cerbo-relay-contact-mode", choices=("NO", "NC"))
     parser.add_argument("--switch-group-phase-layout", choices=SWITCH_GROUP_PHASE_LAYOUT_VALUES)
     parser.add_argument("--auto-start-surplus-watts", type=float)
     parser.add_argument("--auto-stop-surplus-watts", type=float)

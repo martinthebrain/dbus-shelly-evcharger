@@ -37,6 +37,7 @@ class TestVenusEvchargerControlContracts(unittest.TestCase):
         self.assertIn("/v1/capabilities", CONTROL_API_ENDPOINTS)
         self.assertIn("/v1/events", CONTROL_API_ENDPOINTS)
         self.assertIn("/v1/openapi.json", CONTROL_API_ENDPOINTS)
+        self.assertIn("/v1/state/automation", CONTROL_API_STATE_ENDPOINTS)
         self.assertIn("/v1/state/healthz", CONTROL_API_STATE_ENDPOINTS)
         self.assertIn("/v1/state/version", CONTROL_API_STATE_ENDPOINTS)
         self.assertIn("/v1/state/summary", CONTROL_API_STATE_ENDPOINTS)

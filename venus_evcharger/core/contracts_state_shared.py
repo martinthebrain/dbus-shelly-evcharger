@@ -12,6 +12,7 @@ STATE_API_KINDS = frozenset(
     {
         "build",
         "contracts",
+        "automation",
         "healthz",
         "summary",
         "runtime",

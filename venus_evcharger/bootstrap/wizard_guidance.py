@@ -3,73 +3,64 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, cast
 
 from venus_evcharger.bootstrap.wizard_charger_presets import apply_charger_preset_backend
 from venus_evcharger.bootstrap.wizard_import import ImportedWizardDefaults
 from venus_evcharger.bootstrap.wizard_models import WizardChargerBackend
-from venus_evcharger.bootstrap.wizard_support import TOPOLOGY_PRESET_LABELS, TOPOLOGY_PRESET_VALUES, host_from_input
+from venus_evcharger.bootstrap.wizard_support import (
+    PROFILE_ROLE_HOSTS,
+    TOPOLOGY_PRESET_LABELS,
+    TOPOLOGY_PRESET_BACKENDS,
+    TOPOLOGY_PRESET_INTROS,
+    TOPOLOGY_RESPONSIBILITY_SUMMARIES,
+    TOPOLOGY_PRESET_VALUES,
+    TOPOLOGY_ROLE_HOSTS,
+    host_from_input,
+)
 
 PromptText = Callable[[str, str], str]
 PromptChoice = Callable[[str, tuple[str, ...], dict[str, str] | None, str | None], str]
 
-_TOPOLOGY_ROLE_HOSTS: dict[str, tuple[str, ...]] = {
-    "template-stack": ("meter", "switch", "charger"),
-    "shelly-io-template-charger": ("meter", "switch", "charger"),
-    "shelly-io-modbus-charger": ("meter", "switch"),
-    "shelly-meter-goe": ("meter", "charger"),
-    "shelly-meter-modbus-charger": ("meter", "charger"),
-    "goe-external-switch-group": ("switch", "charger"),
-    "template-meter-goe-switch-group": ("meter", "switch", "charger"),
-    "shelly-meter-goe-switch-group": ("meter", "switch", "charger"),
-    "shelly-meter-modbus-switch-group": ("meter", "switch"),
-}
-_ROLE_PROMPT_INTROS: dict[tuple[str, str | None], str] = {
-    ("native_device", None): "This setup only needs the charger endpoint.",
-    ("hybrid_topology", None): "This setup needs one charger endpoint and one external phase-switch endpoint.",
-    ("multi_adapter_topology", "shelly-meter-goe"): "This topology uses a separate meter plus a native go-e charger.",
-    ("multi_adapter_topology", "goe-external-switch-group"): "This topology uses a go-e charger plus one external switch-group adapter for phase switching.",
+_PROFILE_PROMPT_INTROS: dict[str, str] = {
+    "native_device": "This setup only needs the charger endpoint.",
+    "hybrid_topology": "This setup needs one charger endpoint and one external phase-switch endpoint.",
 }
 _DEFAULT_BACKENDS: dict[str, WizardChargerBackend] = {
     "native_device": "goe_charger",
     "hybrid_topology": "simpleevse_charger",
-}
-_PRESET_BACKENDS: dict[str, WizardChargerBackend] = {
-    "shelly-io-template-charger": "template_charger",
-    "shelly-io-modbus-charger": "modbus_charger",
-    "shelly-meter-modbus-switch-group": "modbus_charger",
-    "shelly-meter-goe": "goe_charger",
-    "shelly-meter-modbus-charger": "modbus_charger",
-    "goe-external-switch-group": "goe_charger",
-    "template-meter-goe-switch-group": "goe_charger",
-    "shelly-meter-goe-switch-group": "goe_charger",
 }
 _PHASE_LAYOUT_PRESETS = {"goe-external-switch-group"}
 _SWITCH_GROUP_PRESET_FRAGMENT = "switch-group"
 
 
 def prompt_topology_preset(prompt_choice: PromptChoice, default: str) -> str:
-    labels: dict[str, str] = {key: value for key, value in TOPOLOGY_PRESET_LABELS}
+    labels = _topology_choice_labels()
     return prompt_choice("Choose the topology preset:", TOPOLOGY_PRESET_VALUES, labels, default)
 
 
+def _topology_choice_labels() -> dict[str, str]:
+    return {
+        key: f"{value} - {TOPOLOGY_RESPONSIBILITY_SUMMARIES.get(key, key)}"
+        for key, value in TOPOLOGY_PRESET_LABELS
+    }
+
+
 def relevant_role_hosts(profile: str, topology_preset: str | None) -> tuple[str, ...]:
-    if profile == "native_device":
-        return ("charger",)
-    if profile == "hybrid_topology":
-        return ("charger", "switch")
-    if profile != "multi_adapter_topology":
+    if profile == "multi_adapter_topology":
+        return TOPOLOGY_ROLE_HOSTS.get(topology_preset or "", ())
+    if profile == "simple_relay":
         return ()
-    return _TOPOLOGY_ROLE_HOSTS.get(topology_preset or "", ())
+    return PROFILE_ROLE_HOSTS.get(profile, ())
 
 
 def role_prompt_intro(profile: str, topology_preset: str | None) -> str | None:
     if profile == "multi_adapter_topology":
-        return _ROLE_PROMPT_INTROS.get(
-            (profile, topology_preset),
+        return TOPOLOGY_PRESET_INTROS.get(
+            topology_preset or "",
             "This topology uses separate adapter roles. We will ask for each role endpoint separately.",
         )
-    return _ROLE_PROMPT_INTROS.get((profile, None))
+    return _PROFILE_PROMPT_INTROS.get(profile)
 
 
 def role_prompt_label(role: str, topology_preset: str | None) -> str:
@@ -184,7 +175,7 @@ def _resolved_topology_preset_backend(
     """Return the backend implied by one topology preset, falling back to the explicit backend."""
     if topology_preset is None:
         return backend
-    return _PRESET_BACKENDS.get(topology_preset) or backend
+    return cast(WizardChargerBackend | None, TOPOLOGY_PRESET_BACKENDS.get(topology_preset) or backend)
 
 
 def compatibility_warnings(

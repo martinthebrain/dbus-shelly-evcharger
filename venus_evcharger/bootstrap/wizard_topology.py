@@ -87,16 +87,70 @@ def _split_topology(
     answers: WizardAnswers,
 ) -> EvChargerTopologyConfig:
     topology_preset = answers.topology_preset or "template-stack"
-    hybrid_external = _hybrid_external_meter_options(topology_preset)
-    if hybrid_external is not None:
-        return _hybrid_external_meter_topology(answers, **hybrid_external)
-    native_external = _native_external_meter_charger_type(topology_preset)
-    if native_external is not None:
-        return _native_external_meter_topology(answers, charger_type=native_external)
-    charger_native = _hybrid_charger_native_type(topology_preset)
-    if charger_native is not None:
-        return _hybrid_charger_native_topology(answers, charger_type=charger_native)
+    for resolver in _SPLIT_TOPOLOGY_RESOLVERS:
+        topology = resolver(answers, topology_preset)
+        if topology is not None:
+            return topology
     raise ValueError(f"unsupported topology preset for topology mapping: {topology_preset}")
+
+
+def _cerbo_relay_topology(answers: WizardAnswers, topology_preset: str) -> EvChargerTopologyConfig | None:
+    if _cerbo_relay_meter_type(topology_preset) is None:
+        return None
+    return _cerbo_relay_external_meter_topology(answers, meter_config_name="wizard-meter.ini")
+
+
+def _hybrid_external_topology(answers: WizardAnswers, topology_preset: str) -> EvChargerTopologyConfig | None:
+    hybrid_external = _hybrid_external_meter_options(topology_preset)
+    if hybrid_external is None:
+        return None
+    return _hybrid_external_meter_topology(answers, **hybrid_external)
+
+
+def _native_external_topology(answers: WizardAnswers, topology_preset: str) -> EvChargerTopologyConfig | None:
+    native_external = _native_external_meter_charger_type(topology_preset)
+    if native_external is None:
+        return None
+    return _native_external_meter_topology(answers, charger_type=native_external)
+
+
+def _hybrid_charger_topology(answers: WizardAnswers, topology_preset: str) -> EvChargerTopologyConfig | None:
+    charger_native = _hybrid_charger_native_type(topology_preset)
+    if charger_native is None:
+        return None
+    return _hybrid_charger_native_topology(answers, charger_type=charger_native)
+
+
+_SPLIT_TOPOLOGY_RESOLVERS = (
+    _cerbo_relay_topology,
+    _hybrid_external_topology,
+    _native_external_topology,
+    _hybrid_charger_topology,
+)
+
+
+def _cerbo_relay_meter_type(topology_preset: str) -> str | None:
+    """Return the meter adapter type for Cerbo relay presets."""
+    return {
+        "template-meter-cerbo-relay": "template_meter",
+        "shelly-meter-cerbo-relay": "shelly_meter",
+    }.get(topology_preset)
+
+
+def _cerbo_relay_external_meter_topology(
+    answers: WizardAnswers,
+    *,
+    meter_config_name: str,
+) -> EvChargerTopologyConfig:
+    return validate_topology_config(
+        EvChargerTopologyConfig(
+            topology=TopologyConfig(type="simple_relay"),
+            actuator=ActuatorConfig(type="cerbo_gx_relay_switch", config_path="wizard-switch.ini"),
+            measurement=MeasurementConfig(type="external_meter", config_path=meter_config_name),
+            charger=None,
+            policy=_policy(answers),
+        )
+    )
 
 
 def _hybrid_external_meter_options(topology_preset: str) -> dict[str, str] | None:

@@ -1,4 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+"""Energy-source recommendation merge helpers for the setup wizard.
+
+The wizard can import recommended energy-source blocks from bundle manifests,
+merge them with existing config, and ask focused follow-up questions for
+capacity values. This module keeps that flow deterministic: source IDs are
+normalized, duplicates are rejected early, optional capacity overrides are
+validated against source capabilities, and rendered snippets preserve the same
+assignment shape used by the runtime parser.
+"""
+
 from __future__ import annotations
 
 import json

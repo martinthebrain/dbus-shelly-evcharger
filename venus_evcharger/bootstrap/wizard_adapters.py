@@ -108,6 +108,22 @@ def shelly_switch_config(host: str) -> str:
     )
 
 
+def cerbo_gx_relay_switch_config(relay_index: int, contact_mode: str) -> str:
+    return (
+        "[Adapter]\n"
+        "Type=cerbo_gx_relay_switch\n"
+        f"RelayIndex={int(relay_index)}\n"
+        f"ContactMode={contact_mode.strip().upper()}\n"
+        "EnsureManualFunction=1\n"
+        "VerifySettleSeconds=0.1\n"
+        "VerifyRetrySeconds=0.2\n"
+        "[Capabilities]\n"
+        "SwitchingMode=contactor\n"
+        "SupportedPhaseSelections=P1\n"
+        "RequiresChargePauseForPhaseChange=0\n"
+    )
+
+
 def modbus_charger_config(
     transport_kind: str,
     *,

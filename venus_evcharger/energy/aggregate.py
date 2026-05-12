@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Aggregation helpers for multi-source battery and inverter snapshots."""
+"""Aggregation helpers for multi-source battery and inverter snapshots.
+
+This layer keeps source-level readings separate from cluster-level summaries.
+"""
 
 from __future__ import annotations
 

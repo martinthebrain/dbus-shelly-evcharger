@@ -202,7 +202,7 @@ def render_legacy_backends_from_topology(
     topology_config: EvChargerTopologyConfig,
     adapter_files: dict[str, str],
 ) -> list[str]:
-    if topology_config.topology.type == "simple_relay":
+    if topology_config.topology.type == "simple_relay" and not adapter_files:
         return []
     lines = ["Mode=split"]
     lines.extend(_measurement_backend_lines(topology_config.measurement, adapter_files))
@@ -441,6 +441,8 @@ def answer_defaults(answers: WizardAnswers) -> dict[str, object]:
         "charger_backend": answers.charger_backend,
         "charger_preset": answers.charger_preset,
         "request_timeout_seconds": answers.request_timeout_seconds,
+        "cerbo_relay_index": answers.cerbo_relay_index,
+        "cerbo_relay_contact_mode": answers.cerbo_relay_contact_mode,
         "switch_group_supported_phase_selections": answers.switch_group_supported_phase_selections,
         "auto_start_surplus_watts": answers.auto_start_surplus_watts,
         "auto_stop_surplus_watts": answers.auto_stop_surplus_watts,
