@@ -15,6 +15,9 @@ ActuatorType = Literal[
     "shelly_contactor_switch",
     "template_switch",
     "tasmota_switch",
+    "tasmota_contactor_switch",
+    "tuya_switch",
+    "tuya_contactor_switch",
     "switch_group",
     "custom",
 ]

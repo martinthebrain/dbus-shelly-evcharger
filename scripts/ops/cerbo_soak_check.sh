@@ -50,8 +50,8 @@ run_cmd "svstat $SERVICE_PATH/log" svstat "$SERVICE_PATH/log"
 run_cmd "ls -l $SERVICE_PATH" ls -l "$SERVICE_PATH"
 
 section "Processes"
-run_shell "ps | grep -E 'venus_evcharger_service|venus_evcharger_auto_input_helper' | grep -v grep" \
-    "ps | grep -E 'venus_evcharger_service|venus_evcharger_auto_input_helper' | grep -v grep"
+run_shell "ps | grep -E 'venus_evcharger|venus-evcharger|dbus-venus-evcharger' | grep -v grep" \
+    "ps | grep -E 'venus_evcharger|venus-evcharger|dbus-venus-evcharger' | grep -v grep"
 
 section "DBus"
 run_cmd "dbus -y $DBUS_NAME /ProductName GetValue" dbus -y "$DBUS_NAME" /ProductName GetValue

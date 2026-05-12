@@ -421,9 +421,16 @@ def _measurement_profile_label(measurement_type: str) -> str:
 def _measurement_adapter_type(answers: WizardAnswers, measurement_type: str) -> str:
     if measurement_type in {"fixed_reference", "learned_reference"}:
         return measurement_type
-    topology_preset = answers.topology_preset or ""
+    return _adapter_type_for_topology_preset(answers.topology_preset or "")
+
+
+def _adapter_type_for_topology_preset(topology_preset: str) -> str:
     if topology_preset in {"template-stack", "template-meter-cerbo-relay", "template-meter-goe-switch-group"}:
         return "template_meter"
+    if topology_preset.startswith("tasmota-"):
+        return "tasmota_meter"
+    if topology_preset.startswith("tuya-"):
+        return "tuya_meter"
     return "shelly_meter"
 
 
@@ -448,7 +455,13 @@ def _switch_group_phase_scope(supported_phase_selections: str) -> tuple[str, ...
 
 
 def _switching_mode(adapter_type: str) -> str:
-    return "contactor" if adapter_type in {"cerbo_gx_relay_switch", "shelly_contactor_switch"} else "direct"
+    contactor_types = {
+        "cerbo_gx_relay_switch",
+        "shelly_contactor_switch",
+        "tasmota_contactor_switch",
+        "tuya_contactor_switch",
+    }
+    return "contactor" if adapter_type in contactor_types else "direct"
 
 
 def _switch_supports_feedback(adapter_type: str) -> bool:

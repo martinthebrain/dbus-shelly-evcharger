@@ -233,3 +233,126 @@ class __WizardSetupPresetCasesPart2:
             self.assertEqual(result.transport_kind, "tcp")
             self.assertEqual(result.validation["resolved_roles"], {"meter": True, "switch": True, "charger": True})
 
+    def test_configure_wallbox_generates_tuya_meter_switch_template_preset(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.ini"
+            result = configure_wallbox(
+                WizardAnswers(
+                    profile="multi_adapter_topology",
+                    host_input="tuya.local",
+                    meter_host_input="tuya-meter.local",
+                    switch_host_input="tuya-switch.local",
+                    charger_host_input="charger.local",
+                    device_instance=70,
+                    phase="L1",
+                    policy_mode="scheduled",
+                    digest_auth=False,
+                    username="",
+                    password="",
+                    topology_preset="tuya-io-template-charger",
+                    charger_backend="template_charger",
+                    transport_kind="serial_rtu",
+                    transport_host="charger.local",
+                    transport_port=502,
+                    transport_device="/dev/ttyUSB0",
+                    transport_unit_id=1,
+                ),
+                config_path=config_path,
+                template_path=default_template_path(),
+                imported_from=None,
+            )
+
+            config_text = config_path.read_text(encoding="utf-8")
+            meter_text = (config_path.parent / "wizard-meter.ini").read_text(encoding="utf-8")
+            switch_text = (config_path.parent / "wizard-switch.ini").read_text(encoding="utf-8")
+            self.assertIn("MeterType=tuya_meter\n", config_text)
+            self.assertIn("SwitchType=tuya_switch\n", config_text)
+            self.assertIn("ChargerType=template_charger\n", config_text)
+            self.assertIn("Type=tuya_meter\n", meter_text)
+            self.assertIn("BaseUrl=http://tuya-meter.local\n", meter_text)
+            self.assertIn("Type=tuya_switch\n", switch_text)
+            self.assertIn("BaseUrl=http://tuya-switch.local\n", switch_text)
+            self.assertEqual(result.topology_preset, "tuya-io-template-charger")
+            self.assertEqual(result.topology_config["actuator"]["type"], "tuya_switch")
+            meter_profile = next(profile for profile in result.device_inventory["profiles"] if profile["id"] == "meter_external_meter")
+            self.assertEqual(meter_profile["capabilities"][0]["adapter_type"], "tuya_meter")
+
+    def test_configure_wallbox_generates_tasmota_meter_switch_template_preset(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.ini"
+            result = configure_wallbox(
+                WizardAnswers(
+                    profile="multi_adapter_topology",
+                    host_input="tasmota.local",
+                    meter_host_input="tasmota-meter.local",
+                    switch_host_input="tasmota-switch.local",
+                    charger_host_input="charger.local",
+                    device_instance=71,
+                    phase="L1",
+                    policy_mode="auto",
+                    digest_auth=False,
+                    username="",
+                    password="",
+                    topology_preset="tasmota-io-template-charger",
+                    charger_backend="template_charger",
+                    transport_kind="serial_rtu",
+                    transport_host="charger.local",
+                    transport_port=502,
+                    transport_device="/dev/ttyUSB0",
+                    transport_unit_id=1,
+                ),
+                config_path=config_path,
+                template_path=default_template_path(),
+                imported_from=None,
+            )
+
+            config_text = config_path.read_text(encoding="utf-8")
+            meter_text = (config_path.parent / "wizard-meter.ini").read_text(encoding="utf-8")
+            switch_text = (config_path.parent / "wizard-switch.ini").read_text(encoding="utf-8")
+            self.assertIn("MeterType=tasmota_meter\n", config_text)
+            self.assertIn("SwitchType=tasmota_switch\n", config_text)
+            self.assertIn("ChargerType=template_charger\n", config_text)
+            self.assertIn("Type=tasmota_meter\n", meter_text)
+            self.assertIn("Url=/cm?cmnd=Status+8\n", meter_text)
+            self.assertIn("Type=tasmota_switch\n", switch_text)
+            self.assertIn("Url=/cm?cmnd=Power+$enabled_text\n", switch_text)
+            self.assertEqual(result.topology_preset, "tasmota-io-template-charger")
+            self.assertEqual(result.topology_config["actuator"]["type"], "tasmota_switch")
+            meter_profile = next(profile for profile in result.device_inventory["profiles"] if profile["id"] == "meter_external_meter")
+            self.assertEqual(meter_profile["capabilities"][0]["adapter_type"], "tasmota_meter")
+
+    def test_configure_wallbox_defaults_multi_adapter_without_preset_to_template_stack(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.ini"
+            result = configure_wallbox(
+                WizardAnswers(
+                    profile="multi_adapter_topology",
+                    host_input="template.local",
+                    meter_host_input="meter.local",
+                    switch_host_input="switch.local",
+                    charger_host_input="charger.local",
+                    device_instance=72,
+                    phase="L1",
+                    policy_mode="manual",
+                    digest_auth=False,
+                    username="",
+                    password="",
+                    topology_preset=None,
+                    charger_backend="template_charger",
+                    transport_kind="serial_rtu",
+                    transport_host="charger.local",
+                    transport_port=502,
+                    transport_device="/dev/ttyUSB0",
+                    transport_unit_id=1,
+                ),
+                config_path=config_path,
+                template_path=default_template_path(),
+                imported_from=None,
+            )
+
+            meter_text = (config_path.parent / "wizard-meter.ini").read_text(encoding="utf-8")
+            switch_text = (config_path.parent / "wizard-switch.ini").read_text(encoding="utf-8")
+            self.assertIsNone(result.topology_preset)
+            self.assertIn("Type=template_meter\n", meter_text)
+            self.assertIn("Type=template_switch\n", switch_text)
+            self.assertEqual(result.topology_config["actuator"]["type"], "template_switch")

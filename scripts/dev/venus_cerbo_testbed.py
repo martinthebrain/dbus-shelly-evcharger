@@ -120,14 +120,26 @@ def _read_dbus_value(dbus_binary: str, service: str, path: str, timeout: float) 
         return {"service": service, "path": path, "ok": False, "skipped": False, "error": "timeout"}
     output = completed.stdout.strip()
     error = completed.stderr.strip()
+    skipped = completed.returncode != 0 and _is_missing_dbus_probe(error)
     return {
         "service": service,
         "path": path,
         "ok": completed.returncode == 0,
-        "skipped": completed.returncode != 0 and "ServiceUnknown" in error,
+        "skipped": skipped,
         "value": output,
         "error": error,
     }
+
+
+def _is_missing_dbus_probe(error: str) -> bool:
+    missing_markers = (
+        "ServiceUnknown",
+        "UnknownMethod",
+        "UnknownObject",
+        "org.freedesktop.DBus.Error.Unknown",
+        "NoneType' object has no attribute 'name'",
+    )
+    return any(marker in error for marker in missing_markers)
 
 
 def build_parser() -> argparse.ArgumentParser:

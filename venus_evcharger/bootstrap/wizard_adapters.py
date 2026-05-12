@@ -108,6 +108,77 @@ def shelly_switch_config(host: str) -> str:
     )
 
 
+def tuya_meter_config(config_base_url: str) -> str:
+    return (
+        "[Adapter]\n"
+        "Type=tuya_meter\n"
+        f"BaseUrl={config_base_url}\n"
+        "[MeterRequest]\n"
+        "Url=/tuya/meter\n"
+        "[MeterResponse]\n"
+        "RelayEnabledPath=relay_on\n"
+        "PowerPath=power_watts\n"
+        "VoltagePath=voltage_volts\n"
+        "CurrentPath=current_amps\n"
+        "EnergyWhPath=energy_wh\n"
+    )
+
+
+def tuya_switch_config(config_base_url: str, *, contactor: bool = False) -> str:
+    switch_type = "tuya_contactor_switch" if contactor else "tuya_switch"
+    switching_mode = "contactor" if contactor else "direct"
+    return (
+        "[Adapter]\n"
+        f"Type={switch_type}\n"
+        f"BaseUrl={config_base_url}\n"
+        "[Capabilities]\n"
+        f"SwitchingMode={switching_mode}\n"
+        "SupportedPhaseSelections=P1\n"
+        "[StateRequest]\n"
+        "Url=/tuya/switch/state\n"
+        "[StateResponse]\n"
+        "EnabledPath=enabled\n"
+        "[CommandRequest]\n"
+        "Url=/tuya/switch/control\n"
+        "JsonTemplate={\"enabled\": $enabled_json}\n"
+    )
+
+
+def tasmota_meter_config(config_base_url: str) -> str:
+    return (
+        "[Adapter]\n"
+        "Type=tasmota_meter\n"
+        f"BaseUrl={config_base_url}\n"
+        "[MeterRequest]\n"
+        "Url=/cm?cmnd=Status+8\n"
+        "[MeterResponse]\n"
+        "PowerPath=StatusSNS.ENERGY.Power\n"
+        "VoltagePath=StatusSNS.ENERGY.Voltage\n"
+        "CurrentPath=StatusSNS.ENERGY.Current\n"
+        "EnergyKwhPath=StatusSNS.ENERGY.Total\n"
+    )
+
+
+def tasmota_switch_config(config_base_url: str, *, contactor: bool = False) -> str:
+    switch_type = "tasmota_contactor_switch" if contactor else "tasmota_switch"
+    switching_mode = "contactor" if contactor else "direct"
+    return (
+        "[Adapter]\n"
+        f"Type={switch_type}\n"
+        f"BaseUrl={config_base_url}\n"
+        "[Capabilities]\n"
+        f"SwitchingMode={switching_mode}\n"
+        "SupportedPhaseSelections=P1\n"
+        "[StateRequest]\n"
+        "Url=/cm?cmnd=Power\n"
+        "[StateResponse]\n"
+        "EnabledPath=POWER\n"
+        "[CommandRequest]\n"
+        "Method=GET\n"
+        "Url=/cm?cmnd=Power+$enabled_text\n"
+    )
+
+
 def cerbo_gx_relay_switch_config(relay_index: int, contact_mode: str) -> str:
     return (
         "[Adapter]\n"

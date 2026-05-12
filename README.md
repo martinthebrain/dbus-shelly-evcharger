@@ -10,9 +10,10 @@ and can coordinate meters, relays, native chargers, external energy sources,
 and phase switching as one installation.
 
 The project is built for real field setups: portable EVSEs behind contactors,
-charger-native wallboxes, Shelly-based devices, template HTTP adapters, Modbus
-devices, hybrid inverter data, and installations where measuring, switching,
-and charging are handled by different devices.
+charger-native wallboxes, Shelly-based devices, Tuya- and Tasmota-style local
+HTTP bridges, template HTTP adapters, Modbus devices, hybrid inverter data, and
+installations where measuring, switching, and charging are handled by different
+devices.
 
 ## Why It Exists
 
@@ -70,6 +71,8 @@ The project includes native and template-based adapters for common installation
 shapes:
 
 - Shelly relay, switch, meter, and contactor-style roles
+- Tuya-prepared meter and switch roles through the same HTTP template surface
+- Tasmota-prepared meter and switch roles through the same HTTP template surface
 - HTTP template adapters for custom meters, switches, and chargers
 - Native charger backends such as `goe_charger`, `simpleevse_charger`, `smartevse_charger`, and `modbus_charger`
 - `switch_group` for phase-aware external switching
@@ -149,6 +152,10 @@ Common guided presets include:
 | Shelly meter + Cerbo GX Relay switch | A Shelly measures energy while one of the Cerbo GX relays switches the contactor |
 | Shelly meter + native go-e charger | A Shelly provides independent metering and the go-e charger owns charger control |
 | Shelly meter + native Modbus wallbox | A Shelly provides independent metering and a Modbus wallbox owns charger control |
+| Tuya PM/relay measures and switches | A Tuya-compatible local HTTP bridge measures energy and switches the relay |
+| Tuya meter + native go-e or Modbus wallbox | A Tuya-compatible meter provides measurements while the charger backend owns control |
+| Tasmota PM/relay measures and switches | A Tasmota HTTP device measures energy and switches the relay |
+| Tasmota meter + native go-e or Modbus wallbox | A Tasmota meter provides measurements while the charger backend owns control |
 
 The inventory stores local device profiles, concrete device instances, and
 role/phase bindings. That means a locally described device can be reused later,

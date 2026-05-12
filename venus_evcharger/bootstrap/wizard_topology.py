@@ -134,6 +134,8 @@ def _cerbo_relay_meter_type(topology_preset: str) -> str | None:
     return {
         "template-meter-cerbo-relay": "template_meter",
         "shelly-meter-cerbo-relay": "shelly_meter",
+        "tasmota-meter-cerbo-relay": "tasmota_meter",
+        "tuya-meter-cerbo-relay": "tuya_meter",
     }.get(topology_preset)
 
 
@@ -166,8 +168,28 @@ def _hybrid_external_meter_options(topology_preset: str) -> dict[str, str] | Non
             "switch_config_name": "wizard-switch.ini",
             "charger_type": "template_charger",
         },
+        "tuya-io-template-charger": {
+            "actuator_type": "tuya_switch",
+            "switch_config_name": "wizard-switch.ini",
+            "charger_type": "template_charger",
+        },
+        "tasmota-io-template-charger": {
+            "actuator_type": "tasmota_switch",
+            "switch_config_name": "wizard-switch.ini",
+            "charger_type": "template_charger",
+        },
         "shelly-io-modbus-charger": {
             "actuator_type": "shelly_switch",
+            "switch_config_name": "wizard-switch.ini",
+            "charger_type": "modbus_charger",
+        },
+        "tuya-io-modbus-charger": {
+            "actuator_type": "tuya_switch",
+            "switch_config_name": "wizard-switch.ini",
+            "charger_type": "modbus_charger",
+        },
+        "tasmota-io-modbus-charger": {
+            "actuator_type": "tasmota_switch",
             "switch_config_name": "wizard-switch.ini",
             "charger_type": "modbus_charger",
         },
@@ -194,6 +216,10 @@ def _native_external_meter_charger_type(topology_preset: str) -> str | None:
     return {
         "shelly-meter-goe": "goe_charger",
         "shelly-meter-modbus-charger": "modbus_charger",
+        "tuya-meter-goe": "goe_charger",
+        "tuya-meter-modbus-charger": "modbus_charger",
+        "tasmota-meter-goe": "goe_charger",
+        "tasmota-meter-modbus-charger": "modbus_charger",
     }.get(topology_preset)
 
 
