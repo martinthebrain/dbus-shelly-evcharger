@@ -10,12 +10,14 @@ from typing import Any, Mapping, cast
 from venus_evcharger.backend.config import backend_mode_for_service, backend_type_for_service
 from venus_evcharger.core.common import _charger_retry_remaining_seconds, _fresh_charger_transport_timestamp
 from venus_evcharger.core.contracts import (
+    finite_float_or_none,
     displayable_confirmed_read_timestamp,
     normalized_auto_state_pair,
     normalized_fault_state,
     normalized_scheduled_state_fields,
     normalized_software_update_state_fields,
     normalized_status_source,
+    sanitized_auto_metrics,
 )
 
 class _DbusPublishDiagnosticsMixin:
@@ -184,6 +186,44 @@ class _DbusPublishDiagnosticsMixin:
             "/Auto/ContactorLockoutSource": self._contactor_lockout_source(self.service),
         }
 
+    @staticmethod
+    def _auto_decision_metric_float(metrics: Mapping[str, Any], field_name: str) -> float:
+        value = finite_float_or_none(metrics.get(field_name))
+        return -1.0 if value is None else float(value)
+
+    @staticmethod
+    def _auto_decision_metric_text(metrics: Mapping[str, Any], field_name: str) -> str:
+        value = metrics.get(field_name)
+        return "" if value is None else str(value).strip()
+
+    @staticmethod
+    def _auto_decision_relay_intent(metrics: Mapping[str, Any]) -> int:
+        value = metrics.get("relay_intent")
+        if value is None:
+            return -1
+        return int(bool(value))
+
+    def _auto_decision_counter_values(
+        self,
+        auto_state: str,
+        auto_state_code: int,
+    ) -> dict[str, str | int | float]:
+        """Return the compact 'why did it start/stop?' diagnostic surface."""
+        metrics = sanitized_auto_metrics(self._auto_metrics(self.service))
+        return {
+            "/Auto/DecisionReason": str(self.service._last_health_reason),
+            "/Auto/DecisionState": auto_state,
+            "/Auto/DecisionStateCode": auto_state_code,
+            "/Auto/DecisionRelayIntent": self._auto_decision_relay_intent(metrics),
+            "/Auto/DecisionSurplusWatts": self._auto_decision_metric_float(metrics, "surplus"),
+            "/Auto/DecisionGridWatts": self._auto_decision_metric_float(metrics, "grid"),
+            "/Auto/DecisionSocPercent": self._auto_decision_metric_float(metrics, "soc"),
+            "/Auto/DecisionStartThresholdWatts": self._auto_decision_metric_float(metrics, "start_threshold"),
+            "/Auto/DecisionStopThresholdWatts": self._auto_decision_metric_float(metrics, "stop_threshold"),
+            "/Auto/DecisionProfile": self._auto_decision_metric_text(metrics, "profile"),
+            "/Auto/DecisionThresholdMode": self._auto_decision_metric_text(metrics, "threshold_mode"),
+        }
+
     def _diagnostic_counter_values(self, now: float) -> dict[str, str | int | float]:
         """Return change-driven diagnostic counters keyed by DBus path.
 
@@ -215,6 +255,7 @@ class _DbusPublishDiagnosticsMixin:
             "/Auto/FaultReason": fault_reason,
             "/Auto/Stale": 1 if self.service._is_update_stale(now) else 0,
             "/Auto/RecoveryAttempts": int(self.service._recovery_attempts),
+            **self._auto_decision_counter_values(auto_state, auto_state_code),
             **self._scheduled_counter_values_from_snapshot(scheduled_snapshot),
             **self._backend_counter_values(),
             **self._software_update_counter_values(),

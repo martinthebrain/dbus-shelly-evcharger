@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 from .base import BackendConstructor
+from .cerbo_gx_relay_switch import CerboGxRelaySwitchBackend
 from .goe_charger import GoEChargerBackend
 from .modbus_charger import ModbusChargerBackend
 from .shelly_contactor_switch import ShellyContactorSwitchBackend
@@ -14,21 +15,32 @@ from .smartevse_charger import SmartEvseChargerBackend
 from .simpleevse_charger import SimpleEvseChargerBackend
 from .shelly_switch import ShellySwitchBackend
 from .switch_group import SwitchGroupBackend
+from .tasmota_meter import TasmotaMeterBackend
+from .tasmota_switch import TasmotaContactorSwitchBackend, TasmotaSwitchBackend
 from .template_charger import TemplateChargerBackend
 from .template_meter import TemplateMeterBackend
 from .template_switch import TemplateSwitchBackend
+from .tuya_meter import TuyaMeterBackend
+from .tuya_switch import TuyaContactorSwitchBackend, TuyaSwitchBackend
 
 
 METER_BACKENDS: dict[str, BackendConstructor] = {
     "shelly_meter": ShellyMeterBackend,
+    "tasmota_meter": TasmotaMeterBackend,
     "template_meter": TemplateMeterBackend,
+    "tuya_meter": TuyaMeterBackend,
 }
 
 SWITCH_BACKENDS: dict[str, BackendConstructor] = {
+    "cerbo_gx_relay_switch": CerboGxRelaySwitchBackend,
     "shelly_switch": ShellySwitchBackend,
     "shelly_contactor_switch": ShellyContactorSwitchBackend,
     "switch_group": SwitchGroupBackend,
+    "tasmota_contactor_switch": TasmotaContactorSwitchBackend,
+    "tasmota_switch": TasmotaSwitchBackend,
     "template_switch": TemplateSwitchBackend,
+    "tuya_contactor_switch": TuyaContactorSwitchBackend,
+    "tuya_switch": TuyaSwitchBackend,
 }
 
 CHARGER_BACKENDS: dict[str, BackendConstructor] = {

@@ -8,7 +8,7 @@ import json
 import sys
 from typing import Any, Sequence
 
-from venus_evcharger.control.client import LocalControlApiClient
+from venus_evcharger.control.client import ControlApiClientResponse, LocalControlApiClient
 
 EXIT_OK = 0
 EXIT_REQUEST_FAILED = 1
@@ -47,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
         "state_name",
         choices=(
             "summary",
+            "automation",
             "victron-bias-recommendation",
             "runtime",
             "operational",
@@ -120,8 +121,8 @@ def build_parser() -> argparse.ArgumentParser:
     safe_write_parser.add_argument("--idempotency-key", default="", help="Optional replay-safe idempotency key.")
     safe_write_parser.add_argument(
         "--state-endpoint",
-        choices=("health", "operational"),
-        default="health",
+        choices=("automation", "health", "operational"),
+        default="automation",
         help="State endpoint used to fetch the current optimistic concurrency token.",
     )
     safe_write_parser.add_argument(
@@ -189,6 +190,8 @@ def _response_payload(response: Any) -> dict[str, Any]:
 
 
 def _state_token_from_response(response: Any) -> str:
+    if isinstance(response, ControlApiClientResponse):
+        return LocalControlApiClient.state_token_from_response(response)
     raw_header_token = response.headers.get("X-State-Token", "")
     header_token = str(raw_header_token).strip()
     if header_token:

@@ -13,6 +13,7 @@ from venus_evcharger.core.contracts_state_endpoints import (
     normalized_state_api_update_fields,
 )
 from venus_evcharger.core.contracts_state_operational import (
+    normalized_state_api_operational_decision_fields,
     normalized_state_api_operational_fields,
     normalized_state_api_operational_state_fields,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "normalized_state_api_dbus_diagnostics_fields",
     "normalized_state_api_health_fields",
     "normalized_state_api_kind",
+    "normalized_state_api_operational_decision_fields",
     "normalized_state_api_operational_fields",
     "normalized_state_api_operational_state_fields",
     "normalized_state_api_runtime_fields",

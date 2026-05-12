@@ -22,6 +22,7 @@ from .openapi_schemas import _tracking_headers
 
 def _state_schema_name(path: str) -> str:
     return {
+        "/v1/state/automation": "StateAutomation",
         "/v1/state/build": "StateBuild",
         "/v1/state/config-effective": "StateConfigEffective",
         "/v1/state/contracts": "StateContracts",

@@ -27,6 +27,40 @@ from venus_evcharger.core.contracts import (
     normalized_state_api_kind,
 )
 
+_AUTOMATION_DIAGNOSTIC_KEYS = (
+    "/Status",
+    "/Auto/Health",
+    "/Auto/HealthCode",
+    "/Auto/DecisionReason",
+    "/Auto/DecisionState",
+    "/Auto/DecisionRelayIntent",
+    "/Auto/DecisionSurplusWatts",
+    "/Auto/DecisionGridWatts",
+    "/Auto/DecisionSocPercent",
+    "/Auto/DecisionStartThresholdWatts",
+    "/Auto/DecisionStopThresholdWatts",
+    "/Auto/ScheduledState",
+    "/Auto/ScheduledReason",
+    "/Auto/PhaseLockoutActive",
+    "/Auto/PhaseLockoutReason",
+    "/Auto/ContactorLockoutActive",
+    "/Auto/ContactorLockoutReason",
+    "/Auto/LastShellyReadAge",
+    "/Auto/LastSuccessfulUpdateAge",
+)
+
+
+def _mapping_value(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _payload_state(payload: dict[str, Any]) -> dict[str, Any]:
+    return _mapping_value(payload.get("state"))
+
+
+def _automation_diagnostics_subset(diagnostics_state: dict[str, Any]) -> dict[str, Any]:
+    return {key: diagnostics_state[key] for key in _AUTOMATION_DIAGNOSTIC_KEYS if key in diagnostics_state}
+
 
 class _ControlApiStateMetaMixin:
     def _state_api_healthz_payload(self) -> dict[str, Any]:
@@ -83,6 +117,40 @@ class _ControlApiStateMetaMixin:
                 "state_document": "STATE_API.md",
                 "stable_endpoints": sorted(CONTROL_API_STABLE_ENDPOINTS),
                 "experimental_endpoints": sorted(CONTROL_API_EXPERIMENTAL_ENDPOINTS),
+            },
+        }
+
+    def _state_api_automation_payload(self) -> dict[str, Any]:
+        operational = self._state_api_operational_payload()
+        health = self._state_api_health_payload()
+        topology = self._state_api_topology_payload()
+        diagnostics = self._state_api_dbus_diagnostics_payload()
+        operational_state = _payload_state(operational)
+        return {
+            "ok": True,
+            "api_version": "v1",
+            "kind": normalized_state_api_kind("automation", default="automation"),
+            "state": {
+                "state_token": self._control_api_state_token(),
+                "command_endpoint": "/v1/control/command",
+                "events_endpoint": "/v1/events",
+                "state_endpoints": sorted(CONTROL_API_STATE_ENDPOINTS),
+                "safe_write": {
+                    "if_match_header": "If-Match",
+                    "state_token_header": "X-State-Token",
+                    "idempotency_key_header": "Idempotency-Key",
+                    "command_id_header": "X-Command-Id",
+                    "recommended_flow": "read /v1/state/automation, then POST command with If-Match and Idempotency-Key",
+                },
+                "writable": {
+                    "command_names": sorted(CONTROL_COMMAND_NAMES),
+                    "scope_requirements": dict(CONTROL_API_COMMAND_SCOPE_REQUIREMENTS),
+                },
+                "operational": operational_state,
+                "auto_decision": _mapping_value(operational_state.get("auto_decision")),
+                "health": _payload_state(health),
+                "topology": _payload_state(topology),
+                "diagnostics": _automation_diagnostics_subset(_payload_state(diagnostics)),
             },
         }
 

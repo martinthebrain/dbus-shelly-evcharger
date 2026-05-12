@@ -41,6 +41,8 @@ class WizardAnswers:
     charger_backend: WizardChargerBackend | None = None
     charger_preset: str | None = None
     request_timeout_seconds: float | None = None
+    cerbo_relay_index: int = 0
+    cerbo_relay_contact_mode: str = "NO"
     switch_group_supported_phase_selections: str = "P1,P1_P2,P1_P2_P3"
     auto_start_surplus_watts: float | None = None
     auto_stop_surplus_watts: float | None = None

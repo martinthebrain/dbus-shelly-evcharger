@@ -309,10 +309,14 @@ def _legacy_switch_alias(normalized: str, host: str) -> ActuatorType | None:
 def _known_legacy_switch_type(normalized: str) -> bool:
     """Return whether one legacy switch label maps directly to a known actuator type."""
     return normalized in {
+        "cerbo_gx_relay_switch",
         "shelly_switch",
         "shelly_contactor_switch",
         "template_switch",
         "tasmota_switch",
+        "tasmota_contactor_switch",
+        "tuya_switch",
+        "tuya_contactor_switch",
         "switch_group",
     }
 
@@ -377,10 +381,14 @@ def _actuator_type(value: str) -> ActuatorType:
         _literal_choice(
             value=value,
             allowed={
+                "cerbo_gx_relay_switch",
                 "shelly_switch",
                 "shelly_contactor_switch",
                 "template_switch",
                 "tasmota_switch",
+                "tasmota_contactor_switch",
+                "tuya_switch",
+                "tuya_contactor_switch",
                 "switch_group",
                 "custom",
             },

@@ -22,6 +22,35 @@ from venus_evcharger.core.contracts_state_shared import (
 )
 
 
+def normalized_state_api_operational_decision_fields(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    raw = dict(payload or {})
+    state, state_code = normalized_auto_state_pair(raw.get("state"), raw.get("state_code"))
+    return {
+        "reason": _normalized_text(raw.get("reason"), "na"),
+        "state": state,
+        "state_code": state_code,
+        "relay_intent": _normalized_relay_intent(raw.get("relay_intent")),
+        "surplus_watts": finite_float_or_none(raw.get("surplus_watts")),
+        "grid_watts": finite_float_or_none(raw.get("grid_watts")),
+        "soc_percent": finite_float_or_none(raw.get("soc_percent")),
+        "start_threshold_watts": finite_float_or_none(raw.get("start_threshold_watts")),
+        "stop_threshold_watts": finite_float_or_none(raw.get("stop_threshold_watts")),
+        "profile": _normalized_text(raw.get("profile")),
+        "threshold_mode": _normalized_text(raw.get("threshold_mode")),
+    }
+
+
+def _normalized_relay_intent(value: Any) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if value in (-1, 0, 1):
+        return int(value)
+    text = str(value).strip() if value is not None else ""
+    if text in {"-1", "0", "1"}:
+        return int(text)
+    return -1
+
+
 def normalized_state_api_operational_state_fields(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     raw = dict(payload or {})
     auto_state, auto_state_code = normalized_auto_state_pair(raw.get("auto_state"), raw.get("auto_state_code"))
@@ -53,6 +82,9 @@ def normalized_state_api_operational_state_fields(payload: Mapping[str, Any] | N
         "software_update_no_update_active": software_update_no_update_active,
         "runtime_overrides_active": normalize_binary_flag(raw.get("runtime_overrides_active")),
         "runtime_overrides_path": _normalized_text(raw.get("runtime_overrides_path")),
+        "auto_decision": normalized_state_api_operational_decision_fields(
+            raw.get("auto_decision") if isinstance(raw.get("auto_decision"), Mapping) else {}
+        ),
         "combined_battery_soc": non_negative_float_or_none(raw.get("combined_battery_soc")),
         "combined_battery_source_count": non_negative_int(raw.get("combined_battery_source_count")),
         "combined_battery_online_source_count": non_negative_int(raw.get("combined_battery_online_source_count")),

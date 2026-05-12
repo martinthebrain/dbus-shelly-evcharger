@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # mypy: disable-error-code="attr-defined"
 # pyright: reportAttributeAccessIssue=false
-"""Charger health, transport, and contactor heuristics for the update cycle."""
+"""Charger health, transport, and contactor heuristics for the update cycle.
+
+This module centralizes safety-oriented runtime diagnostics: charger transport
+health, retry visibility, contactor suspicion, and feedback mismatch state.
+"""
 
 from __future__ import annotations
 

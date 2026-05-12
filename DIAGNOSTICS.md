@@ -12,6 +12,71 @@ tail -f /var/volatile/log/dbus-venus-evcharger/current
 tail -f /var/volatile/log/dbus-venus-evcharger/auto-reasons.log
 ```
 
+## First Five Checks
+
+When the charger did something unexpected, start with these paths:
+
+```bash
+dbus -y com.victronenergy.evcharger.http_60 /Mode GetValue
+dbus -y com.victronenergy.evcharger.http_60 /StartStop GetValue
+dbus -y com.victronenergy.evcharger.http_60 /Status GetValue
+dbus -y com.victronenergy.evcharger.http_60 /Auto/DecisionReason GetValue
+dbus -y com.victronenergy.evcharger.http_60 /Auto/DecisionState GetValue
+```
+
+Read them as:
+
+- `Mode=0`: Manual; direct user control.
+- `Mode=1`: Auto; PV-surplus/Auto-policy only.
+- `Mode=2`: Scheduled; Auto during the day window plus night/fallback charging.
+- `/Status`: outward EV charger status shown to Venus.
+- `/Auto/DecisionReason`: latest policy or safety reason behind the Auto/Scheduled decision.
+
+## Why Did It Start Or Stop?
+
+The service publishes a compact "last decision" surface so you do not have to
+reconstruct the answer from logs:
+
+| Path | Meaning |
+| --- | --- |
+| `/Auto/DecisionReason` | Latest Auto/Scheduled health or policy reason |
+| `/Auto/DecisionState` | Normalized state such as `idle`, `waiting`, `charging`, or `recovery` |
+| `/Auto/DecisionRelayIntent` | Last intended relay/charger enable state: `1`, `0`, or `-1` when unknown |
+| `/Auto/DecisionSurplusWatts` | Surplus used by the decision after smoothing/adjustments |
+| `/Auto/DecisionGridWatts` | Grid import/export value used by the decision |
+| `/Auto/DecisionSocPercent` | Battery SOC used by the decision, or `-1` when unavailable |
+| `/Auto/DecisionStartThresholdWatts` | Active start threshold |
+| `/Auto/DecisionStopThresholdWatts` | Active stop threshold |
+| `/Auto/DecisionProfile` | Active threshold profile, for example `normal` or `high-soc` |
+| `/Auto/DecisionThresholdMode` | `static` or adaptive/learned threshold mode |
+
+The same information is also available as structured JSON for a future GUI or
+for local scripts:
+
+```bash
+curl -s http://127.0.0.1:8765/v1/state/operational
+```
+
+Look at `state.auto_decision.reason`, `state.auto_decision.relay_intent`,
+`state.auto_decision.surplus_watts`, `state.auto_decision.soc_percent`, and the
+active start/stop thresholds first.
+
+Related gates and lockouts:
+
+- `/Auto/MinSoc`, `/Auto/ResumeSoc`
+- `/Auto/StartSurplusWatts`, `/Auto/StopSurplusWatts`
+- `/Auto/GridRecoveryStartSeconds`, `/Auto/StopSurplusDelaySeconds`
+- `/Auto/ScheduledState`, `/Auto/ScheduledReason`, `/Auto/ScheduledNightBoostActive`
+- `/Auto/PhaseLockoutActive`, `/Auto/PhaseLockoutReason`
+- `/Auto/ContactorLockoutActive`, `/Auto/ContactorLockoutReason`
+- `/Auto/SwitchFeedbackMismatch`, `/Auto/SwitchInterlockOk`
+
+The rolling reason log is still useful for history:
+
+```bash
+tail -n 200 /var/volatile/log/dbus-venus-evcharger/auto-reasons.log
+```
+
 ## Backend Diagnostics
 
 ### Backend composition
@@ -36,6 +101,20 @@ tail -f /var/volatile/log/dbus-venus-evcharger/auto-reasons.log
 - `/Auto/FaultActive`
 - `/Auto/FaultReason`
 - `/Auto/RecoveryActive`
+
+### Last Auto/Scheduled decision
+
+- `/Auto/DecisionReason`
+- `/Auto/DecisionState`
+- `/Auto/DecisionStateCode`
+- `/Auto/DecisionRelayIntent`
+- `/Auto/DecisionSurplusWatts`
+- `/Auto/DecisionGridWatts`
+- `/Auto/DecisionSocPercent`
+- `/Auto/DecisionStartThresholdWatts`
+- `/Auto/DecisionStopThresholdWatts`
+- `/Auto/DecisionProfile`
+- `/Auto/DecisionThresholdMode`
 
 ### Transport and retry
 
@@ -150,6 +229,51 @@ python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-meter.ini
 python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-switch.ini
 python3 -m venus_evcharger.backend.probe validate /data/etc/wallbox-charger.ini
 ```
+
+## Venus/Cerbo Testbed
+
+For repeatable diagnostics without touching real relays, use the deterministic
+testbed scenarios:
+
+```bash
+python3 ./scripts/dev/venus_cerbo_testbed.py simulate pv-surplus
+python3 ./scripts/dev/venus_cerbo_testbed.py simulate night-fallback
+python3 ./scripts/dev/venus_cerbo_testbed.py simulate unplug-replug
+```
+
+On a real Venus OS/Cerbo device, the same helper can run read-only relay-path
+probes. It does not switch relays:
+
+```bash
+python3 ./scripts/dev/venus_cerbo_testbed.py probe-real
+```
+
+The probe checks the two Cerbo relay state paths and the relay function paths
+that must stay in manual mode before any relay is used for charger switching.
+
+## Shelly Raw Values
+
+For Shelly-style setups, the service has no vehicle communication. It infers
+"charging" from relay state, measured power, and energy deltas. If the Venus UI
+looks wrong, compare the published state with the raw Shelly RPC values:
+
+```bash
+curl -s 'http://192.168.178.76/rpc/PM1.GetStatus?id=0'
+curl -s 'http://192.168.178.76/rpc/Switch.GetStatus?id=0'
+curl -s 'http://192.168.178.76/rpc/Shelly.GetDeviceInfo'
+```
+
+Important fields:
+
+- `apower`: current measured power; below the configured charging threshold the service treats the session as not actively charging.
+- `aenergy.total`: Shelly lifetime energy counter; the service converts this to Venus session energy before publishing.
+- `output`: switch/relay output state.
+
+If an unplug/replug sequence is suspected, check:
+
+- `/Session/Energy` should return to `0` when charging stops.
+- `/Ac/Energy/Forward` should show session energy, not Shelly lifetime energy.
+- `/Auto/LastShellyReadAge` should stay low while the Shelly is reachable.
 
 ## Local Shelly RPC Emulator
 

@@ -77,14 +77,17 @@ class TestVenusEvchargerControlClient(unittest.TestCase):
         client.get = MagicMock(return_value=ControlApiClientResponse(status=200, headers={}, body='{"ok":true}'))  # type: ignore[method-assign]
 
         health_response = client.health()
+        automation_response = client.automation()
         openapi_response = client.openapi()
 
         self.assertEqual(health_response.status, 200)
+        self.assertEqual(automation_response.status, 200)
         self.assertEqual(openapi_response.status, 200)
         self.assertEqual(
             client.get.call_args_list,
             [
                 unittest.mock.call("/v1/control/health", headers=None),
+                unittest.mock.call("/v1/state/automation", headers=None),
                 unittest.mock.call("/v1/openapi.json", headers=None),
             ],
         )
@@ -129,6 +132,44 @@ class TestVenusEvchargerControlClient(unittest.TestCase):
         connection = client._connection()
 
         self.assertEqual(connection._unix_socket_path, "/tmp/control.sock")  # type: ignore[attr-defined]
+
+    def test_safe_command_reads_state_token_before_write(self) -> None:
+        client = LocalControlApiClient(base_url="http://127.0.0.1:8765", bearer_token="token")
+        client.state = MagicMock(  # type: ignore[method-assign]
+            return_value=ControlApiClientResponse(
+                status=200,
+                headers={},
+                body='{"ok":true,"kind":"automation","state":{"state_token":"rev-7"}}',
+            )
+        )
+        client.command = MagicMock(  # type: ignore[method-assign]
+            return_value=ControlApiClientResponse(status=200, headers={}, body='{"ok":true}')
+        )
+
+        response = client.safe_command(
+            {"name": "set_mode", "value": 1},
+            idempotency_key="idem-7",
+            command_id="cmd-7",
+        )
+
+        self.assertEqual(response.status, 200)
+        client.state.assert_called_once_with("automation", headers=None)
+        client.command.assert_called_once_with(
+            {"name": "set_mode", "value": 1},
+            idempotency_key="idem-7",
+            command_id="cmd-7",
+            if_match="rev-7",
+            headers=None,
+        )
+
+    def test_safe_command_requires_state_token(self) -> None:
+        client = LocalControlApiClient(base_url="http://127.0.0.1:8765", bearer_token="token")
+        client.state = MagicMock(  # type: ignore[method-assign]
+            return_value=ControlApiClientResponse(status=200, headers={}, body='{"ok":true,"state":{}}')
+        )
+
+        with self.assertRaises(ValueError):
+            client.safe_command({"name": "set_mode", "value": 1})
 
 
 if __name__ == "__main__":

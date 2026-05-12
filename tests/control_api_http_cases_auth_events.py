@@ -95,6 +95,9 @@ class _ControlApiHttpAuthEventsCases:
             _state_api_config_effective_payload=MagicMock(
                 return_value={"ok": True, "api_version": "v1", "kind": "config-effective", "state": {"host": "charger.local"}}
             ),
+            _state_api_automation_payload=MagicMock(
+                return_value={"ok": True, "api_version": "v1", "kind": "automation", "state": {"command_endpoint": "/v1/control/command"}}
+            ),
             _state_api_dbus_diagnostics_payload=MagicMock(return_value={"ok": True, "api_version": "v1", "kind": "dbus-diagnostics", "state": {}}),
             _state_api_health_payload=MagicMock(return_value={"ok": True, "api_version": "v1", "kind": "health", "state": {"health_code": 0}}),
             _state_api_operational_payload=MagicMock(return_value={"ok": True, "api_version": "v1", "kind": "operational", "state": {}}),
@@ -106,6 +109,7 @@ class _ControlApiHttpAuthEventsCases:
         server = LocalControlApiHttpServer(service, host="127.0.0.1", port=8765)
 
         handlers = {
+            "automation": _FakeHandler("/v1/state/automation"),
             "config": _FakeHandler("/v1/state/config-effective"),
             "health": _FakeHandler("/v1/state/health"),
             "topology": _FakeHandler("/v1/state/topology"),
@@ -115,6 +119,7 @@ class _ControlApiHttpAuthEventsCases:
             server._handle_get(handler)
 
         self.assertEqual(handlers["config"].json_payload()["kind"], "config-effective")
+        self.assertEqual(handlers["automation"].json_payload()["state"]["command_endpoint"], "/v1/control/command")
         self.assertEqual(handlers["health"].json_payload()["kind"], "health")
         self.assertEqual(handlers["topology"].json_payload()["state"]["backend_mode"], "split")
         self.assertEqual(handlers["update"].json_payload()["kind"], "update")

@@ -3,22 +3,8 @@
 
 from __future__ import annotations
 
-_TOPOLOGY_ROLE_HOSTS: dict[str, tuple[str, ...]] = {
-    "template-stack": ("meter", "switch", "charger"),
-    "shelly-io-template-charger": ("meter", "switch", "charger"),
-    "shelly-io-modbus-charger": ("meter", "switch"),
-    "shelly-meter-goe": ("meter", "charger"),
-    "shelly-meter-modbus-charger": ("meter", "charger"),
-    "goe-external-switch-group": ("switch", "charger"),
-    "template-meter-goe-switch-group": ("meter", "switch", "charger"),
-    "shelly-meter-goe-switch-group": ("meter", "switch", "charger"),
-    "shelly-meter-modbus-switch-group": ("meter", "switch"),
-}
-_PROFILE_ROLE_HOSTS: dict[str, tuple[str, ...]] = {
-    "simple_relay": ("meter", "switch"),
-    "native_device": ("charger",),
-    "hybrid_topology": ("charger", "switch"),
-}
+from venus_evcharger.bootstrap.wizard_support import PROFILE_ROLE_HOSTS, TOPOLOGY_ROLE_HOSTS
+
 _ROLE_INPUTS = ("meter", "switch", "charger")
 
 
@@ -47,5 +33,5 @@ def _role_defaults(
 
 def _resolved_roles(profile: str, topology_preset: str | None) -> tuple[str, ...]:
     if profile == "multi_adapter_topology":
-        return _TOPOLOGY_ROLE_HOSTS.get(topology_preset or "", ())
-    return _PROFILE_ROLE_HOSTS.get(profile, ())
+        return TOPOLOGY_ROLE_HOSTS.get(topology_preset or "", ())
+    return PROFILE_ROLE_HOSTS.get(profile, ())

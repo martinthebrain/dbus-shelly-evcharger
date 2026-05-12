@@ -295,6 +295,7 @@ def _component_schemas() -> dict[str, Any]:
         ),
     }
     for schema_name, default_kind in (
+        ("StateAutomation", "automation"),
         ("StateBuild", "build"),
         ("StateConfigEffective", "config-effective"),
         ("StateContracts", "contracts"),

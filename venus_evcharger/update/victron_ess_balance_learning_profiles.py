@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # mypy: disable-error-code="attr-defined,no-any-return"
 # pyright: reportAttributeAccessIssue=false, reportReturnType=false
-"""Victron ESS balance-bias learning-profile helpers."""
+"""Victron ESS balance-bias learning-profile helpers.
+
+The helpers in this module keep profile scoring, profile keys, and learned
+telemetry fields close together so adaptive decisions remain traceable.
+"""
 
 from __future__ import annotations
 

@@ -122,6 +122,7 @@ Typical first commands:
 - `python3 ./venus_evchargerctl.py --token READ-TOKEN health`
 - `python3 ./venus_evchargerctl.py --token READ-TOKEN doctor`
 - `python3 ./venus_evchargerctl.py --token READ-TOKEN capabilities`
+- `python3 ./venus_evchargerctl.py --token READ-TOKEN state automation`
 - `python3 ./venus_evchargerctl.py --token CONTROL-TOKEN command set-mode 1`
 - `python3 ./venus_evchargerctl.py --token CONTROL-TOKEN safe-write set-mode 1`
 

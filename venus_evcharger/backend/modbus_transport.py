@@ -1,5 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Minimal Modbus transport layer for serial RTU, TCP, and UDP."""
+"""Minimal Modbus transport layer for serial RTU, TCP, and UDP.
+
+The transport code owns only byte-level exchange concerns: socket framing,
+serial RTU CRC handling, timeout normalization, and Venus serial-port ownership.
+Register encoding, charger semantics, and profile interpretation deliberately
+live in higher layers so each transport backend remains narrowly responsible.
+Failures are normalized into service-level reasons for diagnostics and retries.
+"""
 
 from __future__ import annotations
 

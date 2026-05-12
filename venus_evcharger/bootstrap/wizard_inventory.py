@@ -70,7 +70,7 @@ def _populate_actuator_inventory(
                 adapter_type=topology_config.actuator.type,
                 supported_phases=phase_scope,
                 switching_mode=_switching_mode(topology_config.actuator.type),
-                supports_feedback=True,
+                supports_feedback=_switch_supports_feedback(topology_config.actuator.type),
                 supports_phase_selection=len(phase_scope) > 1,
             ),
         ),
@@ -80,7 +80,7 @@ def _populate_actuator_inventory(
             id="switch_device",
             profile_id=switch_profile_id,
             label="Switch device",
-            endpoint=_endpoint(role_hosts.get("switch", answers.host_input)),
+            endpoint=_switch_endpoint(topology_config.actuator.type, answers, role_hosts),
         )
     )
     bindings.append(
@@ -421,8 +421,17 @@ def _measurement_profile_label(measurement_type: str) -> str:
 def _measurement_adapter_type(answers: WizardAnswers, measurement_type: str) -> str:
     if measurement_type in {"fixed_reference", "learned_reference"}:
         return measurement_type
-    topology_preset = answers.topology_preset or ""
-    return "template_meter" if topology_preset in {"template-stack", "template-meter-goe-switch-group"} else "shelly_meter"
+    return _adapter_type_for_topology_preset(answers.topology_preset or "")
+
+
+def _adapter_type_for_topology_preset(topology_preset: str) -> str:
+    if topology_preset in {"template-stack", "template-meter-cerbo-relay", "template-meter-goe-switch-group"}:
+        return "template_meter"
+    if topology_preset.startswith("tasmota-"):
+        return "tasmota_meter"
+    if topology_preset.startswith("tuya-"):
+        return "tuya_meter"
+    return "shelly_meter"
 
 
 def _phase_scope(phase: str) -> tuple[str, ...]:
@@ -446,7 +455,23 @@ def _switch_group_phase_scope(supported_phase_selections: str) -> tuple[str, ...
 
 
 def _switching_mode(adapter_type: str) -> str:
-    return "contactor" if adapter_type == "shelly_contactor_switch" else "direct"
+    contactor_types = {
+        "cerbo_gx_relay_switch",
+        "shelly_contactor_switch",
+        "tasmota_contactor_switch",
+        "tuya_contactor_switch",
+    }
+    return "contactor" if adapter_type in contactor_types else "direct"
+
+
+def _switch_supports_feedback(adapter_type: str) -> bool:
+    return adapter_type != "cerbo_gx_relay_switch"
+
+
+def _switch_endpoint(adapter_type: str, answers: WizardAnswers, role_hosts: dict[str, str]) -> str | None:
+    if adapter_type == "cerbo_gx_relay_switch":
+        return f"local://cerbo-gx/relay/{int(answers.cerbo_relay_index)}"
+    return _endpoint(role_hosts.get("switch", answers.host_input))
 
 
 def _endpoint(value: str | None) -> str | None:

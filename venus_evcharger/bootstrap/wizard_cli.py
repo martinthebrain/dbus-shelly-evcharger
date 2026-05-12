@@ -63,6 +63,7 @@ from venus_evcharger.bootstrap.wizard_support import (
     TRANSPORT_VALUES,
     backend_requires_transport,
     host_from_input,
+    topology_uses_cerbo_relay,
 )
 from venus_evcharger.bootstrap.wizard_transport_guidance import (
     SWITCH_GROUP_PHASE_LAYOUT_VALUES,
@@ -215,6 +216,21 @@ def _interactive_device_instance(namespace: argparse.Namespace, imported: Import
     return int(_prompt_text("DeviceInstance", str(imported.device_instance or 60)))
 
 
+def _interactive_cerbo_relay_inputs(namespace: argparse.Namespace, topology_preset: str | None) -> tuple[int, str]:
+    if not topology_uses_cerbo_relay(topology_preset):
+        return 0, "NO"
+    relay_index = getattr(namespace, "cerbo_relay_index", None)
+    if relay_index is None:
+        relay_index = int(_prompt_choice("Choose the Cerbo GX relay:", ("0", "1"), {"0": "Relay 1", "1": "Relay 2"}, "0"))
+    contact_mode = getattr(namespace, "cerbo_relay_contact_mode", None) or _prompt_choice(
+        "Which contact is wired?",
+        ("NO", "NC"),
+        {"NO": "NO, normally open, recommended fail-off", "NC": "NC, normally closed"},
+        "NO",
+    )
+    return int(relay_index), str(contact_mode).strip().upper()
+
+
 def _interactive_phase(namespace: argparse.Namespace, imported: ImportedWizardDefaults) -> str:
     return namespace.phase or _prompt_choice("Choose the phase baseline:", ("L1", "L2", "L3", "3P"), default=imported.phase or "L1")
 
@@ -257,6 +273,7 @@ def _interactive_answers(namespace: argparse.Namespace, imported: ImportedWizard
         prompt_choice=_prompt_choice,
         prompt_text=_prompt_text,
     )
+    cerbo_relay_index, cerbo_relay_contact_mode = _interactive_cerbo_relay_inputs(namespace, topology_preset)
     (
         auto_start_surplus_watts,
         auto_stop_surplus_watts,
@@ -282,6 +299,8 @@ def _interactive_answers(namespace: argparse.Namespace, imported: ImportedWizard
         charger_backend=backend,
         charger_preset=charger_preset,
         request_timeout_seconds=request_timeout_seconds,
+        cerbo_relay_index=cerbo_relay_index,
+        cerbo_relay_contact_mode=cerbo_relay_contact_mode,
         switch_group_supported_phase_selections=switch_group_phase_layout,
         auto_start_surplus_watts=auto_start_surplus_watts,
         auto_stop_surplus_watts=auto_stop_surplus_watts,

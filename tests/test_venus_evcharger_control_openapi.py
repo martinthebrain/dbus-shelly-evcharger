@@ -181,6 +181,7 @@ class TestVenusEvchargerControlOpenApi(unittest.TestCase):
                 "/v1/control/health",
                 "/v1/events",
                 "/v1/openapi.json",
+                "/v1/state/automation",
                 "/v1/state/build",
                 "/v1/state/config-effective",
                 "/v1/state/contracts",

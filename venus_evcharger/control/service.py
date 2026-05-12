@@ -1,5 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Transport-agnostic command mapping and dispatch for Control API v1."""
+"""Transport-agnostic command mapping and dispatch for Control API v1.
+
+The Control API accepts writes from DBus, HTTP, and CLI entry points, then maps
+them onto one canonical command contract. This module owns command names,
+path/value validation, idempotent command construction, and dispatch into the
+write controller. Keeping that policy here prevents each transport from growing
+its own subtly different interpretation of Mode, StartStop, Auto settings, and
+phase-selection writes.
+"""
 
 from __future__ import annotations
 

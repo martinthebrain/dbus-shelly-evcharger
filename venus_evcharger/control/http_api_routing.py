@@ -11,6 +11,7 @@ from typing import Any, Callable, cast
 class _LocalControlApiRoutingMixin:
     def _state_payload(self, path: str) -> dict[str, Any]:
         payload_getter_names: dict[str, str] = {
+            "/v1/state/automation": "_state_api_automation_payload",
             "/v1/state/build": "_state_api_build_payload",
             "/v1/state/config-effective": "_state_api_config_effective_payload",
             "/v1/state/contracts": "_state_api_contracts_payload",

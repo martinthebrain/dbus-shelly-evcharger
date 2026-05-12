@@ -10,7 +10,15 @@ _INDIVIDUAL_ADDRESS_PRESETS = frozenset(
     {
         "shelly-io-template-charger",
         "shelly-io-modbus-charger",
+        "tasmota-io-template-charger",
+        "tasmota-io-modbus-charger",
+        "tuya-io-template-charger",
+        "tuya-io-modbus-charger",
         "shelly-meter-goe",
+        "tasmota-meter-goe",
+        "tasmota-meter-modbus-charger",
+        "tuya-meter-goe",
+        "tuya-meter-modbus-charger",
         "shelly-meter-goe-switch-group",
         "shelly-meter-modbus-switch-group",
     }

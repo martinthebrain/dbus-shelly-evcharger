@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Shared helpers for Shelly-backed meter and switch backends."""
+"""Shared helpers for Shelly-backed meter and switch backends.
+
+Shelly adapters share profile defaults, phase mapping, RPC auth, and signal
+readback handling while individual meter/switch classes keep role behavior.
+"""
 
 from __future__ import annotations
 

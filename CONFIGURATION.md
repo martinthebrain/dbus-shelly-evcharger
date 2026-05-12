@@ -886,8 +886,17 @@ Starter files:
 
 ## Scheduled / Plan Policy
 
-Scheduled mode uses the same base policy as Auto and adds target-day night
-boost windows.
+The mode values are part of the service contract:
+
+- `Mode=0` (`Manual`) follows direct user control and can charge immediately.
+- `Mode=1` (`Auto`) is PV-surplus/Auto-policy charging only. It does not start
+  the night fallback by itself.
+- `Mode=2` (`Scheduled`/`Plan`) runs the same Auto policy during the configured
+  daytime window and adds target-day night/fallback charging after that window.
+
+The night/fallback window starts after the configured daytime window plus
+`AutoScheduledFallbackDelaySeconds`, and it is capped by
+`AutoScheduledLatestEndTime`.
 
 Main settings:
 
