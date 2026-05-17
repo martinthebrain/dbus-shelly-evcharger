@@ -116,6 +116,20 @@ class TestAutoDecisionControllerRecovery(AutoDecisionControllerTestCase):
         self.assertFalse(controller._handle_relay_off(2500.0, 0.0, 60.0, True, 100.0, False))
         self.assertEqual(service._last_health_reason, "autostart-disabled")
 
+    def test_scheduled_night_clears_stale_daytime_stop_timer_while_relay_stays_on(self):
+        controller, service = self._make_controller()
+        service.virtual_mode = 2
+        service.auto_stop_condition_since = 100.0
+        service.auto_stop_condition_reason = "auto-stop-surplus"
+        service.auto_start_condition_since = 90.0
+
+        self.assertTrue(controller._scheduled_night_decision(True, 200.0, False))
+
+        self.assertIsNone(service.auto_start_condition_since)
+        self.assertIsNone(service.auto_stop_condition_since)
+        self.assertIsNone(service.auto_stop_condition_reason)
+        self.assertEqual(service._last_health_reason, "scheduled-night-charge")
+
     def test_pre_average_and_auto_decide_cover_terminal_and_averaging_paths(self):
         controller, service = self._make_controller()
 

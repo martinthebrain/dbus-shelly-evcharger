@@ -1,8 +1,71 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from tests.venus_evcharger_update_cycle_controller_support import *
+from venus_evcharger.auto.tracking import clear_auto_decision_tracking
 
 
 class TestUpdateCycleControllerPrimary(UpdateCycleControllerTestBase):
+    def test_clear_auto_decision_tracking_reports_whether_state_changed(self):
+        service = SimpleNamespace(
+            auto_start_condition_since=10.0,
+            auto_stop_condition_since=None,
+            auto_stop_condition_reason="auto-stop-surplus",
+        )
+
+        self.assertTrue(clear_auto_decision_tracking(service))
+        self.assertIsNone(service.auto_start_condition_since)
+        self.assertIsNone(service.auto_stop_condition_since)
+        self.assertIsNone(service.auto_stop_condition_reason)
+        self.assertFalse(clear_auto_decision_tracking(service))
+
+    def test_runtime_state_save_best_effort_covers_missing_and_warning_paths(self):
+        controller = UpdateCycleController(SimpleNamespace(_save_runtime_state=None), _phase_values, lambda reason: 0)
+        controller.save_runtime_state_best_effort("missing")
+
+        service = SimpleNamespace(
+            _save_runtime_state=MagicMock(side_effect=RuntimeError("boom")),
+            _warning_throttled=MagicMock(),
+            auto_shelly_soft_fail_seconds=7.0,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: 0)
+        controller.save_runtime_state_best_effort("test")
+
+        service._warning_throttled.assert_called_once()
+        self.assertEqual(service._warning_throttled.call_args.args[0], "runtime-state-save-failed-test")
+
+        service_without_warning = SimpleNamespace(
+            _save_runtime_state=MagicMock(side_effect=RuntimeError("boom")),
+            _warning_throttled=None,
+        )
+        controller = UpdateCycleController(service_without_warning, _phase_values, lambda reason: 0)
+        controller.save_runtime_state_best_effort("silent")
+
+    def test_update_virtual_state_keeps_dbus_publish_alive_when_runtime_save_fails(self):
+        service = SimpleNamespace(
+            charging_started_at=90.0,
+            energy_at_start=1.0,
+            phase="L1",
+            virtual_startstop=0,
+            virtual_enable=1,
+            virtual_mode=1,
+            _charger_backend=None,
+            _time_now=MagicMock(return_value=100.0),
+            _mode_uses_auto_logic=lambda mode: int(mode) in (1, 2),
+            _ensure_observability_state=MagicMock(),
+            _publish_energy_time_measurements=MagicMock(return_value=True),
+            _publish_config_paths=MagicMock(return_value=False),
+            _publish_diagnostic_paths=MagicMock(return_value=False),
+            _save_runtime_state=MagicMock(side_effect=RuntimeError("save failed")),
+            _warning_throttled=MagicMock(),
+            auto_shelly_soft_fail_seconds=5.0,
+        )
+        controller = UpdateCycleController(service, _phase_values, lambda reason: {"init": 0}.get(reason, 99))
+
+        self.assertTrue(controller.update_virtual_state(2, 1.5, True))
+
+        service._publish_energy_time_measurements.assert_called_once()
+        service._warning_throttled.assert_called_once()
+        self.assertEqual(service.last_status, 2)
+
     def test_update_state_helpers_cover_freshness_and_startstop_edges(self):
         service = SimpleNamespace(
             _charger_backend=object(),

@@ -92,6 +92,17 @@ class _TestServiceBootstrapControllerPathsPart1:
         self.assertEqual(service._dbusservice.paths["/Auto/PhaseMismatchLockoutCount"]["value"], 3)
         self.assertEqual(service._dbusservice.paths["/Auto/State"]["value"], "idle")
         self.assertEqual(service._dbusservice.paths["/Auto/StateCode"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/DecisionReason"]["value"], "init")
+        self.assertEqual(service._dbusservice.paths["/Auto/DecisionState"]["value"], "idle")
+        self.assertEqual(service._dbusservice.paths["/Auto/DecisionStateCode"]["value"], 0)
+        self.assertEqual(service._dbusservice.paths["/Auto/DecisionRelayIntent"]["value"], -1)
+        self.assertEqual(service._dbusservice.paths["/Auto/DecisionSurplusWatts"]["value"], -1.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/DecisionGridWatts"]["value"], -1.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/DecisionSocPercent"]["value"], -1.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/DecisionStartThresholdWatts"]["value"], -1.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/DecisionStopThresholdWatts"]["value"], -1.0)
+        self.assertEqual(service._dbusservice.paths["/Auto/DecisionProfile"]["value"], "")
+        self.assertEqual(service._dbusservice.paths["/Auto/DecisionThresholdMode"]["value"], "")
         self.assertEqual(service._dbusservice.paths["/Auto/ScheduledState"]["value"], "disabled")
         self.assertEqual(service._dbusservice.paths["/Auto/ScheduledStateCode"]["value"], 0)
         self.assertEqual(service._dbusservice.paths["/Auto/ScheduledReason"]["value"], "disabled")
@@ -322,5 +333,4 @@ class _TestServiceBootstrapControllerPathsPart1:
         controller.register_paths()
 
         self.assertEqual(service._dbusservice.paths["/Connected"]["value"], 0)
-
 

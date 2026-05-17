@@ -136,7 +136,7 @@ class _UpdateCycleRuntimeMixin:
             pm_confirmed=relay_confirmed,
         )
         if learning_state_changed or learning_updated:
-            self.service._save_runtime_state()
+            self.save_runtime_state_best_effort("learning-state")
         self.complete_update_cycle(
             self.service,
             changed,
