@@ -14,11 +14,14 @@
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 REPO_DIR=$(realpath "$SCRIPT_DIR/../..")
 SERVICE_NAME="dbus-venus-evcharger"
+OBSERVER_SERVICE_NAME="dbus-venus-evcharger-observer"
 SERVICE_DIR="$SCRIPT_DIR/service_venus_evcharger"
+OBSERVER_SERVICE_DIR="$SCRIPT_DIR/service_venus_evcharger_observer"
 CONFIG_PATH="$SCRIPT_DIR/config.venus_evcharger.ini"
 GENERIC_SHELLY_HELPER="$REPO_DIR/venus_evcharger/ops/disable_generic_shelly_once.py"
 BOOT_HELPER="$SCRIPT_DIR/boot_venus_evcharger_service.sh"
 MAIN_ENTRYPOINT="$REPO_DIR/venus_evcharger_service.py"
+OBSERVER_ENTRYPOINT="$REPO_DIR/venus_evcharger_observer.py"
 AUTO_INPUT_HELPER="$REPO_DIR/venus_evcharger_auto_input_helper.py"
 CONFIGURE_HELPER="$SCRIPT_DIR/configure_venus_evcharger_service.sh"
 RESTART_HELPER="$SCRIPT_DIR/restart_venus_evcharger_service.sh"
@@ -50,6 +53,11 @@ fi
 if [ -f "$AUTO_INPUT_HELPER" ]; then
     chmod a+x "$AUTO_INPUT_HELPER"
     chmod 755 "$AUTO_INPUT_HELPER"
+fi
+
+if [ -f "$OBSERVER_ENTRYPOINT" ]; then
+    chmod a+x "$OBSERVER_ENTRYPOINT"
+    chmod 755 "$OBSERVER_ENTRYPOINT"
 fi
 
 if [ -f "$CONFIGURE_HELPER" ]; then
@@ -96,9 +104,12 @@ chmod a+x "$SERVICE_DIR/run"
 chmod 755 "$SERVICE_DIR/run"
 chmod a+x "$SERVICE_DIR/log/run"
 chmod 755 "$SERVICE_DIR/log/run"
+chmod a+x "$OBSERVER_SERVICE_DIR/run"
+chmod 755 "$OBSERVER_SERVICE_DIR/run"
 
 # Register or update the runit service symlink.
 ln -sfn "$SERVICE_DIR" "/service/$SERVICE_NAME"
+ln -sfn "$OBSERVER_SERVICE_DIR" "/service/$OBSERVER_SERVICE_NAME"
 
 remove_rc_local_line() {
     line="$1"

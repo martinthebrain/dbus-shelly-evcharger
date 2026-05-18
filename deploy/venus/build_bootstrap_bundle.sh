@@ -49,6 +49,7 @@ for rel_path in \
     SHELLY_PROFILES.md \
     version.txt \
     venus_evcharger_service.py \
+    venus_evcharger_observer.py \
     venus_evcharger_auto_input_helper.py \
     deploy/venus \
     venus_evcharger \
