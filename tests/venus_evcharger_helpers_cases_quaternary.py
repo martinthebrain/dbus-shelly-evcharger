@@ -133,6 +133,9 @@ class TestShellyWallboxHelpersQuaternary(ShellyWallboxHelpersTestBase):
         service._save_runtime_state = MagicMock()
         service._save_runtime_overrides = MagicMock()
         service._state_summary = MagicMock(return_value="state")
+        service.auto_start_condition_since = 95.0
+        service.auto_stop_condition_since = 120.0
+        service.auto_stop_condition_reason = "auto-stop-surplus"
 
         service._time_now = MagicMock(return_value=100.0)
         service._update_virtual_state(2, 10.0, True)
@@ -147,11 +150,12 @@ class TestShellyWallboxHelpersQuaternary(ShellyWallboxHelpersTestBase):
         self.assertIsNone(service.charging_started_at)
         self.assertEqual(service.energy_at_start, 10.5)
         self.assertEqual(service.virtual_mode, 2)
-
-        service._time_now.return_value = 140.0
-        self.assertTrue(service._handle_write("/StartStop", 1))
-        self.assertEqual(service.virtual_mode, 2)
-        self.assertEqual(service.virtual_enable, 1)
+        self.assertIsNone(service.auto_start_condition_since)
+        self.assertIsNone(service.auto_stop_condition_since)
+        self.assertIsNone(service.auto_stop_condition_reason)
+        service._queue_relay_command.assert_not_called()
+        service._publish_local_pm_status.assert_not_called()
+        self.assertFalse(service._ignore_min_offtime_once)
 
         service._time_now.return_value = 160.0
         service._update_virtual_state(2, 11.0, True)

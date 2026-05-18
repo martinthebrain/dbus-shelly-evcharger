@@ -10,6 +10,7 @@ cd "$REPO_DIR"
 echo "[1/3] Syntax check"
 python3 -m py_compile \
     venus_evcharger_service.py \
+    venus_evcharger_observer.py \
     venus_evcharger/bootstrap/controller.py \
     venus_evcharger/core/common.py \
     venus_evcharger/ports/__init__.py \

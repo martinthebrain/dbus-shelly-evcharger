@@ -9,6 +9,7 @@
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 REPO_DIR=$(realpath "$SCRIPT_DIR/../..")
 SERVICE_NAME="dbus-venus-evcharger"
+OBSERVER_SERVICE_NAME="dbus-venus-evcharger-observer"
 RC_LOCAL_FILE=/data/rc.local
 
 # Remove the runit service registration if it exists.
@@ -16,8 +17,13 @@ if [ -L /service/$SERVICE_NAME ]; then
     rm /service/$SERVICE_NAME
 fi
 
+if [ -L /service/$OBSERVER_SERVICE_NAME ]; then
+    rm /service/$OBSERVER_SERVICE_NAME
+fi
+
 # Stop any still-running foreground/background wallbox main process.
 pkill -f "$REPO_DIR/venus_evcharger_service.py" || true
+pkill -f "$REPO_DIR/venus_evcharger_observer.py" || true
 
 STARTUP=$SCRIPT_DIR/install_venus_evcharger_service.sh
 LEGACY_STARTUP=$REPO_DIR/install_venus_evcharger_service.sh

@@ -11,7 +11,9 @@
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 REPO_DIR=$(realpath "$SCRIPT_DIR/../..")
 SERVICE_NAME="dbus-venus-evcharger"
+OBSERVER_SERVICE_NAME="dbus-venus-evcharger-observer"
 SERVICE_DIR="$SCRIPT_DIR/service_venus_evcharger"
+OBSERVER_SERVICE_DIR="$SCRIPT_DIR/service_venus_evcharger_observer"
 CONFIG_PATH="$SCRIPT_DIR/config.venus_evcharger.ini"
 GENERIC_SHELLY_HELPER="$REPO_DIR/venus_evcharger/ops/disable_generic_shelly_once.py"
 
@@ -27,9 +29,14 @@ if [ -f "$SERVICE_DIR/log/run" ]; then
     chmod 755 "$SERVICE_DIR/log/run"
 fi
 
+if [ -f "$OBSERVER_SERVICE_DIR/run" ]; then
+    chmod 755 "$OBSERVER_SERVICE_DIR/run"
+fi
+
 # Register the wallbox service with runit. Existing symlink targets are updated
 # in place, which makes this safe to call repeatedly at boot.
 ln -sfn "$SERVICE_DIR" "/service/$SERVICE_NAME"
+ln -sfn "$OBSERVER_SERVICE_DIR" "/service/$OBSERVER_SERVICE_NAME"
 
 # Optionally kick off the generic Shelly disable helper in the background. This
 # avoids two Venus services trying to own the same physical Shelly device.

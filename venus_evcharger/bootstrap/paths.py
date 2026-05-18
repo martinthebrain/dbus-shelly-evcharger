@@ -115,6 +115,26 @@ def _backend_diagnostic_defaults(svc: Any) -> PathMap:
     }
 
 
+def _decision_diagnostic_defaults(svc: Any) -> PathMap:
+    """Return compact Auto decision diagnostic paths and their defaults."""
+    reason = str(getattr(svc, "_last_health_reason", "init"))
+    state = str(getattr(svc, "_last_auto_state", "idle"))
+    state_code = int(getattr(svc, "_last_auto_state_code", 0))
+    return {
+        "/Auto/DecisionReason": (reason, None),
+        "/Auto/DecisionState": (state, None),
+        "/Auto/DecisionStateCode": (state_code, None),
+        "/Auto/DecisionRelayIntent": (-1, None),
+        "/Auto/DecisionSurplusWatts": (-1.0, None),
+        "/Auto/DecisionGridWatts": (-1.0, None),
+        "/Auto/DecisionSocPercent": (-1.0, None),
+        "/Auto/DecisionStartThresholdWatts": (-1.0, None),
+        "/Auto/DecisionStopThresholdWatts": (-1.0, None),
+        "/Auto/DecisionProfile": ("", None),
+        "/Auto/DecisionThresholdMode": ("", None),
+    }
+
+
 def _phase_diagnostic_defaults(svc: Any) -> PathMap:
     """Return phase, switch-feedback, and contactor diagnostic path defaults."""
     supported = ",".join(getattr(svc, "supported_phase_selections", ("P1",)))
@@ -338,6 +358,7 @@ class _ServiceBootstrapPathMixin(_ComposableControllerMixin):
             "/Auto/FaultReason": ("", None),
             **_scheduled_diagnostic_defaults(scheduled_snapshot),
             **_backend_diagnostic_defaults(svc),
+            **_decision_diagnostic_defaults(svc),
             **_software_update_diagnostic_defaults(svc),
             **_phase_diagnostic_defaults(svc),
             **_age_counter_diagnostic_defaults(),

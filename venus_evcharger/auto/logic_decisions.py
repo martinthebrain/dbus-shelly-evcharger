@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from venus_evcharger.auto.tracking import clear_auto_decision_tracking
+
 from venus_evcharger.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
 from venus_evcharger.auto.logic_decisions_preaverage import _AutoDecisionPreAverageMixin
 
@@ -234,6 +236,7 @@ class _AutoDecisionDecisionMixin(_AutoDecisionPreAverageMixin, _ComposableContro
             assert isinstance(decision, bool)
             return decision
         if relay_on:
+            self._clear_scheduled_night_stop_tracking(svc)
             return cast(bool, self._running_result_with_health("scheduled-night-charge", cached_inputs))
         return self._scheduled_night_start_result(svc, now, cached_inputs)
 
@@ -256,6 +259,4 @@ class _AutoDecisionDecisionMixin(_AutoDecisionPreAverageMixin, _ComposableContro
     @staticmethod
     def _clear_scheduled_night_stop_tracking(svc: Any) -> None:
         """Clear Auto start/stop tracking when scheduled night charging takes over."""
-        svc.auto_start_condition_since = None
-        svc.auto_stop_condition_since = None
-        svc.auto_stop_condition_reason = None
+        clear_auto_decision_tracking(svc)

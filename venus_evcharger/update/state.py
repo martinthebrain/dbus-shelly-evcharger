@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import time
 from typing import Any
+
+from venus_evcharger.auto.tracking import clear_auto_decision_tracking
 from venus_evcharger.core.contracts import finite_float_or_none
 from venus_evcharger.core.split_mixins import ComposableControllerMixin as _ComposableControllerMixin
 
@@ -159,12 +161,44 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
         """Compute current session timing and energy values."""
         if cls._session_active(status):
             return cls._active_session_state(svc, current_total_energy, now)
+        if relay_on and cls._session_was_active(svc):
+            cls._clear_auto_tracking_after_physical_session_end(svc)
         return cls._reset_session_state(svc, current_total_energy)
 
     @staticmethod
     def _session_active(status: int) -> bool:
         """Return whether the current status should keep the session active."""
         return status == 2
+
+    @staticmethod
+    def _session_was_active(svc: Any) -> bool:
+        """Return whether the previous update still considered a car session active."""
+        return getattr(svc, "charging_started_at", None) is not None
+
+    @staticmethod
+    def _clear_auto_tracking_after_physical_session_end(svc: Any) -> None:
+        """Treat a load drop with relay still on as the end of one plug session."""
+        clear_auto_decision_tracking(svc)
+
+    def save_runtime_state_best_effort(self, reason: str) -> None:
+        """Persist runtime state without letting persistence break the live loop."""
+        svc = self.service
+        save_runtime_state = getattr(svc, "_save_runtime_state", None)
+        if not callable(save_runtime_state):
+            return
+        try:
+            save_runtime_state()
+        except Exception as error:  # pylint: disable=broad-except
+            warning_throttled = getattr(svc, "_warning_throttled", None)
+            if callable(warning_throttled):
+                warning_throttled(
+                    f"runtime-state-save-failed-{reason}",
+                    getattr(svc, "auto_shelly_soft_fail_seconds", 10.0),
+                    "Unable to save runtime state during %s update: %s",
+                    reason,
+                    error,
+                    exc_info=error,
+                )
 
     @classmethod
     def _active_session_state(cls, svc: Any, current_total_energy: float, now: float) -> tuple[int, float]:
@@ -264,7 +298,7 @@ class _UpdateCycleStateMixin(_ComposableControllerMixin):
             startstop_display,
             now,
         )
-        svc._save_runtime_state()
+        self.save_runtime_state_best_effort("virtual-state")
         return bool(changed)
 
     @staticmethod
